@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "caveman": {
+      "command": "python",
+      "args": ["-m", "caveman.mcp.server"],
+      "env": {
+        "CAVEMAN_HOME": "~/.caveman"
+      }
+    }
+  }
+}

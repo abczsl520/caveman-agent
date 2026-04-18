@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+.venv/
+venv/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Secrets & config (NEVER commit these)
+*.env
+.env.*
+config.yaml
+config.yml
+*.key
+*.pem
+*.p12
+.secrets/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project-specific
+hermes-src/
+openclaw-src/
+gateway_sessions/
+*.log

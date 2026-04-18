@@ -1,0 +1,70 @@
+caveman:
+  version: "0.1.0"
+
+agent:
+  default_model: "claude-opus-4-6"
+  max_iterations: 50
+  memory_nudge_interval: 5
+  skill_nudge_interval: 10
+
+providers:
+  anthropic:
+    api_key: "${ANTHROPIC_API_KEY}"
+    model: "claude-opus-4-6"
+    max_tokens: 8192
+  openai:
+    api_key: "${OPENAI_API_KEY}"
+    model: "gpt-4o"
+    max_tokens: 4096
+
+bridges:
+  openclaw:
+    enabled: false
+    mcp_url: "http://localhost:3000/mcp"
+  hermes:
+    enabled: false
+    base_url: "http://localhost:8000"
+
+security:
+  secret_scanning: true
+  block_on_secret: true
+  permission_mode: "ask"
+
+memory:
+  backend: "local"
+  local_dir: "~/.caveman/memory"
+
+skills:
+  local_dir: "~/.caveman/skills"
+  auto_create: true
+
+trajectory:
+  enabled: true
+  local_dir: "~/.caveman/trajectories"
+  format: "sharegpt"
+
+compression:
+  strategy: "smart"
+  threshold: 0.75
+  preserve_ratio: 0.3
+
+engines:
+  shield: { enabled: true }
+  nudge: { enabled: true }
+  ripple: { enabled: true }
+  lint: { enabled: true }
+  recall: { enabled: true }
+  scheduler:
+    max_rpm: 30
+    max_tokens_per_min: 0
+  verification: { enabled: true, strict: false }
+
+gateway:
+  timeouts:
+    progress_interval: 60    # seconds between "still working" indicators
+    idle_warning: 180        # seconds idle before warning
+    idle_shutdown: 300       # seconds idle before graceful shutdown
+    absolute_max: 1800       # absolute max seconds per task
+
+# Locale for command descriptions (en, zh, ja, ko, etc.)
+locale: "en"
