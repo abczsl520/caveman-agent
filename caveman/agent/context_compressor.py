@@ -249,6 +249,8 @@ class ContextCompressor:
                             text_parts.append(f"[Tool call: {block.get('name', '')}]")
                         elif block.get("type") == "tool_result":
                             text_parts.append(f"[Tool result: {str(block.get('content', ''))[:200]}]")
+                        elif block.get("type") == "image_url":
+                            text_parts.append("[Image attachment]")
                 content = "\n".join(text_parts)
             turns.append(f"[{role}]: {content[:2000]}")
 

@@ -376,10 +376,15 @@ class GatewayServer:
         context = {
             "channel_id": src.chat_id if src else "",
             "user_id": src.user_id if src else "",
+            "user_name": src.user_name if src else "",
             "username": src.user_name if src else "",
             "message_id": event.message_id,
             "gateway_name": src.platform.value if src else "unknown",
             "is_thread": src.chat_type == "thread" if src else False,
+            "thread_id": src.thread_id or "" if src else "",
+            "chat_type": src.chat_type if src else "dm",
+            "is_mention": getattr(event, "is_mention", False),
+            "is_reply_to_bot": getattr(event, "is_reply_to_bot", False),
         }
         if event.media_urls:
             context["attachments"] = [{"url": u, "content_type": t}
@@ -423,27 +428,22 @@ class GatewayServer:
             router=self.router,
             store=self.store,
         )
-
 # --- Backward-compatible module-level API (use GatewayServer directly) ---
 _server: GatewayServer | None = None
-
 def _get_server() -> GatewayServer:
     global _server
     if _server is None:
         _server = GatewayServer()
     return _server
-
 async def run_gateway(config_path: str | None = None) -> None:
     """Backward-compatible entry point. Creates the singleton GatewayServer."""
     global _server
     _server = GatewayServer(config_path=config_path)
     await _server.start()
-
 async def _drain_active_sessions(timeout: float) -> tuple[int, bool]:
     from caveman.gateway.gateway_lifecycle import drain_active_sessions
     srv = _get_server()
     return await drain_active_sessions(srv.sessions, srv.session_locks, timeout)
-
 async def run_gateway_forever(config_path: str | None = None, max_restarts: int = 10) -> None:
     """Run the gateway server indefinitely with auto-restart on failure."""
     from caveman.gateway.gateway_lifecycle import run_gateway_forever as _run

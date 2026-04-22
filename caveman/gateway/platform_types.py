@@ -144,6 +144,10 @@ class MessageEvent:
     # Auto-loaded skill binding
     auto_skill: Optional[str] = None
 
+    # Interaction flags
+    is_mention: bool = False
+    is_reply_to_bot: bool = False
+
     # Internal synthetic events bypass auth
     internal: bool = False
 

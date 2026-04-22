@@ -345,13 +345,26 @@ class DiscordGateway(Gateway):
         """Build task context dict from a Discord message."""
         import discord
         is_thread = isinstance(message.channel, discord.Thread)
+        is_dm = isinstance(message.channel, discord.DMChannel)
+        is_mention = self._client.user in message.mentions if self._client and self._client.user else False
+        is_reply_to_bot = False
+        if message.reference and getattr(message.reference, "resolved", None):
+            ref = message.reference.resolved
+            if hasattr(ref, "author") and self._client and self._client.user:
+                is_reply_to_bot = ref.author.id == self._client.user.id
+        chat_type = "dm" if is_dm else ("thread" if is_thread else "channel")
         ctx = {
             "channel_id": message.channel.id,
             "user_id": message.author.id,
+            "user_name": str(message.author),
             "username": str(message.author),
             "guild_id": message.guild.id if message.guild else None,
             "message_id": message.id,
             "is_thread": is_thread,
+            "thread_id": str(message.channel.id) if is_thread else "",
+            "chat_type": chat_type,
+            "is_mention": is_mention,
+            "is_reply_to_bot": is_reply_to_bot,
             "thread_name": message.channel.name if is_thread else None,
             "gateway_name": "discord",
         }

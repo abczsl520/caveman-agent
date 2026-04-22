@@ -65,8 +65,9 @@ class AgentContext:
             total = 0
             for block in content:
                 if isinstance(block, dict):
-                    text = block.get("text", "") or block.get("content", "")
-                    if text:
+                    if block.get("type") == "image_url":
+                        total += 1000  # ~1K tokens per image in vision models
+                    elif (text := block.get("text", "") or block.get("content", "")):
                         total += _estimate_str_tokens(str(text))
                     else:
                         total += len(str(block)) // 4
