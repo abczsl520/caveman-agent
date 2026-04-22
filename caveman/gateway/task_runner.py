@@ -25,8 +25,8 @@ _DEFAULT_IDLE_WARNING = 180.0       # 3 min idle → warning
 _DEFAULT_IDLE_SHUTDOWN = 300.0      # 5 min idle → graceful shutdown
 _DEFAULT_ABSOLUTE_MAX = 1800.0      # 30 min absolute safety net
 _STUCK_LOOP_THRESHOLD = 5           # Same tool+args repeated N times → abort
-_PATTERN_LOOP_WINDOW = 12           # Window for pattern-based loop detection
-_PATTERN_LOOP_REPEATS = 3           # Pattern must repeat N times to trigger
+_PATTERN_LOOP_WINDOW = 20           # Window for pattern-based loop detection
+_PATTERN_LOOP_REPEATS = 5           # Pattern must repeat N times to trigger
 
 _ENDINGS = ("✅", "完成", "Done", "done.", "以上", "结束", "？", "?", "吗？", "吗?")
 
@@ -61,7 +61,7 @@ class _TaskContext:
         "last_event_time", "last_user_visible_time", "task_start_time",
         "recent_tool_calls", "child_tasks", "tool_heartbeat",
         "_hb_msg_id", "_hb_counts", "iteration", "max_iterations",
-        "pressure_warned",
+        "pressure_warned", "stuck_warnings",
     )
 
     def __init__(self, gw_name: str, channel_id: str, router: GatewayRouter,
@@ -83,6 +83,7 @@ class _TaskContext:
         self.iteration = 0
         self.max_iterations = 0
         self.pressure_warned = False
+        self.stuck_warnings = 0
         self._hb_msg_id: int | None = None  # Discord message ID for heartbeat edits
         self._hb_counts: dict[str, int] = {}  # tool_name → count for heartbeat display
 
