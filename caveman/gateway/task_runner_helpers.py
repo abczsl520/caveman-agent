@@ -19,7 +19,7 @@ from caveman.aio import aio_write_text, aio_mkdir
 from caveman.paths import CAVEMAN_HOME
 
 _STUCK_LOOP_THRESHOLD = 5
-_PATTERN_LOOP_REPEATS = 3
+_PATTERN_LOOP_REPEATS = 5
 
 
 logger = logging.getLogger(__name__)
