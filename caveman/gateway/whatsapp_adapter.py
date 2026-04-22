@@ -56,7 +56,8 @@ class WhatsAppAdapter(BasePlatformAdapter):
         # Verify token works by checking phone number
         try:
             import aiohttp
-            async with aiohttp.ClientSession() as session:
+            _HTTP_TIMEOUT = aiohttp.ClientTimeout(total=30)
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
                 url = f"{_API_BASE}/{self._phone_id}"
                 headers = {"Authorization": f"Bearer {self._token}"}
                 async with session.get(url, headers=headers) as resp:
@@ -98,7 +99,7 @@ class WhatsAppAdapter(BasePlatformAdapter):
             if reply_to:
                 payload["context"] = {"message_id": reply_to}
 
-            async with aiohttp.ClientSession() as session:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
                 async with session.post(url, headers=headers, json=payload) as resp:
                     data = await resp.json()
                     if resp.status == 200:
@@ -162,7 +163,7 @@ class WhatsAppAdapter(BasePlatformAdapter):
             if reply_to:
                 payload["context"] = {"message_id": reply_to}
 
-            async with aiohttp.ClientSession() as session:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
                 async with session.post(url, headers=headers, json=payload) as resp:
                     data = await resp.json()
                     if resp.status == 200:
@@ -183,7 +184,7 @@ class WhatsAppAdapter(BasePlatformAdapter):
             data.add_field("type", mime_type)
             data.add_field("file", open(file_path, "rb"), content_type=mime_type)
 
-            async with aiohttp.ClientSession() as session:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
                 async with session.post(url, headers=headers, data=data) as resp:
                     result = await resp.json()
                     return result.get("id")
