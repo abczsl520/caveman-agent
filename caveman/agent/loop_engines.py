@@ -18,11 +18,27 @@ __all__ = [
 logger = logging.getLogger(__name__)
 
 
+def _download_image_as_data_uri(url: str, content_type: str = "image/jpeg") -> str | None:
+    """Download image and return as data: URI. Returns None on failure."""
+    try:
+        import urllib.request, base64
+        req = urllib.request.Request(url, headers={"User-Agent": "caveman/1.0"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = resp.read()
+            ct = resp.headers.get("Content-Type", content_type).split(";")[0].strip()
+            b64 = base64.b64encode(data).decode()
+            return f"data:{ct};base64,{b64}"
+    except Exception as e:
+        logger.warning("Image download failed (%s): %s", url[:80], e)
+        return None
+
+
 def build_user_content(task: str, attachments: list[dict[str, str]] | None = None) -> str | list:
     """Build user message content with optional vision image blocks.
 
     Returns plain string if no image attachments, or a list of content blocks
     (text + image_url) for multimodal messages.
+    Downloads images as base64 data URIs for reliability (Discord CDN URLs expire).
     """
     if not attachments:
         return task
@@ -31,10 +47,15 @@ def build_user_content(task: str, attachments: list[dict[str, str]] | None = Non
         return task
     blocks: list[dict] = [{"type": "text", "text": task}]
     for att in image_atts:
-        blocks.append({
-            "type": "image_url",
-            "image_url": {"url": att["url"]},
-        })
+        url = att["url"]
+        ct = att.get("content_type", "image/jpeg")
+        # Pre-download to base64 for reliability (CDN URLs may expire)
+        data_uri = _download_image_as_data_uri(url, ct)
+        if data_uri:
+            blocks.append({"type": "image_url", "image_url": {"url": data_uri}})
+        else:
+            # Fallback to direct URL if download fails
+            blocks.append({"type": "image_url", "image_url": {"url": url}})
     return blocks
 
 

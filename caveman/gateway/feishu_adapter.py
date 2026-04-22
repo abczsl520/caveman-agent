@@ -178,6 +178,16 @@ class FeishuAdapter(BasePlatformAdapter):
             user_name=sender.get("sender_id", {}).get("user_id", ""),
         )
 
+        # Feishu: mention detection via mentions in message content
+        is_mention = False
+        mentions = msg.get("mentions", [])
+        if mentions and self._app_id:
+            is_mention = any(m.get("id", {}).get("open_id") == self._app_id for m in mentions)
+        # Strip mention tags from text
+        if is_mention:
+            import re
+            text = re.sub(r'@_user_\d+', '', text).strip()
+
         return MessageEvent(
             text=text,
             message_type=event_type,
@@ -185,4 +195,5 @@ class FeishuAdapter(BasePlatformAdapter):
             raw_message=data,
             message_id=msg_id,
             media_urls=media_urls,
+            is_mention=is_mention,
         )

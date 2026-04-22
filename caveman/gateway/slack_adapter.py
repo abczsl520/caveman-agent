@@ -226,6 +226,15 @@ class SlackAdapter(BasePlatformAdapter):
             if f.get("mimetype", "").startswith("image/"):
                 msg_type = MessageType.PHOTO
 
+        # Slack: mention = <@BOT_ID> in original text, reply = thread reply
+        is_mention = bool(self._bot_user_id and f"<@{self._bot_user_id}>" in event.get("text", ""))
+        is_reply_to_bot = False
+        # In Slack threads, check if the thread starter is the bot
+        if thread_ts and thread_ts != msg_ts and self._bot_user_id:
+            # thread_ts != msg_ts means this is a reply in a thread
+            parent_user = event.get("parent_user_id", "")
+            is_reply_to_bot = parent_user == self._bot_user_id
+
         msg_event = MessageEvent(
             text=text,
             message_type=msg_type,
@@ -234,6 +243,8 @@ class SlackAdapter(BasePlatformAdapter):
             message_id=msg_ts,
             media_urls=media_urls,
             media_types=media_types,
+            is_mention=is_mention,
+            is_reply_to_bot=is_reply_to_bot,
         )
 
         await self.handle_message(msg_event)

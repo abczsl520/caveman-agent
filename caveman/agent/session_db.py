@@ -127,6 +127,7 @@ class SessionDB:
         self.close()
 
     def __del__(self) -> None:
+        if not hasattr(self, "_conn"): return
         self.close()
 
     # --- Metadata ---
