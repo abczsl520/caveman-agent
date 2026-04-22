@@ -119,7 +119,9 @@ class _TaskContext:
                     tail = names[-(pat_len * _PATTERN_LOOP_REPEATS):]
                     pattern = tail[:pat_len]
                     if all(tail[i] == pattern[i % pat_len] for i in range(len(tail))):
-                        return f"pattern_loop:{'→'.join(pattern)}"
+                        # Only flag if pattern has 2+ distinct tools (single-tool repeat is handled by exact_repeat)
+                        if len(set(pattern)) >= 2:
+                            return f"pattern_loop:{'→'.join(pattern)}"
         return None
 
     def spawn_task(self, coro, *, name: str, critical: bool = False) -> asyncio.Task:
