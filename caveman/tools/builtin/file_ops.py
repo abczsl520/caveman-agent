@@ -297,6 +297,11 @@ async def file_search(
 
     Delegates to file_tools_search.search_in_file for the complete implementation.
     """
+    # Defensive: LLM sometimes passes list instead of str
+    if isinstance(path, list):
+        path = path[0] if path else "."
+    if isinstance(pattern, list):
+        pattern = pattern[0] if pattern else ""
     if not pattern:
         return {"error": "pattern is required"}
     # ReDoS protection: reject overly complex patterns
