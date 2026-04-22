@@ -169,6 +169,8 @@ async def run_single_task(
     loop = session["loop"]
     timeouts = _resolve_timeouts(config)
 
+    # Reset iteration budget for each new task
+    loop.budget.reset()
     loop.tool_registry.set_context("source_channel", source_channel)
     loop.tool_registry.set_context("gateway_router", router)
     store.append_turn(session["meta"].session_id, "user", task)

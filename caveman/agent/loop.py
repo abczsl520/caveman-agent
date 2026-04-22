@@ -154,7 +154,7 @@ class AgentLoop(BackgroundTaskMixin):
         self._tool_call_count = 0
         self._conversation_state = None
         self.metrics = type(self.metrics)()
-        self.budget.refund()
+        self.budget.reset()
         logger.info("Session state reset")
     def get_activity_summary(self) -> dict:
         import time as _t
