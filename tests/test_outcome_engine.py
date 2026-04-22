@@ -47,9 +47,9 @@ async def test_success_outcome(engine, mock_router, mock_memory, mock_bus):
     assert result["outcome"] == "success"
     assert result["score"] == 1.0
     assert result["skills_updated"] == 1
-    assert result["memories_boosted"] == 2
-    mock_router.update.assert_called_once_with("test_skill", True)
-    assert mock_memory.feedback.call_count == 2
+    assert result["memories_boosted"] == 0  # memory feedback handled by phase_finalize
+    # RL Router feedback handled by phase_finalize → SkillManager.record_outcome()
+    mock_router.update.assert_not_called()
     mock_bus.emit.assert_called_once()
 
 
@@ -66,8 +66,8 @@ async def test_failure_outcome(engine, mock_router, mock_memory, mock_bus):
     )
     assert result["outcome"] == "failure"
     assert result["score"] == 0.0
-    mock_router.update.assert_called_once_with("bad_skill", False)
-    mock_memory.feedback.assert_called_once_with("mem_1", helpful=False)
+    # RL Router + memory feedback handled by phase_finalize
+    mock_router.update.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -95,15 +95,14 @@ async def test_no_skills_no_memories():
 
 @pytest.mark.asyncio
 async def test_router_error_resilience(engine, mock_router):
-    """Router errors should not crash the engine."""
-    mock_router.update.side_effect = RuntimeError("boom")
+    """OutcomeEngine delegates RL updates to phase_finalize; it just scores."""
     skill = MagicMock()
     skill.name = "broken"
     result = await engine.score_and_propagate(
         task="test", result="Done!",
         matched_skills=[skill],
     )
-    assert result["skills_updated"] == 0
+    assert result["skills_updated"] == 1  # counted but not directly updated
 
 
 @pytest.mark.asyncio
@@ -119,12 +118,13 @@ async def test_memory_error_resilience(engine, mock_memory):
 
 @pytest.mark.asyncio
 async def test_string_skill_name(engine, mock_router):
-    """Skills passed as strings should work."""
+    """Skills passed as strings should be counted."""
     result = await engine.score_and_propagate(
         task="test", result="Done!",
         matched_skills=["my_skill"],
     )
-    mock_router.update.assert_called_once_with("my_skill", True)
+    # RL Router update handled by phase_finalize
+    mock_router.update.assert_not_called()
     assert result["skills_updated"] == 1
 
 

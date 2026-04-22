@@ -37,6 +37,7 @@ def wire_inner_flywheel(
     engines: "EngineSet",
     get_turns: Any = None,
     get_task: Any = None,
+    memory_manager: Any = None,
 ) -> list:
     """Register event handlers that connect engines into the inner flywheel.
 
@@ -170,7 +171,7 @@ def wire_inner_flywheel(
                     recalled_ids=recalled_ids,
                 )
             except Exception as e:
-                logger.debug("LOOP_END→Outcome chain failed: %s", e)
+                logger.warning("LOOP_END→Outcome chain failed: %s", e)
 
         bus.on(EventType.LOOP_END, _on_loop_end_outcome)
         handlers.append((EventType.LOOP_END, _on_loop_end_outcome))
@@ -184,15 +185,16 @@ def wire_inner_flywheel(
         async def _on_loop_end_reflect(event: Event) -> None:
             """Task completed → Reflect on what worked/failed."""
             task = event.data.get("task", "")
+            result = event.data.get("result", "")
             if not task:
                 return
             turns = get_turns() if get_turns else []
             if len(turns) < 2:
                 return  # Not enough context to reflect on
             try:
-                await reflect_ref.run(turns, task=task)
+                await reflect_ref.reflect(task, turns, task_result=result)
             except Exception as e:
-                logger.debug("LOOP_END→Reflect chain failed: %s", e)
+                logger.warning("LOOP_END→Reflect chain failed: %s", e)
 
         bus.on(EventType.LOOP_END, _on_loop_end_reflect)
         handlers.append((EventType.LOOP_END, _on_loop_end_reflect))
@@ -204,7 +206,7 @@ def wire_inner_flywheel(
     try:
         from caveman.wiki.auto_trigger import WikiAutoTrigger
         from caveman.wiki.compiler import WikiCompiler
-        _wiki_trigger = WikiAutoTrigger(compiler=WikiCompiler(), threshold=5, cooldown=300)
+        _wiki_trigger = WikiAutoTrigger(compiler=WikiCompiler(), memory_manager=memory_manager, threshold=5, cooldown=300)
 
         async def _on_nudge_wiki(event: Event) -> None:
             """Nudge extracted memories → check if wiki should compile."""
@@ -239,7 +241,7 @@ def wire_inner_flywheel(
                     result.memories_decayed, result.memories_pruned,
                 )
         except Exception as e:
-            logger.debug("LOOP_END→Decay failed: %s", e)
+            logger.warning("LOOP_END→Decay failed: %s", e)
 
     bus.on(EventType.LOOP_END, _on_loop_end_decay)
     handlers.append((EventType.LOOP_END, _on_loop_end_decay))

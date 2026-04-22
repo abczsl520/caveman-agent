@@ -93,11 +93,7 @@ async def prepare_multi_turn(loop, task: str, recalled_ids: list[str], attachmen
 async def post_task_engines(loop, context, task, result, matched_skills) -> None:
     """Run post-task engines: shield, reflect, nudge, skill save, lint."""
     await update_shield(loop, context, task)
-    if loop.engine_flags.is_enabled("reflect"):
-        try:
-            await loop._reflect.reflect(task, loop.trajectory_recorder.to_sharegpt(), result)
-        except Exception as e:
-            logger.debug("Reflect failed: %s", e)
+    # Reflect is now event-driven via LOOP_END → event_chain (no duplicate call)
     loop._safe_bg(loop._end_nudge(task))
     loop._safe_bg(loop._check_save_skill(task))
     if loop._lint and loop.engine_flags.is_enabled("lint"):

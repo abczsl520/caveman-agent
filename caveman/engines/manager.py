@@ -168,11 +168,8 @@ class EngineManager:
 
         # Outcome — task completion scoring + feedback propagation
         from caveman.engines.outcome import OutcomeEngine
-        try:
-            from caveman.skills.rl_router import SkillRLRouter
-            rl_router = SkillRLRouter()
-        except Exception:
-            rl_router = None
+        # Reuse SkillManager's RL Router (single instance, persisted)
+        rl_router = getattr(self._skills, '_rl_router', None) if self._skills else None
         self._engines.outcome = OutcomeEngine(
             rl_router=rl_router,
             memory_manager=self._memory,

@@ -123,7 +123,7 @@ class AgentLoop(BackgroundTaskMixin):
                        outcome=self._outcome)
         self._flywheel_handlers = wire_inner_flywheel(
             self.bus, es, get_turns=lambda: self.trajectory_recorder.to_sharegpt(),
-            get_task=lambda: self._nudge_task_ref)
+            get_task=lambda: self._nudge_task_ref, memory_manager=self.memory_manager)
     def set_lint(self, engine) -> None: self._lint = engine; engine and setattr(engine, "_bus", self.bus)
     def set_ripple(self, engine) -> None: self._ripple = engine; engine and setattr(engine, "_bus", self.bus)
     # Public accessors for gateway (avoids accessing private attrs across modules)
