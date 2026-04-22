@@ -82,6 +82,7 @@ async def run_gateway_forever(config_path: str | None = None, max_restarts: int 
 
     from caveman.gateway.status import (
         write_pid_file, remove_pid_file, write_runtime_state,
+        get_running_pid,
     )
     from caveman.gateway.restart import (
         RESTART_EXIT_CODE, DEFAULT_DRAIN_TIMEOUT,
@@ -102,6 +103,22 @@ async def run_gateway_forever(config_path: str | None = None, max_restarts: int 
             logger.info("Cleaned up %d old tool result files", removed)
     except Exception as e:
         logger.debug("Tool result cleanup failed: %s", e)
+
+    # Guard: kill stale gateway if still running
+    existing_pid = get_running_pid()
+    if existing_pid and existing_pid != os.getpid():
+        logger.warning("Existing gateway PID %d found, sending SIGTERM", existing_pid)
+        try:
+            os.kill(existing_pid, 15)  # SIGTERM
+            import time
+            time.sleep(2)
+            if get_running_pid() == existing_pid:
+                logger.warning("PID %d still alive, sending SIGKILL", existing_pid)
+                os.kill(existing_pid, 9)
+                time.sleep(0.5)
+        except ProcessLookupError:
+            pass
+        remove_pid_file()
 
     # Write PID file
     write_pid_file()

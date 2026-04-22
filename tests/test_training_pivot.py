@@ -101,8 +101,14 @@ class TestCLIHandler:
         )
         assert "Unknown target" in result
 
-    def test_embedding_no_data(self, tmp_path):
+    def test_embedding_no_data(self, tmp_path, monkeypatch):
         from caveman.training.cli_handler import run_train
+        from caveman.training import embedding as _emb_mod
+        # Isolate from global retrieval log
+        monkeypatch.setattr(
+            _emb_mod.PairExtractor, "extract_from_retrieval_log",
+            lambda self: [],
+        )
         result = run_train(
             target="embedding", model="",
             trajectory_dir=str(tmp_path),

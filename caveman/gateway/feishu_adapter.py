@@ -75,6 +75,7 @@ class FeishuAdapter(BasePlatformAdapter):
 
         try:
             import aiohttp
+            _HTTP_TIMEOUT = aiohttp.ClientTimeout(total=30)
             url = f"{_API_BASE}/im/v1/messages"
             headers = {
                 "Authorization": f"Bearer {token}",
@@ -94,7 +95,7 @@ class FeishuAdapter(BasePlatformAdapter):
             if reply_to:
                 payload["reply_in_thread"] = True
 
-            async with aiohttp.ClientSession() as session:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
                 async with session.post(url, headers=headers, params=params, json=payload) as resp:
                     data = await resp.json()
                     if data.get("code") == 0:
@@ -110,7 +111,7 @@ class FeishuAdapter(BasePlatformAdapter):
             import aiohttp
             url = f"{_API_BASE}/auth/v3/tenant_access_token/internal"
             payload = {"app_id": self._app_id, "app_secret": self._app_secret}
-            async with aiohttp.ClientSession() as session:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
                 async with session.post(url, json=payload) as resp:
                     data = await resp.json()
                     if data.get("code") == 0:
