@@ -89,14 +89,12 @@ class SessionDB:
     def __init__(self, db_path: Path | str) -> None:
         self._db_path = Path(db_path)
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(
-            str(self._db_path),
-            timeout=SQLITE_CONNECT,
+        from caveman.db import connect as db_connect
+        self._conn = db_connect(
+            self._db_path,
+            row_factory=sqlite3.Row,
             isolation_level="DEFERRED",
         )
-        self._conn.row_factory = sqlite3.Row
-        self._conn.execute("PRAGMA journal_mode=WAL")
-        self._conn.execute(f"PRAGMA busy_timeout={int(SQLITE_BUSY)}")
         self._conn.executescript(_SCHEMA)
         try:
             self._conn.executescript(_FTS_SCHEMA)

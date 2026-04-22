@@ -43,8 +43,8 @@ class FlywheelDashboard:
             return stats
 
         try:
-            import sqlite3
-            conn = sqlite3.connect(str(db_path))
+            from caveman.db import connect as db_connect
+            conn = db_connect(db_path)
             cur = conn.cursor()
 
             cur.execute("SELECT COUNT(*) FROM memories")
