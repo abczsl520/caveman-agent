@@ -54,7 +54,7 @@ class _AdapterBridge:
         self._a = adapter
     @property
     def name(self) -> str:
-        return self._a.name
+        return self._a.name.lower()
     async def send_message(self, channel_id: str, content: str) -> None:
         r = await self._a.send(channel_id, content)
         return _SendResult(id=r.message_id) if r.success else None
