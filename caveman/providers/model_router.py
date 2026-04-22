@@ -6,7 +6,6 @@ Conservative: if any sign of complexity, keep the primary model.
 from __future__ import annotations
 
 import re
-from typing import Any, Optional
 
 _COMPLEX_KEYWORDS = frozenset({
     "debug", "debugging", "implement", "implementation", "refactor",

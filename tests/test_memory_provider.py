@@ -100,6 +100,7 @@ class TestMemoryProviderABC:
         p.on_session_end([])
         asyncio.run(p.mark_helpful("id", True))
         p.shutdown()
+        assert p.name == "minimal"  # Provider survived full lifecycle
 
 
 # --- BuiltinMemoryProvider ---

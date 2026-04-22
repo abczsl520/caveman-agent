@@ -37,30 +37,31 @@ class GatewayMockAgent:
         self.provider = _MockProvider(self._cfg)
         self.bus = None
 
-    async def retry(self):
+    async def retry(self) -> None:
         pass
 
-    async def compress_context(self, topic=None):
+    async def compress_context(self, topic=None) -> None:
         pass
 
-    async def drain_background(self, timeout=3.0):
+    async def drain_background(self, timeout=3.0) -> None:
         pass
 
 
 class _MockToolRegistry:
-    def get_schemas(self):
+    def get_schemas(self) -> list:
         try:
             from caveman.tools.registry import ToolRegistry
             reg = ToolRegistry()
             reg.register_builtins()
             return reg.get_schemas()
-        except Exception:
+        except Exception as e:
+            logger.debug("suppressed: %s", e)
             return []
 
 
 class _MockMemoryManager:
     @property
-    def total_count(self):
+    def total_count(self) -> int:
         try:
             from caveman.memory.sqlite_store import SQLiteMemoryStore
             from caveman.paths import CAVEMAN_HOME
@@ -71,12 +72,13 @@ class _MockMemoryManager:
 
 
 class _MockSkillManager:
-    def list_all(self):
+    def list_all(self) -> list:
         try:
             from caveman.skills.manager import SkillManager
             sm = SkillManager()
             return sm.list_all()
-        except Exception:
+        except Exception as e:
+            logger.debug("suppressed: %s", e)
             return []
 
 
@@ -88,15 +90,16 @@ class _MockEngineFlags:
         eng = self._engines.get(name, {})
         return eng.get("enabled", True) if isinstance(eng, dict) else True
 
-    def enable(self, name: str):
+    def enable(self, name: str) -> None:
         self._engines.setdefault(name, {})["enabled"] = True
 
-    def disable(self, name: str):
+    def disable(self, name: str) -> None:
         self._engines.setdefault(name, {})["enabled"] = False
 
 
 class _MockShield:
     class essence:
+        """Lightweight mock agent for gateway testing without full LLM stack."""
         turn_count = 0
         task = None
         decisions = []

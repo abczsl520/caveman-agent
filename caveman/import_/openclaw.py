@@ -1,10 +1,7 @@
 """OpenClaw importer — full recursive scan of ~/.openclaw/."""
 from __future__ import annotations
 
-import json
 import logging
-import shutil
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -12,14 +9,14 @@ from caveman.memory.types import MemoryType
 
 from .base import (
     BaseImporter, ImportItem, ImportManifest, ImportResult,
-    infer_type, split_markdown_sections, write_import_log,
+    infer_type, split_markdown_sections,
 )
 
 logger = logging.getLogger(__name__)
 
 _WORKSPACE_FILES = (
     "SOUL.md", "USER.md", "MEMORY.md", "AGENTS.md",
-    "HEARTBEAT.md", "TOOLS.md", "IDENTITY.md",
+    "HEARTBEAT.md", "TOOLS.md",
 )
 
 # Subdirectory → memory type mapping
@@ -172,72 +169,33 @@ class OpenClawImporter(BaseImporter):
                     source_path=cron_path, target_type="cron", content=content,
                 ))
 
-    async def execute(self, manifest: ImportManifest, memory_manager: Any) -> ImportResult:
-        """Execute import: store memories, copy workspace files, merge config."""
-        from .dedup import ImportDedup
+    async def _handle_item(
+        self, item: ImportItem, result: "ImportResult", memory_manager: Any,
+    ) -> None:
+        """Handle workspace, skill, config, and cron imports."""
         from .config_merger import ConfigMerger
 
-        result = ImportResult()
-        dedup = ImportDedup(memory_manager)
+        if item.target_type == "workspace":
+            self._copy_workspace_file(item, result)
+        elif item.target_type == "skill":
+            self._copy_skill(item, result)
+        elif item.target_type == "config":
+            if not self.dry_run:
+                merger = ConfigMerger(self.caveman_home)
+                merger.merge_openclaw_json(item.content)
+            result.imported += 1
+            result.details.append("Merged OpenClaw config")
+        elif item.target_type == "cron":
+            self._copy_cron(item, result)
+        else:
+            result.imported += 1
 
-        for item in manifest.items:
-            if item.skip_reason:
-                result.skipped += 1
-                result.details.append(f"Skipped: {item.source_path.name} ({item.skip_reason})")
-                continue
-
-            try:
-                if item.target_type == "memory":
-                    if dedup.is_duplicate(item.content):
-                        result.duplicates += 1
-                        continue
-                    if not self.dry_run:
-                        await memory_manager.store(
-                            item.content, item.memory_type,
-                            metadata={
-                                "source": "import:openclaw",
-                                "source_file": str(item.source_path),
-                                "imported_at": datetime.now().isoformat(),
-                            },
-                            trusted=self.include_secrets,
-                        )
-                    result.imported += 1
-
-                elif item.target_type == "workspace":
-                    self._copy_workspace_file(item, result)
-
-                elif item.target_type == "skill":
-                    self._copy_skill(item, result)
-
-                elif item.target_type == "config":
-                    if not self.dry_run:
-                        merger = ConfigMerger(self.caveman_home)
-                        merger.merge_openclaw_json(item.content)
-                    result.imported += 1
-                    result.details.append("Merged OpenClaw config")
-
-                elif item.target_type == "cron":
-                    self._copy_cron(item, result)
-
-                else:
-                    result.imported += 1
-
-            except Exception as e:
-                result.failed += 1
-                result.details.append(f"Failed: {item.source_path.name}: {e}")
-                logger.warning("Import failed for %s: %s", item.source_path, e)
-
-            result.files_processed += 1
-
-        if not self.dry_run:
-            write_import_log(self.caveman_home, {
-                "source": "openclaw", "imported": result.imported,
-                "duplicates": result.duplicates, "skipped": result.skipped,
-            })
-
-        return result
+    def _extra_log_fields(self, result: "ImportResult") -> dict:
+        return {"skipped": result.skipped}
 
     def _copy_workspace_file(self, item: ImportItem, result: ImportResult) -> None:
+        from .workspace_adapter import adapt_workspace_content, validate_adapted_content
+
         ws_dir = self.caveman_home / "workspace"
         # Determine target name
         if "agents/" in str(item.source_path):
@@ -247,14 +205,23 @@ class OpenClawImporter(BaseImporter):
         else:
             target = ws_dir / item.source_path.name
 
+        # Adapt content for Caveman compatibility
+        adapted = adapt_workspace_content(item.source_path.name, item.content)
+        warnings = validate_adapted_content(item.source_path.name, adapted)
+        for w in warnings:
+            result.details.append(f"⚠️ {item.source_path.name}: {w}")
+            logger.warning("Adaptation warning for %s: %s", item.source_path.name, w)
+
         if not self.dry_run:
             target.parent.mkdir(parents=True, exist_ok=True)
             if target.exists():
+                # Don't overwrite existing user file — save OpenClaw's adapted version as reference
                 backup = target.with_suffix(f".imported-from-openclaw{target.suffix}")
-                shutil.copy2(item.source_path, backup)
-                result.details.append(f"Backup: {target.name} → {backup.name}")
+                backup.write_text(adapted, encoding="utf-8")
+                result.details.append(f"Backup: {target.name} → {backup.name} (existing file preserved)")
             else:
-                target.write_text(item.content, encoding="utf-8")
+                # First import: write adapted content
+                target.write_text(adapted, encoding="utf-8")
         result.imported += 1
 
     def _copy_skill(self, item: ImportItem, result: ImportResult) -> None:

@@ -6,11 +6,14 @@ from datetime import datetime, timedelta
 # ── #1: Multi-turn recall ──
 
 def test_multi_turn_has_recall_code():
-    """Loop.py should re-recall memories in multi-turn conversations."""
+    """Loop or loop_engines should re-recall memories in multi-turn conversations."""
     from pathlib import Path
-    loop_src = (Path(__file__).parent.parent / "caveman/agent/loop.py").read_text()
-    assert "re-recall" in loop_src.lower() or \
-           "memory_manager.recall" in loop_src, \
+    base = Path(__file__).parent.parent / "caveman/agent"
+    loop_src = (base / "loop.py").read_text()
+    engines_src = (base / "loop_engines.py").read_text()
+    combined = loop_src + engines_src
+    assert "re-recall" in combined.lower() or \
+           "memory_manager.recall" in combined, \
         "Multi-turn should re-recall memories for each new task"
 
 

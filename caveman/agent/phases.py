@@ -25,6 +25,15 @@ logger = logging.getLogger(__name__)
 
 # Pre-compiled patterns for episode filtering (Fix #16)
 import re as _re
+
+__all__ = [
+    "phase_prepare",
+    "phase_compress",
+    "phase_llm_call",
+    "record_assistant_turn",
+    "phase_finalize",
+]
+
 _LOW_VALUE_PATTERNS = (
     _re.compile(r"^(?:what is|explain|define|convert|write a (?:python|javascript|bash))\s", _re.I),
     _re.compile(r"^(?:list|name|describe)\s+\d+\s+(?:common|popular)", _re.I),
@@ -44,6 +53,7 @@ async def phase_prepare(
     bus: EventBus,
     tool_registry,
     surface: str = "cli",
+    conversation_state=None,
 ) -> tuple[AgentContext, str, list]:
     """Load context, skills, memories. Return (context, system_prompt, matched_skills)."""
     # Cap task length to prevent FTS5/recall waste on extremely long inputs
@@ -100,14 +110,15 @@ async def phase_prepare(
         recall_context=recall_context,
         wiki_context=wiki_context,
         surface=surface,
+        conversation_state=conversation_state,
     )
 
-    # Append format reminder for recency bias (LLM pays attention to last instruction)
     from caveman.agent.response_style import get_format_reminder
     reminder = get_format_reminder(surface)
-    task_with_reminder = f"{task}\n{reminder}" if reminder else task
 
-    context.add_message("user", task_with_reminder)
+    context.add_message("user", task)
+    if reminder:
+        context.add_message("system", reminder, ephemeral=True)
     await trajectory_recorder.record_turn("human", task)
 
     return context, system, matched_skills
@@ -153,8 +164,7 @@ async def phase_compress(
         ]
         return context, stats
     except Exception as e:
-        import logging
-        logging.getLogger(__name__).warning("Compression failed, keeping original context: %s", e)
+        logger.warning("Compression failed, keeping original context: %s", e)
         return context, None
 
 
@@ -185,7 +195,8 @@ async def phase_llm_call(
                 text_buf.append(ev["text"])
                 # Only print to stdout in CLI mode (not gateway)
                 if sys.stdout.isatty():
-                    print(ev["text"], end="", flush=True)
+                    sys.stdout.write(ev["text"])
+                    sys.stdout.flush()
             elif ev["type"] == "tool_call":
                 tool_calls.append(ev)
             elif ev["type"] == "done":
@@ -206,7 +217,8 @@ async def phase_llm_call(
 
     text = "".join(text_buf)
     if text and sys.stdout.isatty():
-        print()
+        sys.stdout.write("\n")
+        sys.stdout.flush()
 
     await bus.emit(EventType.LLM_RESPONSE, {
         "text_len": len(text), "tool_calls": len(tool_calls), "stop": stop,
@@ -303,15 +315,12 @@ async def phase_finalize(
 
     return final
 
-
-
 def _build_episode_content(task: str, result: str, success: bool) -> str | None:
     """Build high-quality episodic memory from task result.
 
     PRD §6 Iron Law #1: Write quality >> Retrieve sophistication.
     Returns None for low-value tasks (generic QA, trivial operations).
     """
-    import re
     # Filter out generic QA that LLM already knows — zero project value
     task_lower = task.strip()
     for pat in _LOW_VALUE_PATTERNS:

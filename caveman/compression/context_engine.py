@@ -6,7 +6,7 @@ The built-in SmartCompressor is the default implementation.
 """
 from __future__ import annotations
 
-__all__ = ["ContextEngine"]
+__all__ = ["CompressionEngine"]
 
 import logging
 from abc import ABC, abstractmethod
@@ -15,7 +15,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
-class ContextEngine(ABC):
+class CompressionEngine(ABC):
     """Base class for pluggable context management engines.
 
     A context engine controls how conversation context is managed when
@@ -102,3 +102,7 @@ class ContextEngine(ABC):
     def tokens_remaining(self) -> int:
         """Estimated tokens remaining before threshold."""
         return max(0, self.threshold_tokens - self.last_total_tokens)
+
+
+# Backward-compat alias
+ContextEngine = CompressionEngine

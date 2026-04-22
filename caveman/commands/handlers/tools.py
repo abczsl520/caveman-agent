@@ -4,9 +4,22 @@ from __future__ import annotations
 import json
 
 from caveman.commands.types import CommandContext
+from caveman.aio import aio_exists, aio_glob, aio_is_dir, aio_iterdir, aio_read_text
 from caveman.commands.handlers._helpers import (
-    read_json, list_files, count_files, load_config_safe, CAVEMAN_HOME,
+    read_json, list_files, load_config_safe, CAVEMAN_HOME,
 )
+
+__all__ = [
+    "handle_tools",
+    "handle_skills",
+    "handle_engines",
+    "handle_cron",
+    "handle_reload_mcp",
+    "handle_browser",
+    "handle_plugins",
+    "handle_import",
+]
+
 
 
 async def handle_tools(ctx: CommandContext) -> None:
@@ -26,7 +39,7 @@ async def handle_tools(ctx: CommandContext) -> None:
                 # Fallback: list builtin tool modules
                 from pathlib import Path
                 builtin_dir = Path(__file__).parent.parent.parent / "tools" / "builtin"
-                tools = [f.stem for f in builtin_dir.glob("*.py")
+                tools = [f.stem for f in await aio_glob(builtin_dir, "*.py")
                          if not f.name.startswith("_")]
                 ctx.respond(ctx.t(f"🔧 Built-in tools ({len(tools)}):", f"🔧 内置工具 ({len(tools)}):") + "\n" + "\n".join(f"  {t}" for t in sorted(tools)))
         except Exception:
@@ -51,8 +64,8 @@ async def handle_skills(ctx: CommandContext) -> None:
         try:
             import yaml
             skill_file = CAVEMAN_HOME / "skills" / f"{name}.yaml"
-            if skill_file.exists():
-                data = yaml.safe_load(skill_file.read_text())
+            if await aio_exists(skill_file):
+                data = yaml.safe_load(await aio_read_text(skill_file))
                 lines = [f"Skill: {name}"]
                 if data.get("description"):
                     lines.append(f"  {data['description']}")
@@ -128,8 +141,8 @@ async def handle_reload_mcp(ctx: CommandContext) -> None:
     try:
         # json imported at top
         mcp_config = CAVEMAN_HOME.parent / ".mcp.json"
-        if mcp_config.exists():
-            mcps = json.loads(mcp_config.read_text())
+        if await aio_exists(mcp_config):
+            mcps = json.loads(await aio_read_text(mcp_config))
             servers = mcps.get("mcpServers", {})
             ctx.respond(ctx.t(f"🔌 Reloading {len(servers)} MCP server(s): {', '.join(servers.keys())}", f"🔌 重载 {len(servers)} 个 MCP 服务: {', '.join(servers.keys())}"))
         else:
@@ -155,8 +168,8 @@ async def handle_plugins(ctx: CommandContext) -> None:
     """List installed plugins."""
     try:
         plugins_dir = CAVEMAN_HOME / "plugins"
-        if plugins_dir.exists():
-            plugins = [d.name for d in plugins_dir.iterdir() if d.is_dir()]
+        if await aio_exists(plugins_dir):
+            plugins = [d.name for d in await aio_iterdir(plugins_dir) if d.is_dir()]  # sync ok: iterdir already loaded entries
             if plugins:
                 ctx.respond(f"🔌 Plugins ({len(plugins)}):\n" + "\n".join(f"  {p}" for p in plugins))
                 return
@@ -169,7 +182,6 @@ async def handle_import(ctx: CommandContext) -> None:
     """Import data from other tools."""
     if ctx.args and "--detect" in ctx.args:
         try:
-            from caveman.import_.base import BaseImporter
             # List available importer types
             importers = ["openclaw", "hermes", "claude_code", "codex", "directory"]
             lines = [ctx.t("🔍 Available import sources:", "🔍 可用的导入源:")]

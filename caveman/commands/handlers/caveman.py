@@ -4,10 +4,19 @@ from __future__ import annotations
 import json
 
 from caveman.commands.types import CommandContext
+from caveman.aio import aio_stat
 from caveman.commands.handlers._helpers import (
     read_json, count_files, list_files, memory_count, load_config_safe,
-    CAVEMAN_HOME,
 )
+
+__all__ = [
+    "handle_flywheel",
+    "handle_trajectory",
+    "handle_bench",
+    "handle_selftest",
+    "handle_wiki",
+]
+
 
 
 async def handle_flywheel(ctx: CommandContext) -> None:
@@ -56,7 +65,7 @@ async def handle_trajectory(ctx: CommandContext) -> None:
             return
         lines = [ctx.t(f"Trajectories: {total}", f"轨迹: {total} 条")]
         for f in files[-10:]:
-            lines.append(f"  {f.stem} ({f.stat().st_size/1024:.1f}KB)")
+            lines.append(f"  {f.stem} ({f(await aio_stat(p)).st_size/1024:.1f}KB)")
         if total > 10:
             lines.append(ctx.t(f"  ... +{total-10} more", f"  … 还有 {total-10} 条"))
         ctx.respond("\n".join(lines))

@@ -1,10 +1,13 @@
 # Caveman — Product Requirements Document (PRD)
 
-> **Version:** 6.2
-> **Date:** 2026-04-16
+> **Version:** 6.5
+> **Date:** 2026-04-21
 > **Author:** The Caveman Team
-> **Status:** v0.4.0 — 187 files, 28,909 LOC, 1,499 tests, 209 commits ✅
+> **Status:** v0.4.1 — 399 files, 72,500+ LOC, 2,929 tests, 417+ commits ✅
 > **Changelog:**
+> - v6.5 — 架构重构 Round（arch/refactor-v1）：统一 message splitting 全链路（4 实现 → 1 canonical + delegates）、file_ops/terminal/web_search v1/v2 合并（first-wins 去重 + 死注册清理）、context_references compat shim、platform_delivery.truncate_message 统一到 message_splitting。25 子系统、399 文件、72.5K LOC、2929 测试、410 commits。零回归。
+> - v6.4 — §8.8.4.1 Session 知识提取（openclaw-sessions）：三层管线从 OpenClaw session JSONL 对话中提取高价值知识（研究/诊断/架构/方案/教训/决策），用户 opt-in，支持规则提取和 LLM 增强。US-601b 新增。实测 124 session → 507 条知识。
+> - v6.3 — 补强 6 大维度：§8.9 数据模型/Schema 定义、§8.10 关键接口契约（27 种事件 payload）、§8.11 可观测性架构（三层）、§8.12 升级迁移策略、Round 13-16 路线图（含 v1.0 发布标准）、User Stories 扩充（US-4xx 错误恢复 + US-5xx 边界场景 + US-6xx 迁移）。所有内容基于实际代码，不拍脑袋。
 > - v6.2 — 元飞轮 Round 107-130 全面审视后更新。修正记忆类型双维度定义（来源 vs 认知）、版本统计同步、内层飞轮事件链精确化、Nudge 事件驱动落地。
 > - v6.1 — 训练方向 pivot：从"训练推理模型"到"embedding 微调 + 数据导出"。PRD 全局版本同步到 v0.3.0。检索日志 + local embedding provider + 评估脚本。
 > - v6.0 — 全面重构：从"18章两个灵魂"到"14章一条叙事线"。统一 Agent OS 内核叙事，双层飞轮合一，三巨头从主角降为注脚，商业模式/竞品详表/历史路线图移入附录。不删任何内容，只重新组织+用新灵魂重写连接组织。
@@ -28,7 +31,7 @@
 
 **v0.4.0 已验证：** 187 Python 文件 / 28,909 LOC / 1,499 tests / 209 commits。元飞轮 Round 107-130 完成内层飞轮事件链、Confidence 闭环、HybridScorer 集成、跨语言检索、技能进化、Nudge 事件驱动。
 
-**下一步：** LLM judge 替代 heuristic scorer → 端到端用户旅程验证 → embedding 微调数据管道。
+**下一步：** Round 13 数据基础设施（Schema 版本化 + 迁移框架 + 检索日志）→ Round 14 LLM judge + 飞轮闭环验证 → Round 15 embedding 训练管道 → Round 16 v1.0 发布准备。
 
 
 ## 术语表（Glossary）
@@ -57,7 +60,7 @@
 | Sensor | Harness 的检测角色。Verification 充当 Sensor，在任务后验证质量 | §8.2 |
 | AgentSkills | OpenClaw 的技能标准格式（SKILL.md）。Caveman 兼容并扩展 | §8.2 |
 | 轨迹（Trajectory） | Agent 执行任务的完整记录，ShareGPT JSONL 格式。用于训练和回放 | §10.1 |
-| EventBus | 事件总线，22 种事件类型。Nudge/Shield/Lint 的输入源 | §4.1 |
+| EventBus | 事件总线，28 种事件类型。Nudge/Shield/Lint 的输入源 | §4.1 |
 | Feature Flags | 引擎模块加载开关，类比 Linux modprobe。Round 8 前提 | §7.2 |
 | 三巨头 | Hermes（学习飞轮）+ OpenClaw（执行深度）+ Claude Code（工程纪律） | §1.3 |
 | RL 技能路由 | 用强化学习训练的技能匹配器，80% 命中率 vs 语义相似度 50% | §5.2 |
@@ -217,7 +220,7 @@ Day 90: 记忆 500+ 条 + 技能 20+ 个 → 通用模型已变成专属 Agent �
 | 三巨头融合可行 | ✅ 技术可行 | OpenClaw MCP + Hermes REST + ACP Bridge 全部实现并测试通过 |
 | Python + Node.js 共存 | ✅ 架构验证 | UDS传输层 204 行，Bridge 骨架完整，延迟 2.3μs |
 | 自学习系统可构建 | ✅ 框架完整 | Memory v2 + Nudge + Drift Detection + Skill v2 + Trajectory v2 |
-| 事件驱动可扩展 | ✅ 新增验证 | EventBus 22种事件，AgentLoop复杂度26→7 |
+| 事件驱动可扩展 | ✅ 新增验证 | EventBus 28种事件，AgentLoop复杂度26→7 |
 | 代码质量可维护 | ✅ 新增验证 | 446测试/7.5s，结构化错误层次，统一Result类型 |
 | 出厂经验有价值 | 🔸 待用户验证 | 6 技能 + 3 方法论已打包 |
 | Agent OS 内核可运行 | ✅ Round 8-12 | 5引擎全部实现，飞轮首次真实运行通过 |
@@ -273,7 +276,7 @@ Caveman 分为两层：**OS 内核层**（解决连续自我）和**能力层**�
 │                                                           │
 │  ┌──────────────────────────────────────────────────┐    │
 │  │ Agent Loop v2 (事件驱动, 6阶段, 复杂度7)          │    │
-│  │ EventBus (22种事件) + Lifecycle Manager            │    │
+│  │ EventBus (28种事件) + Lifecycle Manager            │    │
 │  └──────────────────────────────────────────────────┘    │
 │                                                           │
 ├───────────────────────────────────────────────────────────┤
@@ -371,32 +374,42 @@ progress:
 
 读取最近 session_essence + 相关知识 → 组装 session context → 注入 system prompt → Agent 无缝继续。
 
-### 4.4 目录结构（v0.3.0 实际）
+### 4.4 目录结构（v0.4.1 实际）
 
 ```
-caveman/
+caveman/                    # 25 子系统, 399 Python 文件, 72.5K LOC
 ├── paths.py              # 集中常量（路径/超时/token限制/端口）
-├── errors.py             # 结构化异常层次（11类）
+├── errors.py             # 结构化异常层次（12类）
 ├── result.py             # 统一结果类型 ToolResult/Ok/Err
-├── events.py             # EventBus（22种事件）+ MetricsCollector
+├── events.py             # EventBus（28种事件）+ MetricsCollector
 ├── lifecycle.py          # Lifecycle Manager（注册→LIFO清理→信号处理）
-├── utils.py              # 共享原语
+├── utils.py              # 共享原语（split_message 委托到 gateway/message_splitting）
+├── wiring.py             # 模块注册 + lazy import 编排
+├── acp/                  # Agent Communication Protocol（编排外部编码agent）
 ├── agent/                # AgentLoop v2 + Coordinator + Factory + Prompt Builder
 ├── bridge/               # OpenClaw MCP + Hermes REST + ACP + UDS
-├── cli/                  # Typer CLI 8命令 + TUI + Doctor
+├── cli/                  # Typer CLI 14命令 + TUI + Doctor
+├── commands/             # 57 斜杠命令 (6 分类) + 处理器 + 补全
 ├── compression/          # 3层压缩（Micro/Normal/Smart）
 ├── config/               # YAML loader + Schema Validator
 ├── coordinator/          # 任务引擎（分解→并发→合并）
-├── gateway/              # Discord + Telegram + 多网关调度
+├── cron/                 # 定时任务调度
+├── engines/              # 推理引擎抽象层
+├── environments/         # 运行环境检测 + 适配
+├── gateway/              # Discord + Telegram + 多网关调度 + message_splitting（canonical）
 ├── hub/                  # Skills Hub 客户端
+├── import_/              # 外部数据导入管线
+├── mcp/                  # Model Context Protocol 服务端/客户端
 ├── memory/               # v2 混合搜索 + Nudge + Drift + Provider
 ├── plugins/              # 插件管理器
-├── providers/            # Anthropic + OpenAI（真流式）
-├── security/             # 10-pattern密钥扫描 + L0-L3权限
+├── providers/            # 9 LLM providers (Anthropic/OpenAI/Gemini/Ollama/DeepSeek/Groq/Mistral/OpenRouter/Together) + credential pool + fallback chain
+├── sandbox/              # 沙箱执行环境（Docker/进程隔离）
+├── security/             # 12-pattern密钥扫描 + AUTO/ASK/DENY 三级权限
 ├── skills/               # v2（4触发+自动创建+质量门+进化）
-├── tools/                # ToolRegistry v2 + 7 builtins（@tool装饰器）
+├── tools/                # ToolRegistry v2 + 90 @tool 注册（first-wins 去重）
 ├── training/             # 数据导出 + embedding 训练 + 研究者 SFT/RL
-└── trajectory/           # v2 录制（质量评分+ShareGPT+JSONL）
+├── trajectory/           # v2 录制（质量评分+ShareGPT+JSONL）
+└── wiki/                 # 知识库管理
 ```
 
 ### 4.5 数据流
@@ -600,6 +613,66 @@ Session 运行中
 | 18 | 审计日志 | 可观测性 | ✅ |
 | 19 | 沙箱 + E2E 加密 | 安全基线 | ✅ |
 
+#### Round 13 — 数据基础设施
+
+> **排序理由：** Schema 版本化是"记忆永续"的工程保障。没有它，后续所有涉及 schema 变更的 Round 都是在赌博。PRD §8.12 已设计完整迁移框架。
+
+| # | 做什么 | OS 类比 | 依赖 | 验收标准 |
+|---|--------|---------|------|---------|
+| 20 | Schema 版本化 + 迁移框架 | 文件系统版本 | Round 12 ✅ | `schema_version` 表存在；`caveman migrate --dry-run` 输出 pending 迁移；迁移失败自动回滚 |
+| 21 | `last_accessed` 提升为独立列 | — | #20 | 列存在；旧 metadata 数据回填完成；HybridScorer 直接读列而非解析 JSON |
+| 22 | metadata well-known keys 校验 | — | #20 | `store()` 写入时校验 well-known keys 类型；非法类型 → WARNING 日志 |
+| 23 | 检索日志（retrieval_log） | 审计追踪 | Round 12 ✅ | 每次 recall 记录 query/results/latency_ms 到 SQLite；`caveman doctor` 可查询 |
+
+#### Round 14 — LLM Judge + 飞轮闭环验证
+
+> **排序理由：** Heuristic scorer 是飞轮的瓶颈——它不能判断"这条记忆对任务有没有帮助"。LLM judge 是从"够用"到"真正有复利"的关键跳跃。
+
+| # | 做什么 | 意义 | 依赖 | 验收标准 |
+|---|--------|------|------|---------|
+| 24 | LLM Judge 替代 heuristic quality_gate | 写入质量飞跃 | Round 13 ✅ | quality_gate 支持 LLM 模式；LLM 拒绝率 vs heuristic 拒绝率有统计对比 |
+| 25 | 端到端飞轮验证 | 证明飞轮在转 | #24 | 自动化测试：10 轮对话 → Shield 保存 → Nudge 提取 → Ripple 传播 → Lint 审计 → Recall 恢复，全链路通过 |
+| 26 | Confidence 闭环升级 | trust 信号更准 | #24 | LLM judge 的 helpful/unhelpful 判定直接写入 trust_score；替代旧的 ConfidenceTracker |
+
+#### Round 15 — Embedding 训练管道
+
+> **排序理由：** 飞轮验证通过后，积累的检索日志就是训练数据。embedding 微调让记忆检索从"关键词匹配"升级到"语义理解"。
+
+| # | 做什么 | 意义 | 依赖 | 验收标准 |
+|---|--------|------|------|---------|
+| 27 | 检索日志 → 训练对生成 | 数据管道 | Round 14 ✅ | `caveman train --prepare` 从检索日志提取 query-memory 正负样本对 |
+| 28 | 本地 embedding 微调 | 检索精度提升 | #27 | `caveman train --target embedding` 微调 nomic/bge 模型；LOCOMO 评估 ≥ 65% |
+| 29 | A/B 评估框架 | 量化提升 | #28 | 微调前后 recall@5 对比报告；自动选择更优模型 |
+
+#### Round 16 — 发布准备（v1.0 Gate）
+
+> **排序理由：** 前面 3 个 Round 让内核稳定、飞轮可验证、检索可训练。这个 Round 解决"敢不敢让外部用户用"的问题。
+
+| # | 做什么 | 意义 | 依赖 | 验收标准 |
+|---|--------|------|------|---------|
+| 30 | 安装体验优化 | 第一印象 | Round 15 ✅ | `pip install caveman && caveman setup` 在 macOS/Ubuntu/WSL2 上 < 3 分钟完成 |
+| 31 | 文档站 + README 重写 | 开源门面 | #30 | README 有 Quick Start / Architecture / Contributing；文档站有 API 参考 |
+| 32 | GitHub Actions CI | 质量门 | #30 | PR 自动跑 pytest + lint + type check；覆盖率 ≥ 80% |
+| 33 | 首批外部用户测试 | 真实验证 | #31, #32 | 3 个非作者用户完成 Day 1-7 旅程；收集反馈 |
+
+**v1.0 发布标准（Round 16 验收后）：**
+- [ ] 安装 < 3 分钟（3 个 OS）
+- [ ] 飞轮端到端测试通过
+- [ ] Schema 迁移框架可用
+- [ ] 3 个外部用户完成 7 天试用
+- [ ] README + 文档站上线
+- [ ] CI 绿灯 + 覆盖率 ≥ 80%
+
+**Round 13-16 明确不做的事（1 人团队生死线）：**
+
+| 不做 | 为什么 |
+|------|--------|
+| 多用户/团队协作 | v1 只服务个人用户，团队功能是 v2 |
+| Web UI / Dashboard | CLI + Telegram/Discord 够用，UI 是资源黑洞 |
+| 自建 Hub 平台 | 先用 GitHub Releases，Hub 是有社区后的事 |
+| 付费功能 | 1000+ 活跃用户前不考虑商业化 |
+| Windows 原生支持 | WSL2 兜底，原生 Windows 是 v2 |
+
 ### 7.3 里程碑依赖图
 
 ```
@@ -608,19 +681,20 @@ Phase 1 (✅)     Round 8 (✅)      Round 9 (✅)      Round 10 (✅)     Round
 │ AgentLoop│    │ Flags    │     │ Scheduler│     │ Ripple   │     │ 自举验证 │     │ REPL增强 │
 │ Memory v2│───→│ EventBus │────→│ Nudge P2 │────→│ __all__  │────→│ E2E测试  │────→│ Bridge5  │
 │ Skill v2 │    │ Shield   │     │ Doctor v2│     │ Obsidian │     │ loop重构 │     │ 审计日志 │
-│ CLI 8cmd │    │ Nudge P1 │     │ Lint     │     │ RL Router│     │ NFR合规  │     │ 沙箱加密 │
+│ CLI 14cmd │    │ Nudge P1 │     │ Lint     │     │ RL Router│     │ NFR合规  │     │ 沙箱加密 │
 │ 3层压缩  │    │ Recall   │     │ Scorer   │     └──────────┘     └──────────┘     └──────────┘
 │ Bridge   │    │ Workspace│     │ Config   │
 │ Trajectory│   │ CLI Agent│     │ Import   │
 │ 7轮优化  │    └──────────┘     └──────────┘
 └──────────┘
-                                                                                    ↓ Next
-                                                                              ┌──────────────┐
-                                                                              │ 内层飞轮E2E  │
-                                                                              │ LLM Judge    │
-                                                                              │ 检索日志     │
-                                                                              │ Embedding训练│
-                                                                              └──────────────┘
+                                                                                     ↓
+Round 13          Round 14           Round 15           Round 16 (v1.0 Gate)
+┌──────────┐     ┌──────────┐      ┌──────────┐      ┌──────────────┐
+│ Schema版本│     │ LLM Judge│      │ 训练对生成│      │ 安装体验优化 │
+│ last_accs │────→│ E2E飞轮  │─────→│ Embedding│─────→│ 文档站+README│
+│ meta校验  │     │ Confidence│     │ A/B评估  │      │ CI + 外部测试│
+│ 检索日志  │     │ 闭环升级  │      └──────────┘      └──────────────┘
+└──────────┘     └──────────┘
 ```
 
 ### 7.4 人力与资源
@@ -651,7 +725,7 @@ Phase 1 (✅)     Round 8 (✅)      Round 9 (✅)      Round 10 (✅)     Round
 | Browser | OpenClaw | Playwright 自动化 | snapshot→act |
 | Gateway | OpenClaw | 消息路由 | 7+平台 |
 | Skills | 三者融合 | AgentSkills + 自动创建 | RL路由 + 质量门 |
-| Tools | 三者融合 | 40+ 内置工具 | @tool声明式注册 |
+| Tools | 三者融合 | 90 内置工具（first-wins 去重） | @tool声明式注册 |
 
 ### 8.2 出厂预装经验
 
@@ -706,6 +780,11 @@ ClawHub / Hermes 技能可直接导入（AgentSkills 标准兼容）。Caveman �
 | `caveman export` | 导出轨迹 | ✅ |
 | `caveman train` | 数据导出 + embedding 训练 | ✅ |
 | `caveman doctor` | 飞轮健康检查 | ✅ |
+| `caveman version` | 版本信息 | ✅ |
+| `caveman import` | 从 OpenClaw/Hermes/Claude Code 导入数据 | ✅ |
+| `caveman adapt-workspace` | 适配工作区配置 | ✅ |
+| `caveman hub` | Skills Hub 交互 | ✅ |
+| `caveman plugins` | 插件管理 | ✅ |
 
 ### 8.4 异常处理
 
@@ -746,8 +825,9 @@ Python↔Node.js 桥接是 Caveman 的独有创新：
 | UDS JSON-RPC | 2.3μs p50 | 主通道（同机高频） |
 | MCP (stdio) | ~1-5ms | 工具层（标准化） |
 | HTTP REST | ~1-10ms | 兜底（跨机/降级） |
+| WebSocket | <100ms | OpenClaw Gateway 直连（绕过 CLI 子进程 ~3s 开销） |
 
-**降级策略：** Node.js未安装→纯Python / UDS不可用→HTTP / Bridge崩溃→自动重启3次→降级
+**降级策略：** Node.js未安装→纯Python / UDS不可用→WebSocket→HTTP / Bridge崩溃→自动重启3次→降级
 
 ### 8.7 实战发现的约束（2026-04-13）
 
@@ -860,6 +940,7 @@ class CLIAgentRunner:
 |------|------|----------|
 | OpenClaw memory/*.md | Markdown 文件 | 解析 → 按日期/项目分类 → 写入 Memory Store |
 | OpenClaw MEMORY.md | 结构化 Markdown | 解析段落 → 提取 facts/preferences → 写入 |
+| OpenClaw sessions/*.jsonl | JSONL 对话记录 | 三层管线提取知识（见 §8.8.4.1）→ 写入 Memory Store |
 | Hermes memories | JSON/SQLite | 读取 → 格式转换 → 写入 Memory Store |
 | Codex rollout_summaries/ | Markdown | 解析 → 提取 procedural 记忆 → 写入 |
 | Claude Code CLAUDE.md | Markdown | 解析 → 提取项目知识 → 写入 |
@@ -867,11 +948,46 @@ class CLIAgentRunner:
 **CLI 入口：**
 ```bash
 caveman import --from openclaw          # 导入 OpenClaw workspace + 记忆
+caveman import --from openclaw-sessions # 从 session 对话中提取知识（用户 opt-in）
 caveman import --from hermes            # 导入 Hermes 记忆 + 技能
 caveman import --from codex             # 导入 Codex rollout summaries
 caveman import --from claude-code       # 导入 CLAUDE.md 项目知识
 caveman import --from directory ./path  # 导入任意 markdown 目录
 ```
+
+##### 8.8.4.1 Session 知识提取（openclaw-sessions）
+
+**解决什么：** OpenClaw 的 session 对话中包含大量高价值知识（研究结论、根因分析、架构决策、解决方案），但这些知识只存在于 JSONL 对话记录中，不在 memory/ 文件系统里。现有 import 系统无法触及。
+
+**设计原则：**
+- **用户自主决定** — opt-in，不自动执行
+- **质量优先** — 宁可漏掉，不导入噪音
+- **完整溯源** — 每条记忆带 session_id、日期、分类、评分
+- **幂等去重** — 基于 content hash，重复导入不产生重复数据
+- **LLM 可选** — 规则提取兜底，LLM 增强质量
+
+**三层提取管线：**
+1. **解析层**（`session_parser.py`）— JSONL → 结构化 ConversationTurn（user/assistant/toolCall/toolResult）
+2. **过滤层**（`session_extractor.py`）— 对每个 turn 打分（正向信号：根因分析/架构/研究/教训/决策；负向信号：简单确认/heartbeat/filler），score ≥ 2.0 才提取
+3. **提取层**（`session_extractor.py`）— 聚类相关 turn → 规则提取或 LLM 摘要 → 分类写入 Memory Store
+
+**知识分类 → 记忆类型映射：**
+- research / architecture / decision / reference → SEMANTIC
+- diagnosis / status → EPISODIC
+- solution / lesson → PROCEDURAL
+
+**CLI 选项：**
+```bash
+caveman import --from openclaw-sessions --dry-run          # 预览
+caveman import --from openclaw-sessions --use-llm          # LLM 增强提取
+caveman import --from openclaw-sessions --since 2026-04-01 # 日期过滤
+caveman import --from openclaw-sessions --session <id>     # 指定 session
+caveman import --from openclaw-sessions --min-score 3.0    # 调整阈值
+```
+
+**实测数据（2026-04-18）：** 124 个 session → 1342 turn → 810 可提取 → 507 条知识（research 141 / diagnosis 94 / solution 94 / architecture 69 / reference 48 / status 28 / decision 27 / lesson 6）
+
+**实现：** `caveman/import_/session_parser.py` + `session_extractor.py` + `openclaw_sessions.py`，35 个专项测试。
 
 #### 8.8.5 兼容层现状总结
 
@@ -882,10 +998,455 @@ caveman import --from directory ./path  # 导入任意 markdown 目录
 | Workspace 文件读取 + prompt 注入 | ✅ 已实现 | P0 | Round 8 ✅ |
 | CLI Agent 调用（Claude Code/Codex/Gemini） | ✅ 已实现 | P0 | Round 8 ✅ |
 | 配置格式兼容 + 自动检测 | ✅ 已实现 | P1 | Round 9 ✅ |
-| 记忆格式导入 | ✅ 已实现 | P1 | Round 9 ✅ |
+| Session 知识提取（openclaw-sessions） | ✅ 已实现 | P1 | Round 130+ ✅ |
 
+
+### 8.9 数据模型（Schema 定义）
+
+> **防止什么：** 记忆永续是空话——没有版本化的 schema，升级就是赌博。metadata 是黑盒 dict，任何引擎都能往里塞垃圾，最终污染飞轮。
+
+#### 8.9.1 memories 表（Memory Store 核心）
+
+```sql
+-- Schema Version: 1 (v0.4.0)
+-- 文件: caveman/memory/sqlite_store.py
+CREATE TABLE memories (
+    id              TEXT PRIMARY KEY,           -- UUID v4
+    content         TEXT NOT NULL,              -- 记忆正文（质量门控：15-3000 字符）
+    type            TEXT NOT NULL,              -- MemoryType 枚举值: episodic|semantic|procedural|working
+    created_at      TEXT NOT NULL,              -- ISO 8601 时间戳
+    metadata_json   TEXT DEFAULT '{}',          -- 结构化元数据（见 §8.9.2）
+    trust_score     REAL DEFAULT 0.5,           -- 信任分 [0.0, 1.0]，飞轮核心信号
+    retrieval_count INTEGER DEFAULT 0,          -- 被检索次数（复利指标：用得越多→排名越高→被用得更多）
+    helpful_count   INTEGER DEFAULT 0,          -- 被标记有用的次数
+    entities_json   TEXT DEFAULT '[]'           -- 自动提取的实体列表（人名/路径/IP/项目名）
+);
+
+-- FTS5 全文搜索索引（自动同步，触发器维护）
+CREATE VIRTUAL TABLE memories_fts USING fts5(
+    content, content=memories, content_rowid=rowid
+);
+
+-- 向量嵌入表（可选，有 embedding_fn 时启用）
+CREATE TABLE embeddings (
+    memory_id  TEXT PRIMARY KEY REFERENCES memories(id) ON DELETE CASCADE,
+    vector_json TEXT NOT NULL                   -- JSON 数组，维度取决于 embedding 模型
+);
+```
+
+**PRAGMA 配置：**
+- `journal_mode=WAL` — 读写并发，崩溃安全
+- `foreign_keys=ON` — embeddings 级联删除
+
+**trust_score 生命周期：**
+
+| 事件 | delta | 来源 |
+|------|-------|------|
+| 新建 | 0.5（默认） | `sqlite_store.store()` |
+| 被检索（正常） | +0.01 | `sqlite_store.recall()` 微信号 |
+| 被检索（复活：trust < 0.3） | +0.05 | `sqlite_store.recall()` 复活机制 |
+| 用户标记有用 | +0.08 | `retrieval.adjust_trust()` |
+| 用户标记无用 | -0.10 | `retrieval.adjust_trust()` |
+| Reflect 确认准确 | +0.20 | `confidence.REFLECT_CONFIRM` |
+| Lint 标记过时 | -0.30 | `confidence.LINT_STALE` |
+| 下限 | 0.0 | 不删除，只沉底 |
+| 上限 | 1.0 | 硬顶 |
+
+#### 8.9.2 metadata_json 规范（Well-Known Keys）
+
+metadata_json 是可扩展的 JSON 对象。以下 key 有明确语义，引擎依赖它们：
+
+| Key | 类型 | 写入者 | 语义 |
+|-----|------|--------|------|
+| `trust_score` | float | store/recall | 冗余副本（主值在列上），用于 MemoryEntry 传递 |
+| `source` | string | Nudge | MemorySource 枚举值: user/feedback/project/reference |
+| `last_accessed` | string (ISO 8601) | recall() | 最后被检索的时间，HybridScorer temporal_decay 使用 |
+| `retrieval_count` | int | recall() | 冗余副本，用于 MemoryEntry 传递 |
+| `related` | list[string] | Ripple | 关联记忆 ID 列表（知识网络的边） |
+| `supersedes` | string | Ripple | 被本条取代的旧记忆 ID |
+| `conflict_with` | string | Ripple/Drift | 与本条矛盾的记忆 ID |
+| `grounding_status` | string | Grounding Gate | verified/unverified/stale |
+| `grounding_checked_at` | string (ISO 8601) | Grounding Gate | 最后验证时间 |
+| `_fts_rank` | float | recall() 内部 | FTS5 排名分（临时，不持久化） |
+| `_vector_sim` | float | recall() 内部 | 向量相似度（临时，不持久化） |
+| `nudge_trigger` | string | Nudge | 触发提取的事件: shield_update/tool_error/loop_end |
+| `confidence` | float | ConfidenceTracker (legacy) | 旧版信任分，v0.5 移除 |
+
+**扩展规则：** 以 `_` 开头的 key 是临时/内部的，不保证跨版本兼容。其他 key 自由扩展但不保证被引擎读取。
+
+#### 8.9.3 events 表（EventStore 持久化）
+
+```sql
+-- 文件: caveman/events_store.py
+CREATE TABLE events (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_type TEXT    NOT NULL,                -- EventType 枚举值（见 §8.10）
+    data_json  TEXT    NOT NULL DEFAULT '{}',   -- 事件 payload（见 §8.10）
+    timestamp  REAL    NOT NULL,                -- Unix 时间戳（time.time()）
+    source     TEXT    NOT NULL DEFAULT '',      -- 发射模块: loop/tool/shield/nudge/skill/memory
+    session_id TEXT    NOT NULL DEFAULT '',      -- 所属 session ID
+    created_at TEXT    NOT NULL DEFAULT (datetime('now'))  -- SQLite 写入时间
+);
+
+CREATE INDEX idx_events_type_ts ON events (event_type, timestamp);
+CREATE INDEX idx_events_session ON events (session_id, timestamp);
+```
+
+#### 8.9.4 session_essence（Shield 持久化，YAML）
+
+```yaml
+# 文件: ~/.caveman/sessions/{session_id}.yaml
+# 数据类: caveman.engines.shield.SessionEssence
+session_id: "a1b2c3d4e5f6"          # 12 位 hex
+decisions:                            # 最近 20 条决策（what + why）
+  - "选择 SQLite+FTS5 而非 PostgreSQL — 零依赖，单文件"
+progress:                             # 最近 20 条进度
+  - "完成 Round 12 安全与交互"
+stances:                              # 最近 10 条立场
+  - "长期主义+最高复利，摈弃够用就行的垃圾思维"
+key_data:                             # 关键数据点（flat dict）
+  path_0: "/Users/yeren64g/projects/caveman"
+  version_1: "0.4.0"
+  tests_passed_2: "1499"
+open_todos:                           # 最近 20 条待办
+  - "LLM judge 替代 heuristic scorer"
+updated_at: "2026-04-18T19:44:27"     # ISO 8601
+turn_count: 15                        # assistant 回复轮数
+task: "PRD 补强"                      # 当前任务描述
+```
+
+#### 8.9.5 project_identity（Shield 子结构，JSON）
+
+```json
+// 文件: ~/.caveman/projects/{project_name}.json
+// 数据类: caveman.engines.project_identity.ProjectIdentity
+{
+  "name": "caveman",
+  "path": "~/projects/caveman",
+  "mission": "做出比 OpenClaw/Hermes 更好用的 Agent",
+  "principles": ["长期主义", "写入质量 >> 检索复杂度"],
+  "current_phase": "Round 13 — PRD 补强",
+  "tech_stack": ["Python 3.12", "SQLite+FTS5", "Anthropic"],
+  "key_identifiers": {"repo": "caveman", "loc": "28909"},
+  "updated_at": "2026-04-18T19:44:27",
+  "session_count": 42
+}
+```
+
+#### 8.9.6 Schema 版本管理
+
+当前 schema 没有版本号，`migrate_schema()` 通过 `PRAGMA table_info` 检测缺失列并 `ALTER TABLE ADD COLUMN`。这在 v0.4.0 够用，但不可持续。
+
+**v0.5.0 升级计划（见 §8.12）：** 引入 `schema_version` 表 + 编号迁移脚本。
+
+### 8.10 关键接口契约（Event Payload Schema）
+
+> **防止什么：** 引擎之间传什么数据全靠读代码。新引擎接入飞轮时不知道该 emit 什么、该 subscribe 什么。
+
+**设计原则：只定义跨引擎边界的接口，不定义引擎内部实现。**
+
+#### 8.10.1 EventType 枚举（28 种事件）
+
+| 事件 | 发射者 | 消费者 | 语义 |
+|------|--------|--------|------|
+| `loop.start` | AgentLoop | Metrics, Audit | 任务开始 |
+| `loop.end` | AgentLoop | Nudge(LOOP_END触发), Metrics, Trajectory | 任务结束 |
+| `iteration.start` | AgentLoop | Metrics | 单轮推理开始 |
+| `iteration.end` | AgentLoop | Metrics | 单轮推理结束 |
+| `llm.request` | AgentLoop | Metrics(计时开始) | LLM API 调用发出 |
+| `llm.response` | AgentLoop | Metrics(计时结束) | LLM API 返回 |
+| `llm.stream.delta` | Provider | Display | 流式 token 片段 |
+| `llm.error` | Provider | Metrics(错误计数) | LLM 调用失败 |
+| `tool.call` | tools_exec | Metrics(计时开始), Audit | 工具调用发出 |
+| `tool.result` | tools_exec | Metrics(计时结束), Audit | 工具调用返回 |
+| `tool.error` | tools_exec | Nudge(立即提取), Metrics | 工具调用失败 |
+| `memory.recall` | AgentLoop | Confidence(反馈), Metrics | 记忆被检索 |
+| `memory.store` | MemoryManager | Lint(增量检查), Metrics | 新记忆写入 |
+| `memory.nudge` | Nudge | Metrics | Nudge 提取完成 |
+| `skill.match` | AgentLoop | Metrics | 技能匹配成功 |
+| `skill.nudge` | tools_exec | SkillManager | 技能检测触发 |
+| `skill.outcome` | SkillManager | Metrics | 技能执行结果 |
+| `context.compress` | Compression | Metrics | 上下文压缩执行 |
+| `context.utilization` | AgentLoop | Display | 上下文使用率 |
+| `trajectory.turn` | Trajectory | — | 单轮轨迹记录 |
+| `trajectory.save` | Trajectory | — | 轨迹文件保存 |
+| `shield.update` | AgentLoop | Nudge(节流≥3轮), Metrics | Shield 精华更新 |
+| `nudge.extract` | Nudge | Ripple(日志), Metrics | Nudge 提取完成 |
+| `ripple.propagate` | Ripple | Metrics | 知识传播执行 |
+| `lint.scan` | Lint | Metrics | 审计扫描执行 |
+| `permission.check` | Security | Audit | 权限检查 |
+| `usage.turn` | AgentLoop | Metrics | 单轮 token 用量统计 |
+| `secret.detected` | Security | Audit | 密钥泄露检测 |
+
+#### 8.10.2 关键事件 Payload 定义
+
+**内层飞轮事件链（Shield → Nudge → Ripple → Lint）：**
+
+```python
+# shield.update — AgentLoop 每轮结束后发射
+{"session_id": str, "turn_count": int}
+
+# nudge.extract — Nudge 提取完成后发射
+{"count": int, "types": list[str], "trigger": "shield_update"|"tool_error"|"loop_end"}
+
+# ripple.propagate — Ripple 传播完成后发射
+{"source_id": str, "related_count": int, "conflicts": int}
+
+# lint.scan — Lint 扫描完成后发射
+{"scanned": int, "stale": int, "contradictions": int, "orphans": int}
+```
+
+**工具调用事件：**
+
+```python
+# tool.call — 工具调用发出
+{"name": str, "call_id": str, "args_keys": list[str]}
+
+# tool.result / tool.error — 工具调用返回
+{"name": str, "call_id": str, "is_error": bool, "result_len": int}
+```
+
+**记忆事件：**
+
+```python
+# memory.recall — 记忆被检索
+{"query": str, "results": int, "recalled_ids": list[str], "recall_hit": bool}
+
+# memory.store — 新记忆写入
+{"memory_id": str, "type": str, "source": str}  # source: "nudge"|"user"|"import"
+```
+
+**生命周期事件：**
+
+```python
+# loop.start
+{"task": str}
+
+# loop.end
+{"task": str, "result_len": int, "iterations": int, "tool_calls": int}
+
+# iteration.start / iteration.end
+{"iteration": int, "stop": str, "tool_calls": int, "text_len": int}
+```
+
+#### 8.10.3 内层飞轮事件链（wire_inner_flywheel）
+
+```
+SHIELD_UPDATE ──→ Nudge.run()（节流：≥3 轮间隔）
+                      │
+                      ├─ 提取成功 → emit NUDGE_EXTRACT
+                      │                  │
+                      │                  └─ Ripple 自动触发（via memory.store()）
+                      │
+TOOL_ERROR ─────→ Nudge.run()（立即，无节流）
+                      │
+                      └─ emit NUDGE_EXTRACT
+
+MEMORY_STORE ───→ Lint 标记待检查（下次扫描时处理）
+
+LOOP_END ───────→ Nudge.run()（必定提取）+ Shield.save() + Trajectory.save()
+```
+
+#### 8.10.4 HybridScorer 接口
+
+```python
+# 5 信号加权排名
+HybridScorer(
+    fts_weight=0.30,      # FTS5 全文匹配
+    jaccard_weight=0.25,  # Jaccard 词集相似度
+    vector_weight=0.20,   # 向量余弦相似度（可选）
+    trust_weight=0.25,    # 信任分（飞轮核心信号）
+    temporal_half_life_days=90,  # 时间衰减半衰期
+)
+
+# 上下文感知排名
+scorer.set_context(query)  # debug→procedural优先, design→semantic优先, coding→episodic优先
+```
+
+### 8.11 可观测性架构
+
+> **防止什么：** 飞轮是否在加速？不知道。Agent 性能在退化？不知道。Hermes 和 OpenClaw 都只有"能不能用"的可观测性，没有"飞轮是否在产生复利"的度量。
+
+#### 8.11.1 三层可观测性
+
+| 层 | 做什么 | 实现 | 状态 |
+|----|--------|------|------|
+| L1 日志 | 结构化事件日志 | `logging_subscriber` → EventBus `on_all` | ✅ |
+| L2 指标 | 性能 + 飞轮健康 | `MetricsCollector` + `FlywheelHealth` | ✅ |
+| L3 告警 | 关键异常通知 | Gateway 消息推送 | 🔸 待实现 |
+
+#### 8.11.2 L1 结构化日志
+
+```
+# 格式: Python logging, DEBUG 级别
+event=tool.call source=tool data_keys=['name', 'call_id', 'args_keys']
+event=shield.update source=shield data_keys=['session_id', 'turn_count']
+```
+
+**日志级别约定：**
+- `DEBUG`: 所有 EventBus 事件（通过 `logging_subscriber`）
+- `INFO`: 引擎关键动作（Nudge 提取 N 条、Shield 保存、Lint 发现 N 个问题）
+- `WARNING`: 可恢复错误（Handler 失败、LLM 重试、Bridge 断开）
+- `ERROR`: 不可恢复错误（数据库损坏、配置缺失）
+
+#### 8.11.3 L2 指标体系
+
+**Agent 性能指标（MetricsCollector）：**
+
+| 指标 | 计算方式 | 查询 |
+|------|---------|------|
+| tool_duration_avg / _p95 | TOOL_CALL → TOOL_RESULT 时间差 | `metrics.snapshot()` |
+| llm_latency_avg / _p95 | LLM_REQUEST → LLM_RESPONSE 时间差 | `metrics.snapshot()` |
+| total_errors | TOOL_ERROR + LLM_ERROR 计数 | `metrics.snapshot()["counters"]` |
+| events_emitted | EventBus 总发射数 | `bus.stats` |
+| handlers_failed | Handler 异常数 | `bus.stats` |
+
+**飞轮健康指标（FlywheelHealth）：**
+
+| 指标 | 计算方式 | 健康阈值 |
+|------|---------|---------|
+| total_memories | `COUNT(*) FROM memories` | > 0 |
+| avg_trust | `AVG(trust_score) FROM memories` | ≥ 0.4 |
+| trust_distribution | 5 桶直方图 (dead/low/default/good/excellent) | 非全部集中在 default |
+| memories_never_recalled | `retrieval_count = 0` 的数量 | < 50% |
+| feedback_rate | `helpful_count > 0` 的比例 | ≥ 10% |
+| top_recalled | 检索次数最高的 N 条 | 存在即健康 |
+
+**查询入口：**
+- CLI: `caveman doctor` → 输出 6 项指标 + 诊断建议
+- Agent 自查: `metrics` 工具 → 返回 agent/flywheel/provider 三类指标
+- 编程: `FlywheelHealth.diagnose(backend)` / `MetricsCollector.snapshot()`
+
+#### 8.11.4 L3 告警规则（v0.5.0+）
+
+| 告警 | 条件 | 通道 | 优先级 |
+|------|------|------|--------|
+| 飞轮停转 | 连续 7 天 nudge 提取 0 条 | Gateway 消息 | P0 |
+| 记忆库膨胀 | total_memories > 10000 且 avg_trust < 0.3 | Gateway 消息 | P1 |
+| LLM 费用异常 | 单日 token 消耗 > 日均 3 倍 | Gateway 消息 | P1 |
+| Shield 恢复失败 | Recall 加载 essence 失败 | 日志 WARNING | P0 |
+| 进程崩溃 | systemd/launchd watchdog 触发 | Gateway 消息 | P0 |
+
+### 8.12 升级与迁移策略
+
+> **防止什么：** "记忆永续"是 Caveman 的核心承诺。如果升级破坏了用户的记忆数据库，这个承诺就是谎言。Hermes 升级经常破坏记忆格式，OpenClaw 的 compaction safeguard 就是因为升级丢数据才加的。
+
+#### 8.12.1 当前迁移机制（v0.4.0）
+
+```python
+# caveman/memory/store_helpers.py
+def migrate_schema(conn):
+    """检测缺失列，ALTER TABLE ADD COLUMN。"""
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(memories)")}
+    for col, sql in [
+        ("trust_score", "ALTER TABLE memories ADD COLUMN trust_score REAL DEFAULT 0.5"),
+        ("retrieval_count", "ALTER TABLE memories ADD COLUMN retrieval_count INTEGER DEFAULT 0"),
+        ("helpful_count", "ALTER TABLE memories ADD COLUMN helpful_count INTEGER DEFAULT 0"),
+        ("entities_json", "ALTER TABLE memories ADD COLUMN entities_json TEXT DEFAULT '[]'"),
+    ]:
+        if col not in existing:
+            conn.execute(sql)
+```
+
+**局限：** 只能加列，不能改列/删列/改类型/改索引。没有版本号，无法知道当前 schema 是哪个版本。
+
+#### 8.12.2 目标迁移框架（v0.5.0）
+
+```
+caveman/memory/migrations/
+├── __init__.py          # 迁移注册表
+├── v001_initial.py      # v0.4.0 基线 schema
+├── v002_add_last_accessed.py   # 将 last_accessed 从 metadata 提升为列
+├── v003_schema_version.py      # 引入 schema_version 表
+└── ...
+```
+
+**schema_version 表：**
+
+```sql
+CREATE TABLE IF NOT EXISTS schema_version (
+    version INTEGER NOT NULL,
+    applied_at TEXT NOT NULL DEFAULT (datetime('now')),
+    description TEXT NOT NULL DEFAULT ''
+);
+```
+
+**迁移脚本规范：**
+
+```python
+# caveman/memory/migrations/v002_add_last_accessed.py
+VERSION = 2
+DESCRIPTION = "将 last_accessed 从 metadata_json 提升为独立列"
+
+def up(conn):
+    conn.execute("ALTER TABLE memories ADD COLUMN last_accessed TEXT DEFAULT ''")
+    # 从 metadata_json 回填
+    rows = conn.execute("SELECT id, metadata_json FROM memories").fetchall()
+    for row in rows:
+        meta = json.loads(row[1]) if row[1] else {}
+        if "last_accessed" in meta:
+            conn.execute("UPDATE memories SET last_accessed = ? WHERE id = ?",
+                         (meta["last_accessed"], row[0]))
+
+def down(conn):
+    # SQLite 不支持 DROP COLUMN（3.35.0 之前），标记为 deprecated
+    pass
+```
+
+#### 8.12.3 迁移原则
+
+| # | 原则 | 理由 |
+|---|------|------|
+| 1 | **只加不删** | 旧字段标 deprecated，不删除。SQLite ALTER TABLE 限制 + 回滚安全 |
+| 2 | **迁移前自动备份** | `cp memories.db memories.db.bak.{timestamp}` |
+| 3 | **迁移失败自动回滚** | 事务包裹，失败时 ROLLBACK + 恢复备份 |
+| 4 | **支持 dry-run** | `caveman migrate --dry-run` 只报告变更不执行 |
+| 5 | **启动时自动迁移** | `_get_conn()` 检查版本号，执行 pending migrations |
+| 6 | **向前兼容** | 新版本代码能读旧版本数据（新列有 DEFAULT） |
+
+#### 8.12.4 跨大版本迁移（v0.x → v1.0）
+
+| 迁移项 | 策略 |
+|--------|------|
+| memories 表 | 自动迁移脚本链（v001 → v002 → ... → vN） |
+| session_essence YAML | 向前兼容（`from_dict` 忽略未知字段，缺失字段用默认值） |
+| project_identity JSON | 向前兼容（`from_dict` 同上） |
+| events 表 | 不迁移（事件是日志，不是状态） |
+| 技能 SKILL.md | 格式转换器（v1 → v2 字段映射） |
+| config.yaml | 向前兼容 + `caveman setup --upgrade` 交互式升级 |
+
+#### 8.12.5 数据安全网
+
+```
+升级流程:
+  1. caveman upgrade --check     → 检测当前版本 + pending migrations
+  2. 自动备份 memories.db        → ~/.caveman/backups/memories.db.{timestamp}
+  3. 执行迁移脚本链              → 事务包裹，失败回滚
+  4. 验证迁移结果                → SELECT COUNT(*) 前后一致
+  5. caveman doctor              → 飞轮健康检查
+```
 
 ---
+
+### 8.13 架构重构记录（v0.4.1, 2026-04-21）
+
+> **背景：** 从 v0.3.0 到 v0.4.0 快速增长（97→399 文件），积累了 v1/v2 并存、重复实现、死代码等技术债。arch/refactor-v1 分支系统性清理。
+
+**关键决策：**
+
+| 问题 | 决策 | 理由 |
+|------|------|------|
+| split_message 4 个实现 | 统一到 `gateway/message_splitting.py`，其余委托 | fence-parity counting 只维护一处 |
+| file_ops v1/v2 并存 | v1 保留（first-wins），v2 死注册删除，保留 file_read_v2 + file_diff | ToolRegistry first-wins 去重，v2 的 file_patch/file_search 永远不会被调用 |
+| terminal v1/v2 并存 | v2 安全特性合并到 v1，v2 降为 compat shim | 一个实现，两个入口 |
+| web_search v1/v2 并存 | v2 的 Tavily 搜索合并到 v1，v2 删除 | Tavily 是唯一 provider |
+| context_refs vs context_references | context_references 瘦身为 compat shim | API 不兼容但都未集成，保留两个入口 |
+| prompt.py vs prompt_builder.py | 两者共存 | 不同层次：runtime prompt vs factory config-driven prompt |
+| display.py 薄 shim | 保留 | 打破循环依赖的合理设计 |
+| estimate_tokens 重复 | 保留两个 | compression/utils 是 higher-level wrapper，已委托到 utils |
+| _depth.py 文件 | 保留 + 确保 wired | "预制件仓库"模式，__init__.py re-export |
+
+**质量指标：** 2864 passed / 7 skipped / 9 xfailed / 0 regressions（排除 3 个 pre-existing failures: cron, nfr601, telegram）
 
 ## §9 安全架构
 
@@ -902,19 +1463,22 @@ caveman import --from directory ./path  # 导入任意 markdown 目录
 
 ### 9.2 权限分级
 
-| Level | 名称 | 行为 | 示例 |
-|-------|------|------|------|
-| L0 | 自动执行 | 无需确认 | 读文件、搜索、LLM推理 |
-| L1 | 通知后执行 | 告知不阻塞 | 写文件、安装依赖、创建技能 |
-| L2 | 确认后执行 | 需用户批准 | 终端命令、浏览器、设备操作 |
-| L3 | 强制审批 | 不可跳过 | 删除数据、部署生产、支付 |
+> **v0.4.1 实现：** 三级权限（AUTO/ASK/DENY），fail-closed 设计（ASK 无 callback → DENY）。
+
+| Level | 枚举值 | 行为 | 示例 |
+|-------|--------|------|------|
+| AUTO | `auto` | 无需确认，直接执行 | file_read, web_search, bash_safe, memory_read/write, skill_create |
+| ASK | `ask` | 需用户批准（无 callback 时 fail-closed → DENY） | file_write/delete, bash_write, http_post, openclaw_spawn, hermes_delegate |
+| DENY | `deny` | 始终拒绝 | bash_sudo |
+
+> **设计备注：** 原 PRD v5.0 设计为 L0-L3 四级（含"通知后执行"），实现时简化为三级。14 个预定义 action 覆盖文件/终端/网络/跨 agent 操作。
 
 ### 9.3 v0.3.0 安全实现状态
 
 | 安全功能 | 状态 |
 |---------|------|
-| 10-pattern 密钥扫描器 | ✅ |
-| L0-L3 权限分级 | ✅ |
+| 12-pattern 密钥扫描器 | ✅ |
+| AUTO/ASK/DENY 三级权限 | ✅ |
 | 危险命令拦截 | ✅ |
 | Secret 防泄露 | ✅ |
 | 结构化错误 | ✅ |
@@ -1118,8 +1682,8 @@ caveman import --from directory ./path  # 导入任意 markdown 目录
 | 阶段 | 指标 | 底线 | 目标 | 实测(v0.2.0) |
 |------|------|------|------|-------------|
 | v0.2.0 | 功能完整度 | CLI+3工具+记忆 | +双平台消息 | ✅ 超目标 |
-| v0.2.0 | 测试通过率 | ≥90% | 100% | ✅ 378/378 |
-| v0.2.0 | 代码量 | ≥50 files | — | ✅ 121 files |
+| v0.2.0 | 测试通过率 | ≥90% | 100% | ✅ 378/378 → v0.4.1: 2864/2864 |
+| v0.2.0 | 代码量 | ≥50 files | — | ✅ 121 → v0.4.1: 399 files, 72.5K LOC |
 | Round 8 | Shield 恢复率 | ≥80% | ≥95% | ✅ 实现 |
 | Round 9 | 飞轮转速 | 14天≥2技能 | ≥5个 | — |
 | Round 9 | 记忆质量 | LOCOMO≥55% | ≥65% | — |
@@ -1225,7 +1789,7 @@ caveman import --from directory ./path  # 导入任意 markdown 目录
 
 ### FR-108 EventBus 持久化
 - **优先级：** P0
-- **描述：** EventBus 的 22 种事件写入 SQLite events 表，支持回放和审计
+- **描述：** EventBus 的 28 种事件写入 SQLite events 表，支持回放和审计
 - **验收标准：**
   - Given Agent 完成一个任务产生了 task_complete + memory_write + tool_call 三个事件
   - When 查询 events 表
@@ -1391,7 +1955,7 @@ caveman import --from directory ./path  # 导入任意 markdown 目录
 
 | ID | 需求 | 指标 | 验证方式 |
 |----|------|------|---------|
-| NFR-401 | Secret 零泄露 | LLM 输出/日志/轨迹中不含 API key | 10-pattern 扫描器 |
+| NFR-401 | Secret 零泄露 | LLM 输出/日志/轨迹中不含 API key | 12-pattern 扫描器 |
 | NFR-402 | 权限最小化 | 默认 L2（确认后执行），可配置 | 权限系统测试 |
 | NFR-403 | 本地数据加密 | 支持 AES-256 加密记忆和轨迹（可选） | 加密/解密测试 |
 | NFR-404 | 依赖安全 | 零已知 CVE 的直接依赖 | `pip audit` |
@@ -1495,6 +2059,103 @@ caveman import --from directory ./path  # 导入任意 markdown 目录
 - So that 我可以自动化手机上的重复操作
 - **关联 FR:** FR-Bridge（Device via OpenClaw Bridge，已实现骨架）
 - **验收:** "打开微信发消息给 XX" → 手机执行完成
+
+## US-4: 错误恢复故事
+
+### US-401 Agent 做错事后回滚
+- As a 委托 Agent 修改代码的开发者
+- I want 当 Agent 改错了文件时，能一键回滚到修改前的状态
+- So that 我不会因为 Agent 的错误丢失工作成果
+- **关联 FR:** FR-101（Shield 保存状态）
+- **验收:** Agent 改错文件 → 用户说"回滚" → Agent 用 git checkout 或备份恢复 → 文件恢复到修改前
+
+### US-402 记忆冲突裁决
+- As a 长期使用的用户
+- I want 当 Agent 发现两条记忆矛盾时，主动问我哪条是对的
+- So that 错误的记忆不会影响后续决策
+- **关联 FR:** FR-105（Ripple 矛盾检测）, FR-106（Lint 审计）
+- **验收:** 记忆 A 说"服务器 IP 是 X"，记忆 B 说"服务器 IP 是 Y" → Agent 提示冲突 → 用户确认 → 旧记忆标记 stale，trust 降分
+
+### US-403 技能质量差时禁用
+- As a 发现自动创建的技能不好用的用户
+- I want 能反馈"这个技能不好用"并禁用它
+- So that 坏技能不会反复被匹配到
+- **关联 FR:** FR-205（技能创建）, FR-206（RL 路由）
+- **验收:** 用户说"这个技能不好用" → 技能 quality_score 降分 → 连续 3 次负反馈 → 自动禁用 → 用户可手动重新启用
+
+### US-404 LLM 服务中断时降级
+- As a 在远程操控 Agent 的用户
+- I want 当 LLM API 不可用时，Agent 告诉我发生了什么而不是静默失败
+- So that 我知道该等待还是切换方案
+- **关联 FR:** §8.4 异常处理
+- **验收:** API 429/500 → Agent 通过 Gateway 发消息"LLM 暂时不可用，重试中(1/3)" → 3 次失败 → "已切换到备用模型" 或 "需要你手动处理"
+
+### US-405 记忆库污染清理
+- As a 发现 Agent 记住了错误信息的用户
+- I want 能搜索并删除特定记忆
+- So that 错误信息不会继续影响 Agent 的判断
+- **关联 FR:** Memory Store `forget()`, FR-106（Lint）
+- **验收:** 用户说"忘掉关于 XX 的记忆" → Agent 搜索相关记忆 → 列出候选 → 用户确认 → 删除 + Ripple 清理关联引用
+
+## US-5: 边界场景故事
+
+### US-501 大规模记忆库性能
+- As a 使用 6 个月、积累 5000+ 条记忆的用户
+- I want 记忆搜索依然在 100ms 内返回
+- So that Agent 的响应速度不会随使用时间退化
+- **关联 NFR:** NFR-103（记忆搜索延迟 < 100ms FTS5）
+- **验收:** 5000 条记忆 + FTS5 搜索 < 100ms；混合搜索 < 500ms
+
+### US-502 长时间运行稳定性
+- As a 7×24 运行 Agent 的用户
+- I want Agent 连续运行 30 天不崩溃、不内存泄漏
+- So that 我不需要定期手动重启
+- **关联 NFR:** NFR-305（RSS 增长 < 10%）
+- **验收:** 30 天压力测试 → RSS 增长 < 10% → 无 OOM → EventBus 无 handler 泄漏
+
+### US-503 离线工作
+- As a 在飞机上没有网络的开发者
+- I want Agent 的本地工具（文件操作、bash、记忆搜索）依然可用
+- So that 我不会因为断网完全失去 Agent 能力
+- **关联 FR:** §8.4 异常处理（网络断开 → 本地工具仍可用）
+- **验收:** 断网 → LLM 调用失败提示 → 本地工具正常 → 联网后自动恢复
+
+### US-504 Compaction 后无感恢复
+- As a 长对话后触发 compaction 的用户
+- I want Agent 在 compaction 后依然记得我们在做什么
+- So that 我不需要重新解释上下文
+- **关联 FR:** FR-101（Shield）, FR-104（Recall）
+- **验收:** 50 轮对话 → compaction 触发 → Agent 下一轮回复引用 session_essence 中的决策和进度 → 用户无感
+
+## US-6: 迁移故事
+
+### US-601 从 OpenClaw 迁移
+- As a 已经在用 OpenClaw 的开发者
+- I want 用一条命令把 OpenClaw 的记忆、技能、配置迁移到 Caveman
+- So that 我不需要从零开始积累
+- **关联 FR:** FR-204（记忆导入）, §8.8.1（Workspace 兼容）
+- **验收:** `caveman import --from openclaw` → 导入 SOUL.md/USER.md/MEMORY.md/memory/*.md/skills/ → 导入报告显示成功数量 → Caveman 启动后能引用导入的记忆
+
+### US-601b 从 OpenClaw Session 提取知识
+- As a 在 OpenClaw Discord 上做过大量研究和分析的用户
+- I want 从 OpenClaw 的 session 对话中提取高价值知识到 Caveman
+- So that 之前在 Discord 上做的研究结论、根因分析、架构决策不会丢失
+- **关联 FR:** FR-204, §8.8.4.1（Session 知识提取）
+- **验收:** `caveman import --from openclaw-sessions --dry-run` → 显示可提取的知识条数和分类 → `caveman import --from openclaw-sessions` → 知识写入 Memory Store → `memory_search` 能检索到提取的知识 → 重复执行不产生重复数据
+
+### US-602 从 Hermes 迁移
+- As a 已经在用 Hermes 的开发者
+- I want 把 Hermes 的记忆和技能迁移到 Caveman
+- So that 我在 Hermes 积累的经验不会浪费
+- **关联 FR:** FR-204, §8.8.4
+- **验收:** `caveman import --from hermes` → 导入 memories + skills → 格式转换成功 → Caveman 能检索导入的记忆
+
+### US-603 全新用户 Day 1
+- As a 从未用过 AI Agent 框架的开发者
+- I want 从安装到第一次有用的对话在 5 分钟内完成
+- So that 我不会因为复杂的配置放弃
+- **关联 FR:** FR-301（配置兼容）, US-101
+- **验收:** `pip install caveman && caveman setup` → 交互式配置（API key + 模型选择）→ `caveman run "hello"` → Agent 回复 → 全程 < 5 分钟
 
 
 # 附录
@@ -1657,5 +2318,5 @@ Tier 3: Caveman Data ($按量)
 *Document: docs/PRD.md*
 *Architecture: docs/ARCHITECTURE.md (45KB) + docs/ADR.md (148行)*
 *Repository: *
-*Version: 6.0 | 7 Parts (§1-§14 + FR + NFR + US) + 4 Appendices (A-D) | 一条叙事线*
-*Last updated: 2026-04-14 | Agent OS 内核统一叙事 + 双层飞轮 + 批判性决策记录*
+*Version: 6.3 | 7 Parts (§1-§14 + FR + NFR + US) + 4 Appendices (A-D) | 一条叙事线*
+*Last updated: 2026-04-18 | +§8.9 数据模型 +§8.10 接口契约 +§8.11 可观测性 +§8.12 迁移策略 +Round 13-16 +US-4/5/6*

@@ -2,10 +2,27 @@
 from __future__ import annotations
 
 from caveman.commands.types import CommandContext
+import asyncio
+from caveman.aio import aio_exists, aio_stat
 from caveman.commands.handlers._helpers import (
-    read_json, count_files, memory_count, memory_stats, memory_search_fts,
-    load_config_safe, CAVEMAN_HOME,
+    read_json, count_files, memory_count, CAVEMAN_HOME,
 )
+
+__all__ = [
+    "handle_status",
+    "handle_help",
+    "handle_commands",
+    "handle_usage",
+    "handle_insights",
+    "handle_doctor",
+    "handle_memory",
+    "handle_recall",
+    "handle_shield",
+    "handle_reflect",
+    "handle_audit",
+    "handle_ratelimit",
+]
+
 
 
 async def handle_status(ctx: CommandContext) -> None:
@@ -146,7 +163,8 @@ async def handle_insights(ctx: CommandContext) -> None:
         traj_files = list_files("trajectories")
         if traj_files:
             traj_count = len(traj_files)
-            total_size = sum(f.stat().st_size for f in traj_files)
+            total_size = await asyncio.to_thread(
+                lambda: sum(f(await aio_stat(f)).st_size for f in traj_files))
             lines.append(ctx.t(f"  Trajectories: {traj_count} ({total_size/1024/1024:.1f}MB)", f"  轨迹: {traj_count} ({total_size/1024/1024:.1f}MB)"))
 
         mem_count = memory_count()
@@ -193,8 +211,8 @@ async def handle_memory(ctx: CommandContext) -> None:
                 label = type_labels.get(cat, cat) if ctx.locale.startswith("zh") else cat
                 lines.append(f"  {label}: {count}")
         emb_file = CAVEMAN_HOME / "memory" / "_embeddings.json"
-        if emb_file.exists():
-            size_mb = emb_file.stat().st_size / 1024 / 1024
+        if await aio_exists(emb_file):
+            size_mb = (await aio_stat(emb_file)).st_size / 1024 / 1024
             lines.append(ctx.t(f"  Embeddings: {size_mb:.1f}MB", f"  向量: {size_mb:.1f}MB"))
         ctx.respond("\n".join(lines))
 

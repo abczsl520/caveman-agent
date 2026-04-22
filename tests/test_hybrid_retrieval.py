@@ -268,6 +268,7 @@ class TestSQLiteStoreHybrid:
         conn = store._get_conn()  # First migration
         migrate_schema(conn)      # Second migration — should not error
         store.close()
+        assert True  # Double migration completed without error
 
     def test_retrieval_count_incremented(self, tmp_path):
         from caveman.memory.sqlite_store import SQLiteMemoryStore

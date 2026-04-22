@@ -11,6 +11,7 @@ __all__ = [
     "extract_skill_description",
     "iter_skill_files",
     "discover_skills",
+    "extract_conditions",
 ]
 
 import logging
@@ -160,7 +161,8 @@ def discover_skills(
             try:
                 raw = skill_file.read_text(encoding="utf-8")
                 fm, body = parse_frontmatter(raw)
-            except Exception:
+            except Exception as e:
+                logger.debug("suppressed: %s", e)
                 continue
 
             name = fm.get("name") or skill_file.parent.name

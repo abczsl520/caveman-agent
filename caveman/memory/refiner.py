@@ -14,10 +14,10 @@ import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Callable, Awaitable
+from typing import Callable, Awaitable
 
 from caveman.memory.manager import MemoryManager
-from caveman.memory.types import MemoryEntry, MemoryType
+from caveman.memory.types import MemoryEntry
 
 logger = logging.getLogger(__name__)
 
@@ -234,5 +234,5 @@ def _parse_json(text: str) -> dict | None:
         try:
             return json.loads(text[start:end])
         except json.JSONDecodeError:
-            pass
+            pass  # intentional: Exception suppressed
     return None

@@ -151,14 +151,14 @@ class TestSmartCompressor:
         assert sc.compression_count == 1
 
     def test_compress_system_note_first_time(self):
-        """First compression with heuristic: system message gets compaction note."""
+        """First compression: system message should NOT be modified (metadata stays out of content)."""
         msgs = [{"role": "system", "content": "You are helpful."}] + _make_messages(20)
         sc = SmartCompressor()
         result = asyncio.run(sc.compress(msgs))
         # Heuristic compression works → fewer messages
         assert len(result) < len(msgs)
-        # System message should have compaction note
-        assert "compacted" in result[0]["content"].lower() or "summary" in result[0]["content"].lower()
+        # System message should be unchanged — compaction note is in the summary message itself
+        assert result[0]["content"] == "You are helpful."
 
     def test_compress_preserves_head(self):
         """Head messages should be preserved."""

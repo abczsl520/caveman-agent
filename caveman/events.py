@@ -18,7 +18,17 @@ import logging
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Awaitable
+from typing import Any, Callable, Awaitable, Union
+
+__all__ = [
+    "EventType",
+    "Event",
+    "EventBus",
+    "logging_subscriber",
+    "MetricsCollector",
+    "create_default_bus",
+]
+
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +84,9 @@ class EventType(str, Enum):
     # Lint
     LINT_SCAN = "lint.scan"
 
+    # Usage
+    TURN_USAGE = "usage.turn"
+
     # Security
     PERMISSION_CHECK = "permission.check"
     SECRET_DETECTED = "secret.detected"
@@ -92,7 +105,7 @@ class Event:
 
 SyncHandler = Callable[[Event], None]
 AsyncHandler = Callable[[Event], Awaitable[None]]
-Handler = SyncHandler | AsyncHandler
+Handler = Union[SyncHandler, AsyncHandler]
 
 
 # ── Event Bus ──

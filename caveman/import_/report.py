@@ -3,6 +3,13 @@ from __future__ import annotations
 
 from .base import ImportManifest, ImportResult
 
+__all__ = [
+    "format_manifest_report",
+    "format_result_report",
+    "format_detect_report",
+]
+
+
 
 def format_manifest_report(manifest: ImportManifest, dry_run: bool = True) -> str:
     """Format a scan manifest as a readable report."""

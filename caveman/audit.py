@@ -7,11 +7,12 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from caveman.events import EventBus, EventType
+from caveman.events import EventBus
+from caveman.aio import aio_mkdir
 
 logger = logging.getLogger(__name__)
 
@@ -41,10 +42,10 @@ async def export_audit_log(
         out = Path(output_path)
     else:
         audit_dir = CAVEMAN_HOME / "audit"
-        audit_dir.mkdir(parents=True, exist_ok=True)
+        await aio_mkdir(audit_dir, parents=True, exist_ok=True)
         out = audit_dir / f"{datetime.now().strftime('%Y-%m-%d')}.jsonl"
 
-    out.parent.mkdir(parents=True, exist_ok=True)
+    await aio_mkdir(out.parent, parents=True, exist_ok=True)
 
     # Collect events from EventStore (persistent)
     entries: list[dict[str, Any]] = []

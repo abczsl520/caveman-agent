@@ -14,12 +14,11 @@ Principles:
 """
 from __future__ import annotations
 import asyncio
-import json
 import logging
 from datetime import datetime
 from typing import Any
 
-from .types import MemoryType, MemoryEntry, MemorySource, SOURCE_TO_TYPE, TYPE_MAP, resolve_memory_type, get_turn_text
+from .types import MemoryEntry, TYPE_MAP, resolve_memory_type, get_turn_text
 from .drift import DriftDetector
 from .retrieval import tokenize, jaccard_similarity
 
@@ -44,8 +43,10 @@ class MemoryNudge:
         llm_fn=None,     # async fn(prompt: str) -> str
         interval: int = 10,  # nudge every N turns
         first_nudge: int = 3,  # first nudge after N turns (cold start)
+        bus=None,  # EventBus for MEMORY_NUDGE events
     ):
         self.memory = memory_manager
+        self._bus = bus
         self.llm_fn = llm_fn
         self.interval = interval
         self.first_nudge = first_nudge
@@ -53,6 +54,10 @@ class MemoryNudge:
         self._last_nudge_turn = 0
         self._nudge_count = 0
         self._lock = asyncio.Lock()
+
+        # Phase 2 refiner — dedup/merge/conflict/quality upgrade (PRD §5.3)
+        from caveman.memory.refiner import NudgeRefiner
+        self._refiner = NudgeRefiner(memory_manager, llm_fn=llm_fn)
 
     def should_nudge(self, turn_count: int) -> bool:
         """Check if it's time for a nudge."""
@@ -77,7 +82,22 @@ class MemoryNudge:
                 if entry:
                     created.append(entry)
 
+            # Phase 2: Refine batch — dedup/merge/conflict detection (PRD §5.3)
+            if created:
+                try:
+                    refinement = await self._refiner.refine(created)
+                    if refinement.removed_duplicates > 0 or refinement.merged > 0:
+                        logger.info("Phase 2: %s", refinement.summary)
+                except Exception as e:
+                    logger.debug("Phase 2 refinement skipped: %s", e)
+
             logger.info("Nudge #%d: extracted %d memories", self._nudge_count, len(created))
+            if self._bus and created:
+                from caveman.events import EventType
+                await self._bus.emit(EventType.MEMORY_NUDGE, {
+                    "count": len(created),
+                    "nudge_number": self._nudge_count,
+                })
             return created
 
     async def _dedup_candidates(

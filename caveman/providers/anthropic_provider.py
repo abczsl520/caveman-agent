@@ -8,9 +8,7 @@ Ported from Hermes run_agent.py + auxiliary_client.py (MIT, Nous Research).
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-import time
 from typing import Any, AsyncIterator
 
 from caveman.providers.llm import LLMProvider, normalize_stop_reason
@@ -18,11 +16,12 @@ from caveman.providers.anthropic_adapter import (
     build_api_kwargs,
     get_max_output,
 )
-from caveman.providers.error_classifier import classify_error, ClassifiedError, FailoverReason
+from caveman.providers.error_classifier import classify_error
 from caveman.providers.retry import jittered_backoff
 from caveman.providers.rate_limit import (
     RateLimitState, parse_rate_limit_headers, format_compact,
 )
+from caveman.timeouts import HTTP_LLM
 
 logger = logging.getLogger(__name__)
 
@@ -110,7 +109,7 @@ class AnthropicProvider(LLMProvider):
                         max_connections=20,
                         max_keepalive_connections=10,
                     ),
-                    timeout=300.0,
+                    timeout=HTTP_LLM,
                 ),
             }
             if self.base_url:

@@ -100,6 +100,80 @@ CONFIG_SCHEMA: dict[str, dict] = {
         "range": (1024, 65535),
         "description": "OpenClaw gateway port",
     },
+    # Gateway
+    "gateway.discord.enabled": {
+        "type": bool,
+        "default": False,
+        "description": "Enable Discord gateway",
+    },
+    "gateway.discord.token": {
+        "type": str,
+        "description": "Discord bot token",
+    },
+    "gateway.discord.prefix": {
+        "type": str,
+        "default": "!cave",
+        "description": "Command prefix for Discord",
+    },
+    "gateway.telegram.enabled": {
+        "type": bool,
+        "default": False,
+        "description": "Enable Telegram gateway",
+    },
+    "gateway.telegram.token": {
+        "type": str,
+        "description": "Telegram bot token",
+    },
+    # Compression
+    "compression.threshold": {
+        "type": float,
+        "default": 0.75,
+        "range": (0.3, 0.95),
+        "description": "Context utilization threshold for compression",
+    },
+    "compression.tail_budget": {
+        "type": int,
+        "default": 200000,
+        "range": (10000, 1000000),
+        "description": "Token budget for tail protection during compression",
+    },
+    # Delegation
+    "delegation.max_iterations": {
+        "type": int,
+        "default": 30,
+        "range": (1, 200),
+        "description": "Max iterations for delegated subtasks",
+    },
+    "delegation.max_concurrent": {
+        "type": int,
+        "default": 3,
+        "range": (1, 10),
+        "description": "Max concurrent delegated tasks",
+    },
+    # Cron
+    "cron.enabled": {
+        "type": bool,
+        "default": True,
+        "description": "Enable cron scheduler",
+    },
+    "cron.max_concurrent": {
+        "type": int,
+        "default": 3,
+        "range": (1, 10),
+        "description": "Max concurrent cron jobs",
+    },
+    # Sandbox
+    "sandbox.backend": {
+        "type": str,
+        "default": "subprocess",
+        "choices": ["subprocess", "docker"],
+        "description": "Sandbox execution backend",
+    },
+    "sandbox.docker_image": {
+        "type": str,
+        "default": "python:3.12-slim",
+        "description": "Docker image for sandbox execution",
+    },
 }
 
 
@@ -156,7 +230,7 @@ def validate_config(config: dict, strict: bool = True) -> list[str]:
             warnings.append(msg)
 
     # Check for unknown top-level keys
-    known_top = {"agent", "providers", "memory", "skills", "trajectory", "security", "bridges", "gateway", "caveman", "compression", "engines", "locale"}
+    known_top = {"agent", "providers", "memory", "skills", "trajectory", "security", "bridges", "gateway", "caveman", "compression", "engines", "locale", "delegation", "cron", "sandbox"}
     for key in config:
         if key not in known_top:
             warnings.append(f"Unknown config key: '{key}' (typo?)")

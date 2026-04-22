@@ -95,7 +95,7 @@ class TestBashExec:
     async def test_dangerous_blocked(self):
         result = await bash_exec("rm -rf /")
         assert not result["success"]
-        assert "Blocked" in result["stderr"]
+        assert "dangerous" in result["stderr"].lower()
 
     @pytest.mark.asyncio
     async def test_timeout_clamped(self):

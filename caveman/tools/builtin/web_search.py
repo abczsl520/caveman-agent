@@ -7,6 +7,7 @@ import httpx
 
 from caveman.tools.registry import tool
 from caveman.utils import retry_async
+from caveman.timeouts import HTTP_DEFAULT
 
 # Max chars per result content to prevent context flooding
 _MAX_CONTENT_CHARS = 2000
@@ -58,7 +59,7 @@ async def web_search(query: str, count: int = 10) -> dict:
         return {"error": "TAVILY_API_KEY not set", "results": []}
 
     async def _attempt():
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=HTTP_DEFAULT) as client:
             resp = await client.post(
                 "https://api.tavily.com/search",
                 json={"query": query, "max_results": count},

@@ -27,7 +27,7 @@ async def test_bash_exec():
 async def test_bash_dangerous():
     result = await bash_exec("rm -rf /")
     assert not result["success"]
-    assert "Blocked" in result["stderr"]
+    assert "dangerous" in result["stderr"].lower()
 
 
 @pytest.mark.asyncio

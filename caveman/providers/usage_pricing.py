@@ -11,7 +11,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
-from caveman.providers.model_metadata import ModelInfo, get_model_info
+from caveman.providers.model_metadata import get_model_info
 
 logger = logging.getLogger(__name__)
 
@@ -155,6 +155,14 @@ class UsageTracker:
             f"{_fmt(self.total_tokens)} tokens / "
             f"{len(self._sessions)} sessions / {cost_str}"
         )
+
+    def summary(self) -> dict[str, Any]:
+        """Compact summary for health/status endpoints."""
+        return {
+            "total_tokens": self.total_tokens,
+            "total_cost_usd": round(self.total_cost_usd, 6),
+            "sessions": len(self._sessions),
+        }
 
 
 def _fmt(n: int) -> str:

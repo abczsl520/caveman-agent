@@ -16,7 +16,7 @@ __all__ = ["AuxiliaryClient", "generate_title", "classify_intent", "extract_tags
 
 import logging
 import re
-from typing import Any, Callable, Awaitable
+from typing import Callable, Awaitable
 
 logger = logging.getLogger(__name__)
 
@@ -166,6 +166,7 @@ async def generate_title(
     messages: list[dict[str, str]],
     llm_fn: Callable[..., Awaitable[str]] | None = None,
 ) -> str:
+    """Generate a concise title for a conversation using the auxiliary LLM."""
     return await AuxiliaryClient(llm_fn=llm_fn).generate_title(messages)
 
 
@@ -173,6 +174,7 @@ async def classify_intent(
     text: str,
     llm_fn: Callable[..., Awaitable[str]] | None = None,
 ) -> str:
+    """Classify user intent (question, command, creative, etc.) using the auxiliary LLM."""
     return await AuxiliaryClient(llm_fn=llm_fn).classify_intent(text)
 
 

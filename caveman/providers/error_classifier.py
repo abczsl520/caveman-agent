@@ -7,8 +7,15 @@ from __future__ import annotations
 
 import enum
 import logging
-from dataclasses import dataclass, field
-from typing import Any, Optional
+from dataclasses import dataclass
+from typing import Optional
+
+__all__ = [
+    "FailoverReason",
+    "ClassifiedError",
+    "classify_error",
+]
+
 
 logger = logging.getLogger(__name__)
 

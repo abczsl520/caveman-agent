@@ -52,6 +52,15 @@ def create_loop(
     final_max = max_iterations or agent_cfg.get("max_iterations", DEFAULT_MAX_ITERATIONS)
 
     # Resolve provider via registry (replaces 80-line if-elif chain)
+    # Build credential pool from config (multi-key rotation)
+    from caveman.providers.credential_pool import CredentialPool
+    credential_pool = CredentialPool.from_config(config)
+    pool_summary = credential_pool.status_summary()
+    if pool_summary:
+        for prov, counts in pool_summary.items():
+            if counts["total"] > 1:
+                logger.info("Credential pool: %s has %d keys", prov, counts["total"])
+
     provider = resolve_provider(
         model=final_model,
         providers_cfg=providers_cfg,
@@ -59,6 +68,7 @@ def create_loop(
             "anthropic": DEFAULT_MAX_TOKENS_ANTHROPIC,
             "openai": DEFAULT_MAX_TOKENS_OPENAI,
         },
+        credential_pool=credential_pool,
     )
 
     # Resolve memory/skills dirs from config
@@ -96,9 +106,15 @@ def create_loop(
 
     # Create memory manager (SQLite + FTS5 by default)
     scorer_config = mem_cfg.get("scorer", {})  # e.g. {"trust_weight": 0.3}
+
+    # RetrievalLog — records every memory search for embedding training (PRD §5.2 Ring 6)
+    from caveman.training.retrieval_log import RetrievalLog
+    retrieval_log = RetrievalLog()  # default path: ~/.caveman/training/retrieval_log.jsonl
+
     memory_manager = MemoryManager.with_sqlite(
         base_dir=mem_dir, embedding_fn=embedding_fn,
         scorer_config=scorer_config,
+        retrieval_log=retrieval_log,
     )
 
     skill_manager = SkillManager(skills_dir=skills_dir)
@@ -136,6 +152,84 @@ def create_loop(
     if engines.lint:
         loop.set_lint(engines.lint)
 
+    # --- Wire orphan modules into live system ---
+
+    # Prompt builder: structured system prompt assembly
+    try:
+        from caveman.agent.prompt_builder import build_system_prompt, PromptConfig
+        loop._build_system_prompt = lambda: build_system_prompt(PromptConfig(
+            surface=surface, model=final_model, skills_dir=skills_dir,
+        ))
+        logger.debug("PromptBuilder wired")
+    except Exception as e:
+        logger.debug("PromptBuilder unavailable: %s", e)
+
+    # Context engine: manages what the agent remembers
+    try:
+        from caveman.agent.context_engine import DefaultContextEngine
+        loop._context_engine = DefaultContextEngine()
+        logger.debug("ContextEngine wired")
+    except Exception as e:
+        logger.debug("ContextEngine unavailable: %s", e)
+
+    # Smart model routing: cheap model for simple queries
+    routing_cfg = agent_cfg.get("smart_routing", {})
+    if routing_cfg.get("enabled", False):
+        try:
+            from caveman.agent.smart_model_routing import classify_message_complexity, RoutingConfig
+            loop._classify_complexity = lambda text: classify_message_complexity(
+                text, RoutingConfig(**routing_cfg))
+            logger.info("SmartModelRouter enabled")
+        except Exception as e:
+            logger.debug("SmartModelRouter unavailable: %s", e)
+
+    # Prompt caching: reduce API costs
+    try:
+        from caveman.agent.prompt_caching import PromptCache
+        loop._prompt_cache = PromptCache()
+    except Exception as e:
+        logger.debug("PromptCache unavailable: %s", e)
+
+    # Title generator: auto-generate session titles
+    try:
+        from caveman.agent.title_generator import _heuristic_title
+        loop._generate_title = _heuristic_title
+    except Exception as e:
+        logger.debug("TitleGenerator unavailable: %s", e)
+
+    # Redaction: strip secrets from outbound messages
+    try:
+        from caveman.gateway.redaction import redact_all
+        loop._redact_output = redact_all
+    except Exception as e:
+        logger.debug("Redaction unavailable: %s", e)
+
+    # Secrets manager: secure credential storage
+    secrets_cfg = config.get("secrets", {})
+    if secrets_cfg:
+        try:
+            from caveman.gateway.secrets import SecretsManager
+            loop._secret_manager = SecretsManager(secrets_cfg)
+        except Exception as e:
+            logger.debug("SecretsManager unavailable: %s", e)
+
+    # Wire fallback chain from config
+    fallback_cfg = agent_cfg.get("fallback_chain", [])
+    if fallback_cfg:
+        from caveman.providers.fallback_chain import FallbackChain
+        loop._fallback_chain = FallbackChain(fallback_cfg)
+        logger.info("Fallback chain configured: %d entries", len(fallback_cfg))
+
     # Store bridge reference for later use
     loop._openclaw_bridge = openclaw_bridge
+
+    # Compression feasibility check (Hermes pattern)
+    try:
+        ctx_len = getattr(provider, 'context_length', 200_000)
+        threshold = int(ctx_len * 0.75)
+        if threshold > 100_000:
+            logger.debug("Compression threshold: %d tokens (context: %d)", threshold, ctx_len)
+    except Exception as exc:
+        logger.debug("unknown: suppressed %s", exc)
+
     return loop

@@ -4,7 +4,6 @@ import json
 import tempfile
 from pathlib import Path
 from caveman.trajectory.recorder import TrajectoryRecorder
-from caveman.trajectory.compressor import compress_trajectory, merge_trajectories
 
 
 @pytest.mark.asyncio
@@ -103,31 +102,3 @@ async def test_batch_export():
         assert len(lines) == 3  # All exported
 
 
-def test_compress_trajectory():
-    turns = [
-        {"from": "human", "value": "do it"},
-        {"from": "gpt", "value": "ok"},
-        {"from": "gpt", "value": "ok"},  # duplicate
-        {"from": "function_response", "value": "x" * 1000},  # long
-        {"from": "gpt", "value": "done"},
-    ]
-    result = compress_trajectory(turns)
-    assert len(result) == 4  # duplicate removed
-    # Long tool response should be truncated
-    long_turn = [t for t in result if t["from"] == "function_response"][0]
-    assert len(long_turn["value"]) < 600
-
-
-def test_compress_trajectory_max_turns():
-    turns = [{"from": "human", "value": f"msg {i}"} for i in range(100)]
-    result = compress_trajectory(turns, max_turns=20)
-    assert len(result) == 20
-
-
-def test_merge_trajectories():
-    t1 = [{"from": "human", "value": "a"}, {"from": "gpt", "value": "b"}]
-    t2 = [{"from": "human", "value": "c"}, {"from": "gpt", "value": "d"}]
-    merged = merge_trajectories([t1, t2])
-    assert len(merged) == 4
-    assert merged[0]["value"] == "a"
-    assert merged[-1]["value"] == "d"

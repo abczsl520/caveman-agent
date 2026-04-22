@@ -102,16 +102,11 @@ async def test_process_tool_lifecycle():
 
 @pytest.mark.asyncio
 async def test_delegate_tool():
-    mock_loop = MagicMock()
-    mock_loop.run = AsyncMock(return_value="sub-agent done")
-
-    with patch("caveman.tools.builtin.delegate_tool.create_loop", return_value=mock_loop) as mock_create:
-        reg = ToolRegistry()
-        reg._register_builtins()
-        result = await reg.dispatch("delegate", {"task": "do something", "max_iterations": 5})
-        assert result == "sub-agent done"
-        mock_create.assert_called_once_with(max_iterations=5)
-        mock_loop.run.assert_awaited_once_with("do something")
+    from caveman.tools.builtin.delegate_tool import DelegateManager
+    mgr = DelegateManager(agent_fn=AsyncMock(return_value="sub-agent done"))
+    task = await mgr.delegate_single("do something")
+    assert task.status == "completed"
+    assert task.result == "sub-agent done"
 
 
 # ── Context injection tests ──

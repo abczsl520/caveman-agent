@@ -22,7 +22,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import signal
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Callable, Awaitable
 
 logger = logging.getLogger(__name__)
@@ -116,7 +116,7 @@ class Lifecycle:
                 loop.add_signal_handler(sig, _signal_handler, sig)
             except NotImplementedError:
                 # Windows doesn't support add_signal_handler
-                pass
+                pass  # intentional: NotImplementedError suppressed
 
     async def wait_for_shutdown(self) -> None:
         """Block until shutdown signal received."""

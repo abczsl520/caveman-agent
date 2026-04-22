@@ -10,6 +10,7 @@ import tempfile
 import time
 
 from caveman.tools.registry import tool
+from caveman.timeouts import SANDBOX_DEFAULT, SANDBOX_QUICK
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +36,7 @@ async def _kill_process_group(proc: asyncio.subprocess.Process) -> None:
         pgid = os.getpgid(proc.pid)
         os.killpg(pgid, signal.SIGTERM)
     except (ProcessLookupError, PermissionError, OSError):
-        pass
+        pass  # intentional: ProcessLookupError/PermissionError/OSError suppressed
     await asyncio.sleep(0.5)
     try:
         pgid = os.getpgid(proc.pid)
@@ -44,11 +45,11 @@ async def _kill_process_group(proc: asyncio.subprocess.Process) -> None:
         try:
             proc.kill()
         except (ProcessLookupError, OSError):
-            pass
+            pass  # intentional: ProcessLookupError/OSError suppressed
     try:
-        await asyncio.wait_for(proc.communicate(), timeout=3)
+        await asyncio.wait_for(proc.communicate(), timeout=SANDBOX_QUICK)
     except (asyncio.TimeoutError, ProcessLookupError, OSError):
-        pass
+        pass  # intentional: ProcessLookupError/OSError suppressed
 
 
 @tool(
@@ -129,7 +130,7 @@ async def sandbox_eval(expression: str) -> dict:
             "except Exception as e:\n"
             "    raise SystemExit(f'eval error: {e}')\n"
         )
-        r = await sandbox_exec(code, timeout=10)
+        r = await sandbox_exec(code, timeout=SANDBOX_DEFAULT)
         if r["ok"]:
             return {"ok": True, "result": r["stdout"].strip()}
         return {"ok": False, "result": r["stderr"]}

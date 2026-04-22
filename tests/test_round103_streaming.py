@@ -109,6 +109,12 @@ class TestRunStream:
             loop = AgentLoop.__new__(AgentLoop)
             loop.provider = mock_provider
             loop.max_iterations = 5
+            from caveman.agent.iteration_budget import IterationBudget
+            loop.budget = IterationBudget(5)
+            loop._fallback_chain = None
+            loop._last_activity_ts = 0.0
+            loop._last_activity_desc = ""
+            loop._current_tool = ""
             loop.bus = MagicMock()
             loop.bus.emit = AsyncMock()
             loop.skill_manager = MagicMock()
@@ -182,6 +188,12 @@ class TestRunStream:
             loop = AgentLoop.__new__(AgentLoop)
             loop.provider = mock_provider
             loop.max_iterations = 5
+            from caveman.agent.iteration_budget import IterationBudget
+            loop.budget = IterationBudget(5)
+            loop._fallback_chain = None
+            loop._last_activity_ts = 0.0
+            loop._last_activity_desc = ""
+            loop._current_tool = ""
             loop.bus = MagicMock()
             loop.bus.emit = AsyncMock()
             loop.skill_manager = MagicMock()

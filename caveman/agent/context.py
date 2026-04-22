@@ -9,9 +9,10 @@ from caveman.paths import DEFAULT_CONTEXT_WINDOW, DEFAULT_COMPRESSION_THRESHOLD
 @dataclass
 class Message:
     """A single message in the conversation context."""
-    role: str  # user | assistant | tool
+    role: str  # user | assistant | system | tool
     content: str | list[Any]
     tokens: int = 0
+    ephemeral: bool = False  # If True, sent to API but not persisted to transcript
 
 
 @dataclass
@@ -34,11 +35,19 @@ class AgentContext:
     def should_compress(self) -> bool:
         return self.utilization >= self.compression_threshold
 
-    def add_message(self, role: str, content: str | list, tokens: int = 0) -> None:
-        # Auto-estimate tokens if not provided
+    def add_message(self, role: str, content: str | list, tokens: int = 0,
+                     ephemeral: bool = False) -> None:
+        """Add a message to context.
+
+        Args:
+            ephemeral: If True, message is sent to API but excluded from
+                       transcript persistence and session snapshots.
+                       Use for format reminders, style hints, etc.
+        """
         if tokens == 0:
             tokens = self._estimate_tokens(content)
-        self.messages.append(Message(role=role, content=content, tokens=tokens))
+        self.messages.append(Message(role=role, content=content, tokens=tokens,
+                                     ephemeral=ephemeral))
 
     @staticmethod
     def _estimate_tokens(content: str | list) -> int:
@@ -72,8 +81,26 @@ class AgentContext:
         self.messages.clear()
 
     def to_api_format(self) -> list[dict]:
-        """Convert to LLM API message format."""
+        """Convert to LLM API message format (includes ephemeral messages)."""
         return [{"role": m.role, "content": m.content} for m in self.messages]
+
+    def persistable_messages(self) -> list[Message]:
+        """Return only non-ephemeral messages (for transcript persistence)."""
+        return [m for m in self.messages if not m.ephemeral]
+
+    def fork(self, label: str = "") -> "AgentContext":
+        """Create a deep copy of this context for branching.
+
+        The fork shares no mutable state with the original.
+        Use for exploring alternative conversation paths.
+        """
+        import copy
+        forked = AgentContext(
+            messages=[copy.deepcopy(m) for m in self.messages],
+            max_tokens=self.max_tokens,
+            compression_threshold=self.compression_threshold,
+        )
+        return forked
 
 
 def _estimate_str_tokens(text: str) -> int:

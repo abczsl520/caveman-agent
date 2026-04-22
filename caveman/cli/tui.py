@@ -5,11 +5,26 @@ Two modes:
   2. Interactive REPL: `caveman` with no args → multi-turn conversation
 """
 from __future__ import annotations
-from typing import Optional
 
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
+from caveman.aio import aio_exists, aio_mkdir
+
+__all__ = [
+    "CAVE_BANNER",
+    "show_banner",
+    "show_status",
+    "show_tool_call",
+    "show_tool_result",
+    "show_memory_nudge",
+    "show_skill_nudge",
+    "show_error",
+    "show_thinking",
+    "create_skills_table",
+    "interactive_loop",
+]
+
 
 console = Console()
 
@@ -114,15 +129,15 @@ async def interactive_loop(
     try:
         import readline
         from caveman.commands.completer import CommandCompleter
-        history_file.parent.mkdir(parents=True, exist_ok=True)
-        if history_file.exists():
+        await aio_mkdir(history_file.parent, parents=True, exist_ok=True)
+        if await aio_exists(history_file):
             readline.read_history_file(str(history_file))
         readline.set_history_length(1000)
         completer = CommandCompleter()
         readline.set_completer(completer.readline_completer)
         readline.parse_and_bind("tab: complete")
     except (ImportError, OSError):
-        pass
+        pass  # intentional: ImportError/OSError suppressed
 
     turn = 0
     while True:
@@ -165,7 +180,7 @@ async def interactive_loop(
         import readline
         readline.write_history_file(str(history_file))
     except (ImportError, OSError, NameError):
-        pass
+        pass  # intentional: ImportError/OSError/NameError suppressed
 
     # Drain background tasks before exit
     try:

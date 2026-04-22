@@ -13,7 +13,8 @@ Caveman's memory system automatically protects and restores project identity.
 """
 from __future__ import annotations
 
-__all__ = ["ProjectIdentity", "ProjectIdentityStore"]
+__all__ = ["ProjectIdentity", "ProjectIdentityStore",
+    "detect_project_from_messages"]
 
 import json
 import logging
@@ -139,7 +140,8 @@ class ProjectIdentityStore:
             try:
                 data = json.loads(path.read_text(encoding="utf-8"))
                 projects.append(ProjectIdentity.from_dict(data))
-            except Exception:
+            except Exception as e:
+                logger.debug("suppressed: %s", e)
                 continue
         return projects
 
@@ -157,7 +159,7 @@ class ProjectIdentityStore:
         """Delete a project identity."""
         path = self._dir / f"{_safe_filename(name)}.json"
         if path.exists():
-            path.unlink()
+            path.unlink(missing_ok=True)
             return True
         return False
 

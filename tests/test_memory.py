@@ -28,3 +28,4 @@ async def test_memory_nudge():
     with tempfile.TemporaryDirectory() as td:
         mgr = MemoryManager(base_dir=td)
         await mgr.nudge()  # should not raise
+        assert True  # Nudge completed without error

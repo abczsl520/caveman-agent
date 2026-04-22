@@ -25,6 +25,10 @@ from caveman.skills.manager import SkillManager
 from caveman.wiki import WikiStore
 from caveman.wiki.compiler import WikiCompiler
 from caveman.engines.flags import EngineFlags, ENGINES
+from caveman.aio import aio_exists, aio_glob
+
+__all__ = ["memory_store", "memory_search", "memory_recall", "shield_save", "shield_load", "reflect", "skill_list", "skill_get", "wiki_compile", "wiki_ingest", "get_status", "run_stdio", "run_http"]
+
 
 logger = logging.getLogger(__name__)
 
@@ -376,7 +380,7 @@ async def get_status() -> str:
     """Get Caveman system status."""
     flags = EngineFlags()
     engines = {name: flags.is_enabled(name) for name in ENGINES}
-    sessions = list(SESSIONS_DIR.glob("*.yaml")) if SESSIONS_DIR.exists() else []
+    sessions = list(await aio_glob(SESSIONS_DIR, "*.yaml")) if await aio_exists(SESSIONS_DIR) else []
     return json.dumps({
         "version": "0.1.0", "engines": engines,
         "sessions": len(sessions),

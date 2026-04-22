@@ -14,6 +14,13 @@ from __future__ import annotations
 import re
 import logging
 
+__all__ = [
+    "check_quality",
+    "truncate_if_needed",
+    "reset_cache",
+]
+
+
 logger = logging.getLogger(__name__)
 
 # Minimum content length (characters). Below this, there's no knowledge.

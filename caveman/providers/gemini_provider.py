@@ -16,6 +16,7 @@ from typing import Any, AsyncIterator
 from caveman.providers.llm import LLMProvider, normalize_stop_reason
 from caveman.providers.error_classifier import classify_error
 from caveman.providers.retry import jittered_backoff
+from caveman.timeouts import HTTP_LLM
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +73,7 @@ class GeminiProvider(LLMProvider):
         if self._client is None:
             import httpx
             self._client = httpx.AsyncClient(
-                timeout=300.0,
+                timeout=HTTP_LLM,
                 limits=httpx.Limits(
                     max_connections=20,
                     max_keepalive_connections=10,

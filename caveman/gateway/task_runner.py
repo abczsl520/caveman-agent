@@ -15,6 +15,7 @@ from typing import Any
 
 from caveman.gateway.router import GatewayRouter
 from caveman.gateway.smart_buffer import _SmartBuffer
+from caveman.gateway.task_runner_helpers import _activity_monitor, _handle_tool_call, _persist_result, _spawn_post_task_review
 
 logger = logging.getLogger("caveman.gateway")
 
@@ -24,9 +25,10 @@ _DEFAULT_IDLE_WARNING = 180.0       # 3 min idle → warning
 _DEFAULT_IDLE_SHUTDOWN = 300.0      # 5 min idle → graceful shutdown
 _DEFAULT_ABSOLUTE_MAX = 1800.0      # 30 min absolute safety net
 _STUCK_LOOP_THRESHOLD = 5           # Same tool+args repeated N times → abort
+_PATTERN_LOOP_WINDOW = 12           # Window for pattern-based loop detection
+_PATTERN_LOOP_REPEATS = 3           # Pattern must repeat N times to trigger
 
 _ENDINGS = ("✅", "完成", "Done", "done.", "以上", "结束", "？", "?", "吗？", "吗?")
-
 
 def _resolve_timeouts(config: dict[str, Any] | None) -> dict[str, float]:
     """Read user-configurable timeouts from gateway config."""
@@ -47,9 +49,8 @@ def _resolve_timeouts(config: dict[str, Any] | None) -> dict[str, float]:
             try:
                 defaults[key] = float(val)
             except (TypeError, ValueError):
-                pass
+                pass  # intentional: TypeError/ValueError suppressed
     return defaults
-
 
 class _TaskContext:
     """Mutable state for a single task execution."""
@@ -59,7 +60,8 @@ class _TaskContext:
         "tool_call_count", "shutdown_flag", "idle_warned",
         "last_event_time", "last_user_visible_time", "task_start_time",
         "recent_tool_calls", "child_tasks", "tool_heartbeat",
-        "_hb_msg_id", "_hb_counts",
+        "_hb_msg_id", "_hb_counts", "iteration", "max_iterations",
+        "pressure_warned",
     )
 
     def __init__(self, gw_name: str, channel_id: str, router: GatewayRouter,
@@ -71,30 +73,54 @@ class _TaskContext:
         self.tool_call_count = 0
         self.shutdown_flag = False
         self.idle_warned = False
-        now = asyncio.get_event_loop().time()
+        now = asyncio.get_running_loop().time()
         self.last_event_time = now
         self.last_user_visible_time = now
         self.task_start_time = now
         self.recent_tool_calls: list[str] = []
         self.child_tasks: set[asyncio.Task] = set()
         self.tool_heartbeat: asyncio.Task | None = None
+        self.iteration = 0
+        self.max_iterations = 0
+        self.pressure_warned = False
         self._hb_msg_id: int | None = None  # Discord message ID for heartbeat edits
         self._hb_counts: dict[str, int] = {}  # tool_name → count for heartbeat display
 
     def touch_activity(self) -> None:
         """Reset idle timer on any stream event."""
-        self.last_event_time = asyncio.get_event_loop().time()
+        self.last_event_time = asyncio.get_running_loop().time()
         self.idle_warned = False
 
-    def check_stuck_loop(self, tool_name: str, tool_args: str) -> bool:
-        """Detect if the same tool+args is being called repeatedly."""
+    def check_stuck_loop(self, tool_name: str, tool_args: str) -> str | None:
+        """Detect stuck loops. Returns description if stuck, None if OK.
+
+        Two detection modes:
+        1. Exact repeat: same tool+args N times in a row
+        2. Pattern loop: a sequence of 2-4 calls repeating N times (e.g. read→edit→read→edit→read→edit)
+        """
         sig = f"{tool_name}:{hash(tool_args)}"
         self.recent_tool_calls.append(sig)
-        if len(self.recent_tool_calls) > _STUCK_LOOP_THRESHOLD:
+        # Keep window for pattern detection
+        if len(self.recent_tool_calls) > _PATTERN_LOOP_WINDOW:
             self.recent_tool_calls.pop(0)
-        if len(self.recent_tool_calls) >= _STUCK_LOOP_THRESHOLD:
-            return len(set(self.recent_tool_calls)) == 1
-        return False
+        calls = self.recent_tool_calls
+
+        # Mode 1: exact repeat
+        if len(calls) >= _STUCK_LOOP_THRESHOLD:
+            if len(set(calls[-_STUCK_LOOP_THRESHOLD:])) == 1:
+                return f"exact_repeat:{tool_name}"
+
+        # Mode 2: pattern loop (detect repeating subsequences of length 2-4)
+        if len(calls) >= 6:
+            # Extract just tool names for pattern matching
+            names = [c.split(":")[0] for c in calls]
+            for pat_len in (2, 3, 4):
+                if len(names) >= pat_len * _PATTERN_LOOP_REPEATS:
+                    tail = names[-(pat_len * _PATTERN_LOOP_REPEATS):]
+                    pattern = tail[:pat_len]
+                    if all(tail[i] == pattern[i % pat_len] for i in range(len(tail))):
+                        return f"pattern_loop:{'→'.join(pattern)}"
+        return None
 
     def spawn_task(self, coro, *, name: str, critical: bool = False) -> asyncio.Task:
         """Create a tracked asyncio task with exception logging."""
@@ -104,7 +130,7 @@ class _TaskContext:
             try:
                 await coro
             except asyncio.CancelledError:
-                pass
+                pass  # intentional: Exception suppressed
             except Exception as e:
                 logger.error("Child task '%s' crashed: %s", name, e, exc_info=True)
                 if critical:
@@ -131,143 +157,6 @@ class _TaskContext:
             logger.debug("Non-critical send error: %s", e)
 
 
-async def _activity_monitor(ctx: _TaskContext) -> None:
-    """Activity-based idle detection + progress indicator."""
-    while not ctx.shutdown_flag:
-        await asyncio.sleep(min(15, ctx.timeouts['progress_interval'] / 4))
-        now = asyncio.get_event_loop().time()
-        idle_secs = now - ctx.last_event_time
-        total_secs = now - ctx.task_start_time
-        visible_gap = now - ctx.last_user_visible_time
-
-        # Absolute safety net
-        if total_secs >= ctx.timeouts['absolute_max']:
-            logger.warning("Absolute timeout (%.0fs), graceful shutdown", total_secs)
-            ctx.shutdown_flag = True
-            await ctx.send(
-                f"⏸️ 任务运行 {int(total_secs/60)} 分钟，已达安全上限。"
-                f"已完成 {ctx.tool_call_count} 个工具调用，进度已保存。发消息可继续。"
-            )
-            return
-
-        # Idle shutdown
-        if idle_secs >= ctx.timeouts['idle_shutdown']:
-            logger.warning("Idle timeout (%.0fs), graceful shutdown", idle_secs)
-            ctx.shutdown_flag = True
-            await ctx.send(
-                f"⏸️ {int(idle_secs/60)} 分钟无新进展，暂停任务。"
-                f"已完成 {ctx.tool_call_count} 个工具调用，进度已保存。发消息可继续。"
-            )
-            return
-
-        # Idle warning
-        if idle_secs >= ctx.timeouts['idle_warning'] and not ctx.idle_warned:
-            ctx.idle_warned = True
-            await ctx.send(f"⚠️ {int(idle_secs/60)} 分钟无新进展，可能卡住了...")
-            ctx.last_user_visible_time = now
-            continue
-
-        # Progress indicator
-        if visible_gap >= ctx.timeouts['progress_interval'] - 5 and ctx.tool_call_count > 0:
-            mins = int(total_secs / 60)
-            await ctx.send(f"🔄 分析中... ({ctx.tool_call_count} 个工具调用, {mins}分钟)")
-            ctx.last_user_visible_time = asyncio.get_event_loop().time()
-
-
-async def _handle_tool_call(event, ctx: _TaskContext, buf: _SmartBuffer) -> bool:
-    """Handle a tool_call event. Returns True if should break the stream."""
-    buf_before = len(buf._buf)
-    interim = await buf.flush_interim()
-    logger.info("tool_call boundary: buf_before=%d interim_len=%d sent_any=%s",
-                buf_before, len(interim), buf.sent_any)
-    if buf.sent_any:
-        ctx.last_user_visible_time = asyncio.get_event_loop().time()
-
-    tool_name = ""
-    tool_args = ""
-    if isinstance(event.data, dict):
-        tool_name = event.data.get("name", "")
-        tool_args = str(event.data.get("input", event.data.get("arguments", "")))
-    ctx.tool_call_count += 1
-
-    # Stuck-loop detection
-    if ctx.check_stuck_loop(tool_name, tool_args):
-        logger.warning("Stuck loop detected: %s called %d times with same args",
-                       tool_name, _STUCK_LOOP_THRESHOLD)
-        ctx.shutdown_flag = True
-        await ctx.send(
-            f"⚠️ 检测到循环：{tool_name} 连续 {_STUCK_LOOP_THRESHOLD} 次相同调用，暂停任务。"
-            f"进度已保存，发消息可继续。"
-        )
-        return True  # break
-
-    async def _heartbeat(name: str):
-        await asyncio.sleep(15.0)
-        # Track tool call counts for compact display
-        ctx._hb_counts[name] = ctx._hb_counts.get(name, 0) + 1
-        # Build compact status line: "⏳ memory_search ×3, bash ×2"
-        parts = [f"{k} ×{v}" if v > 1 else k for k, v in ctx._hb_counts.items()]
-        text = f"⏳ {', '.join(parts)}..."
-        try:
-            if ctx._hb_msg_id:
-                # Edit existing heartbeat message
-                await ctx.router.edit(ctx.gw_name, ctx.channel_id, ctx._hb_msg_id, text)
-            else:
-                # Send new heartbeat message, save ID for future edits
-                result = await ctx.router.send(ctx.gw_name, ctx.channel_id, text)
-                if isinstance(result, dict) and result.get("message_id"):
-                    ctx._hb_msg_id = result["message_id"]
-        except Exception as e:
-            logger.debug("Heartbeat send/edit failed: %s", e)
-
-    ctx.tool_heartbeat = ctx.spawn_task(_heartbeat(tool_name), name=f"heartbeat:{tool_name}")
-    return False
-
-
-def _persist_result(buf: _SmartBuffer, final_text: str, session: dict, store: Any) -> None:
-    """Save result to session store and update metadata."""
-    meta = session["meta"]
-    loop = session["loop"]
-
-    save_text = buf._sent_text.strip() or final_text or buf._full_text
-    # Include tool call summary for context restoration
-    tool_count = getattr(loop, '_tool_call_count', 0)
-    if tool_count > 0:
-        save_text = f"[使用了 {tool_count} 个工具调用]\n{save_text}"
-    store.append_turn(meta.session_id, "assistant", save_text[:16000])
-    meta.turn_count += 1
-    meta.last_active_at = time.time()
-
-    try:
-        usage = loop.provider.usage_stats
-    except Exception:
-        usage = None
-    if isinstance(usage, dict):
-        meta.total_tokens = usage.get('total_input_tokens', 0) + usage.get('total_output_tokens', 0)
-        inp = usage.get('total_input_tokens', 0)
-        out = usage.get('total_output_tokens', 0)
-        try:
-            from caveman.providers.model_metadata import get_model_info
-            info = get_model_info(getattr(loop.provider, 'model', ''))
-            meta.total_cost_usd = info.estimate_cost(inp, out)
-        except Exception:
-            meta.total_cost_usd = (inp * 3 + out * 15) / 1_000_000  # Sonnet fallback
-
-    store.save_meta(meta)
-
-    # Persist loop snapshot for reliable restore
-    if hasattr(loop, 'snapshot'):
-        try:
-            snap = loop.snapshot()
-            snap_path = store._session_dir(meta.session_id) / "loop_snapshot.json"
-            import json
-            tmp_path = snap_path.with_suffix('.tmp')
-            tmp_path.write_text(json.dumps(snap))
-            tmp_path.rename(snap_path)  # Atomic on POSIX
-        except Exception as e:
-            logger.warning("Snapshot save failed: %s", e)
-
-
 async def run_single_task(
     task: str, session: dict, gw_name: str, channel_id: str,
     source_channel: dict, router: GatewayRouter, store: Any,
@@ -282,6 +171,7 @@ async def run_single_task(
     store.append_turn(session["meta"].session_id, "user", task)
 
     ctx = _TaskContext(gw_name, channel_id, router, timeouts)
+    session["_task_ctx"] = ctx  # For interrupt support
     buf = _SmartBuffer(router, gw_name, channel_id)
     final_text = ""
 
@@ -316,10 +206,30 @@ async def run_single_task(
                     ctx.tool_heartbeat.cancel()
                     ctx.child_tasks.discard(ctx.tool_heartbeat)
                     ctx.tool_heartbeat = None
+                # Stream long tool results to user (>500 chars)
+                data = event.data or {}
+                tool_name = data.get("tool_name", "")
+                output = str(data.get("output", ""))
+                if len(output) > 500 and tool_name in ("bash", "file_read", "session_search"):
+                    preview = output[:300].rstrip()
+                    await ctx.send(f"📋 `{tool_name}` 结果预览:\n```\n{preview}\n```")
 
             elif event.type == "error":
                 await buf.flush()
                 await ctx.send(f"⚠️ {str(event.data)[:500]}")
+
+            elif event.type == "iteration_start":
+                data = event.data or {}
+                ctx.iteration = data.get("iteration", 0)
+                ctx.max_iterations = data.get("max", 0)
+
+            elif event.type == "context_pressure":
+                data = event.data or {}
+                util = data.get("utilization", 0)
+                if util >= 0.9 and not ctx.pressure_warned:
+                    ctx.pressure_warned = True
+                    pct = int(util * 100)
+                    await ctx.send(f"⚠️ 上下文已用 {pct}%，即将压缩。长对话建议开新 session。")
 
             elif event.type == "done":
                 final_text = str(event.data) if event.data else ""
@@ -327,14 +237,18 @@ async def run_single_task(
 
         buf.cancel()
         ctx.cancel_all()
+        session.pop("_task_ctx", None)  # Clear interrupt reference
         # Clean up heartbeat status message
         if ctx._hb_msg_id:
             try:
                 await ctx.router.edit(ctx.gw_name, ctx.channel_id, ctx._hb_msg_id,
                                       f"✅ 完成 ({ctx.tool_call_count} 个工具调用)")
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("unknown: suppressed %s", exc)
         _persist_result(buf, final_text, session, store)
+
+        # Background review: extract memories from this task
+        _spawn_post_task_review(session, ctx.tool_call_count)
 
         # Send completion marker if needed
         progress_count = source_channel.get("_progress_sent", 0)
@@ -348,8 +262,8 @@ async def run_single_task(
     except Exception:
         try:
             await buf.flush()  # Send any buffered text before dying
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("unknown: suppressed %s", exc)
         buf.cancel()
         ctx.cancel_all()
         raise

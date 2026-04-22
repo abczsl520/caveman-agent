@@ -12,10 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from caveman.import_ import IMPORTERS
-from caveman.import_.base import ImportManifest, ImportResult
-from caveman.import_.report import (
-    format_manifest_report, format_result_report, format_detect_report,
-)
+from caveman.import_.base import ImportResult
 from caveman.paths import CAVEMAN_HOME
 
 logger = logging.getLogger(__name__)
@@ -42,16 +39,31 @@ async def import_memories(
     dry_run: bool = True,
     only: str | None = None,
     include_secrets: bool = False,
+    # Session extraction options
+    use_llm: bool = False,
+    llm_complete: Any | None = None,
+    min_score: float = 2.0,
+    since: str | None = None,
+    session_filter: str | None = None,
+    include_sub_agents: bool = False,
+    max_entries_per_session: int = 20,
 ) -> ImportResult:
     """Import memories from an external source.
 
     Args:
-        source: Source name (openclaw, hermes, codex, claude-code, directory)
+        source: Source name (openclaw, openclaw-sessions, hermes, codex, claude-code, directory)
         memory_manager: Target MemoryManager
         directory: Custom directory path (for source="directory")
         dry_run: If True, preview only (default)
         only: Filter to "memory", "config", or "workspace" only
         include_secrets: If True, import entries containing secrets too
+        use_llm: Use LLM for session knowledge extraction (openclaw-sessions only)
+        llm_complete: LLM completion function
+        min_score: Minimum knowledge score threshold (openclaw-sessions only)
+        since: Only import sessions since this date YYYY-MM-DD (openclaw-sessions only)
+        session_filter: Only import this specific session ID (openclaw-sessions only)
+        include_sub_agents: Include sub-agent sessions (openclaw-sessions only)
+        max_entries_per_session: Cap entries per session (openclaw-sessions only)
     """
     if source not in IMPORTERS:
         result = ImportResult()
@@ -61,12 +73,28 @@ async def import_memories(
         return result
 
     cls = IMPORTERS[source]
+
+    # Source-specific construction
     if source == "directory":
         from caveman.import_.directory import DirectoryImporter
         importer = DirectoryImporter(
             caveman_home=CAVEMAN_HOME, dry_run=dry_run,
             directory=Path(directory).expanduser() if directory else None,
             include_secrets=include_secrets,
+        )
+    elif source == "openclaw-sessions":
+        from caveman.import_.openclaw_sessions import OpenClawSessionImporter
+        importer = OpenClawSessionImporter(
+            caveman_home=CAVEMAN_HOME,
+            dry_run=dry_run,
+            include_secrets=include_secrets,
+            use_llm=use_llm,
+            llm_complete=llm_complete,
+            min_score=min_score,
+            since=since,
+            session_filter=session_filter,
+            include_sub_agents=include_sub_agents,
+            max_entries_per_session=max_entries_per_session,
         )
     else:
         importer = cls(caveman_home=CAVEMAN_HOME, dry_run=dry_run, include_secrets=include_secrets)

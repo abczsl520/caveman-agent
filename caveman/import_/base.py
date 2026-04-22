@@ -13,6 +13,17 @@ from typing import Any
 
 from caveman.memory.types import MemoryType
 
+__all__ = [
+    "ImportItem",
+    "ImportManifest",
+    "ImportResult",
+    "BaseImporter",
+    "infer_type",
+    "split_markdown_sections",
+    "write_import_log",
+]
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -108,9 +119,90 @@ class BaseImporter(ABC):
     def scan(self) -> ImportManifest:
         """Scan source and return what would be imported (no writes)."""
 
-    @abstractmethod
+
     async def execute(self, manifest: ImportManifest, memory_manager: Any) -> ImportResult:
-        """Execute the import based on the manifest."""
+        """Execute the import — template method with common dedup/save/log logic.
+
+        Subclasses override:
+          - _handle_item(): per-item logic for non-memory target_types
+          - _source_label(): the "import:xxx" source string
+          - _extra_log_fields(): additional fields for the import log
+        Simple memory-only importers need no overrides at all.
+        """
+        from .dedup import ImportDedup
+
+        result = ImportResult()
+        dedup = ImportDedup(memory_manager)
+
+        for item in manifest.items:
+            if item.skip_reason:
+                result.skipped += 1
+                if hasattr(result, 'details'):
+                    result.details.append(f"Skipped: {item.source_path.name} ({item.skip_reason})")
+                continue
+
+            try:
+                if item.target_type in (None, "memory"):
+                    if dedup.is_duplicate(item.content):
+                        result.duplicates += 1
+                        continue
+
+                    secret_warning = self._scan_secrets(item.content)
+                    if secret_warning:
+                        result.skipped += 1
+                        logger.warning("Skipped %s: %s", item.source_path, secret_warning)
+                        continue
+
+                    if not self.dry_run:
+                        await memory_manager.store(
+                            item.content, item.memory_type,
+                            metadata={
+                                "source": self._source_label(),
+                                "source_file": str(item.source_path),
+                                "imported_at": datetime.now().isoformat(),
+                            },
+                            trusted=self.include_secrets,
+                        )
+                    result.imported += 1
+                else:
+                    await self._handle_item(item, result, memory_manager)
+
+            except Exception as e:
+                result.failed += 1
+                if hasattr(result, 'details'):
+                    result.details.append(f"Failed: {item.source_path.name}: {e}")
+                logger.warning("%s import failed: %s", self.source_name, e)
+
+            result.files_processed += 1
+
+        if not self.dry_run:
+            log_entry = {
+                "source": self.source_name,
+                "imported": result.imported,
+                "duplicates": result.duplicates,
+            }
+            log_entry.update(self._extra_log_fields(result))
+            write_import_log(self.caveman_home, log_entry)
+
+        return result
+
+    def _source_label(self) -> str:
+        """Return the 'import:xxx' label for metadata. Default: 'import:{source_name}'."""
+        return f"import:{self.source_name.lower().replace(' ', '-')}"
+
+    async def _handle_item(
+        self, item: "ImportItem", result: "ImportResult", memory_manager: Any,
+    ) -> None:
+        """Handle non-memory items (skills, config, workspace, etc).
+
+        Override in subclasses that support multiple target_types.
+        Default: treat as imported.
+        """
+        result.imported += 1
+
+    def _extra_log_fields(self, result: "ImportResult") -> dict:
+        """Additional fields for the import log entry. Override to add custom fields."""
+        return {}
 
     def _scan_secrets(self, content: str) -> str | None:
         """Scan content for secrets. Returns warning string or None.

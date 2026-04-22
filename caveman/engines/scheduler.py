@@ -17,7 +17,15 @@ import logging
 import time
 from dataclasses import dataclass, field
 from enum import IntEnum
-from typing import Any, Callable, Awaitable
+from typing import Callable, Awaitable
+
+__all__ = [
+    "Priority",
+    "LLMRequest",
+    "CallerStats",
+    "LLMScheduler",
+]
+
 
 logger = logging.getLogger(__name__)
 
@@ -101,7 +109,7 @@ class LLMScheduler:
             try:
                 await self._worker_task
             except asyncio.CancelledError:
-                pass
+                pass  # intentional: Exception suppressed
             self._worker_task = None
         while not self._queue.empty():
             try:
@@ -122,7 +130,7 @@ class LLMScheduler:
         if not self._running:
             await self.start()
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         future: asyncio.Future[str] = loop.create_future()
 
         self._seq += 1

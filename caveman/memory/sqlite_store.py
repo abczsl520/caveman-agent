@@ -8,6 +8,7 @@ import asyncio
 import json
 import logging
 import sqlite3
+import threading
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -72,16 +73,18 @@ class SQLiteMemoryStore:
         self._embedding_fn = embedding_fn
         self._conn: Optional[sqlite3.Connection] = None
         self._write_lock = asyncio.Lock()
+        self._conn_lock = threading.Lock()
         self._scorer_config = scorer_config or {}
 
     def _get_conn(self) -> sqlite3.Connection:
-        if self._conn is None:
-            self._conn = sqlite3.connect(str(self.db_path))
-            self._conn.execute("PRAGMA journal_mode=WAL")
-            self._conn.execute("PRAGMA foreign_keys=ON")
-            self._conn.executescript(_SCHEMA)
-            migrate_schema(self._conn)
-        return self._conn
+        with self._conn_lock:
+            if self._conn is None:
+                self._conn = sqlite3.connect(str(self.db_path))
+                self._conn.execute("PRAGMA journal_mode=WAL")
+                self._conn.execute("PRAGMA foreign_keys=ON")
+                self._conn.executescript(_SCHEMA)
+                migrate_schema(self._conn)
+            return self._conn
 
     async def store(self, content: str, memory_type: MemoryType, metadata: dict | None = None, trusted: bool = False) -> str:
         from caveman.memory.retrieval import extract_entities
@@ -193,10 +196,8 @@ class SQLiteMemoryStore:
             async with self._write_lock:
                 now = datetime.now().isoformat()
                 ph = ",".join("?" * len(returned_ids))
-                # Retrieval count + micro trust boost (被检索 = 微弱正信号)
-                # This ensures the confidence loop works even outside agent loop
-                # (memory_tool, CLI, MCP server all call recall() directly)
-                #
+                # Batch update: retrieval count + micro trust boost
+                # (被检索 = 微弱正信号 — recalled = weak positive signal)
                 # Resurrect: low-trust memories that get recalled deserve a bigger
                 # boost — they were dormant but someone found them useful again.
                 # trust < 0.3 → +0.05 (resurrect), else → +0.01 (micro boost)
@@ -208,6 +209,7 @@ class SQLiteMemoryStore:
                     f"END) WHERE id IN ({ph})",
                     returned_ids,
                 )
+                # Batch update last_accessed in metadata (single loop, one commit)
                 for mid in returned_ids:
                     row = conn.execute(
                         "SELECT metadata_json FROM memories WHERE id = ?", (mid,)
@@ -266,7 +268,8 @@ class SQLiteMemoryStore:
         conn = self._get_conn()
         try:
             query_vec = await self._embedding_fn(query)
-        except Exception:
+        except Exception as e:
+            logger.debug("suppressed: %s", e)
             return []
 
         cap = max(top_k * 10, 200)
@@ -311,7 +314,8 @@ class SQLiteMemoryStore:
                 "WHERE memories_fts MATCH ? LIMIT ?", (fts_q, cap),
             ).fetchall()
             return [r[0] for r in rows] if rows else None
-        except Exception:
+        except Exception as e:
+            logger.debug("suppressed: %s", e)
             return None
 
     async def mark_helpful(self, memory_id: str, helpful: bool = True) -> None:
@@ -376,8 +380,8 @@ class SQLiteMemoryStore:
                             "UPDATE memories SET metadata_json = ? WHERE id = ?",
                             (json.dumps(meta, ensure_ascii=False), row[0]),
                         )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("forget: suppressed %s", exc)
             cursor = conn.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
             conn.execute("DELETE FROM embeddings WHERE memory_id = ?", (memory_id,))
             conn.commit()
@@ -422,7 +426,7 @@ class SQLiteMemoryStore:
         ).fetchall()
         return [row_to_entry(row) for row in rows]
 
-    def close(self):
+    def close(self) -> None:
         if self._conn:
             self._conn.close()
             self._conn = None

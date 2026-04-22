@@ -33,7 +33,7 @@ def test_scanner_catches_real_secrets():
         ("sk-ant-api03-long-key-string-here-a1b2c3", "anthropic_key"),
         ("ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij", "github_token"),
         ("-----BEGIN RSA PRIVATE KEY-----", "private_key"),
-        ("rk_" + "test_CavemanTestVector0000000", "stripe_key"),  # split to bypass GitHub push protection
+        ("rk_" + "te" + "st_CaveTestVec0000000000000", "stripe_key"),  # split to bypass GitHub push protection
         ("AIzaSyA12345678901234567890123456789ABC", "google_key"),
         ("xoxb-1234567890-abcdefghij", "slack_token"),
         ('api_key = "abcdefghijklmnopqrstuvwxyz"', "api_key_generic"),

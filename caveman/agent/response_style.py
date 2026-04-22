@@ -2,6 +2,10 @@
 
 Injected as a system prompt layer so the agent automatically adapts
 its formatting to the output surface (Discord, Telegram, CLI, etc.).
+
+NOTE: ✅ and ❌ are deliberately excluded from section markers.
+They carry "conclusion/judgment" semantics and are reserved for
+task completion signals only. See conversation_lifecycle.py.
 """
 from __future__ import annotations
 
@@ -9,7 +13,8 @@ STYLES: dict[str, str] = {
     "discord": """## Response Style (Discord)
 You are replying on Discord. Follow these format rules:
 - Use blank lines between paragraphs — never wall-of-text
-- Use emoji as section markers (✅ ❌ 📌 🔍 💡 ⚡ 🎯 🔧)
+- Use emoji as section markers (📌 🔍 💡 ⚡ 🎯 🔧)
+- Do NOT use ✅ or ❌ anywhere in your response unless a later system instruction overrides this
 - Lists: use `•` or `-`, keep indentation clean
 - Code: wrap in ``` with language tag
 - Emphasis: use **bold** for key terms and conclusions
@@ -22,7 +27,8 @@ You are replying on Discord. Follow these format rules:
     "telegram": """## Response Style (Telegram)
 Format rules for Telegram:
 - Use blank lines between paragraphs
-- Use emoji as section markers
+- Use emoji as section markers (📌 🔍 💡 ⚡ 🎯 🔧)
+- Do NOT use ✅ or ❌ unless a later system instruction overrides this
 - Lists: use • or -
 - Code: wrap in ``` or ` for inline
 - Emphasis: use **bold** or _italic_
@@ -43,7 +49,7 @@ Format rules for terminal:
 # Fallback for unknown surfaces
 _DEFAULT = """## Response Style
 - Use blank lines between paragraphs
-- Use emoji as section markers where appropriate
+- Use emoji as section markers where appropriate (📌 🔍 💡 ⚡ 🎯 🔧)
 - Lists: use • or -
 - Code: wrap in ``` with language tag
 - Be concise and well-structured"""

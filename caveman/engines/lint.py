@@ -20,21 +20,25 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
 from pathlib import Path
-from typing import Any
 
 from caveman.memory.manager import MemoryManager
 from caveman.memory.types import MemoryEntry, MemoryType
+
+__all__ = ["IssueSeverity", "IssueType", "LintIssue", "LintReport", "LintEngine"]
+
 
 logger = logging.getLogger(__name__)
 
 
 class IssueSeverity(Enum):
+    """Severity level for lint issues (error, warning, info)."""
     INFO = "info"
     WARN = "warn"
     ERROR = "error"
 
 
 class IssueType(Enum):
+    """Category of lint issue (style, logic, security, performance)."""
     STALE_PATH = "stale_path"
     STALE_IP = "stale_ip"
     STALE_VERSION = "stale_version"
@@ -109,11 +113,13 @@ class LintEngine:
         llm_fn=None,
         stale_days: int = 90,
         check_paths: bool = True,
+        bus=None,
     ):
         self.memory = memory_manager
         self.llm_fn = llm_fn
         self.stale_days = stale_days
         self.check_paths = check_paths
+        self._bus = bus
         self._last_scan_count = 0  # For incremental scanning
         self._full_scan_interval = 10  # Full scan every N incremental scans
         self._scan_count = 0
@@ -177,6 +183,15 @@ class LintEngine:
             "Lint scan: %d memories, %d issues in %.0fms",
             report.scanned, len(report.issues), report.scan_time_ms,
         )
+
+        if self._bus:
+            from caveman.events import EventType
+            await self._bus.emit(
+                EventType.LINT_SCAN,
+                {"scanned": report.scanned, "issues": len(report.issues),
+                 "scan_time_ms": report.scan_time_ms},
+            )
+
         return report
 
     async def _apply_trust_penalties(self, report: LintReport) -> None:
@@ -340,7 +355,7 @@ class LintEngine:
                         if la > cutoff:
                             continue  # Recently accessed, skip
                     except (ValueError, TypeError):
-                        pass
+                        pass  # intentional: ValueError/TypeError suppressed
                 report.issues.append(LintIssue(
                     issue_type=IssueType.AGED,
                     severity=IssueSeverity.INFO,

@@ -9,6 +9,16 @@ In headless/gateway mode: these defaults are fine (logging only).
 from __future__ import annotations
 import logging
 
+__all__ = [
+    "show_tool_call",
+    "show_tool_result",
+    "show_memory_nudge",
+    "show_skill_nudge",
+    "show_error",
+    "show_thinking",
+]
+
+
 logger = logging.getLogger(__name__)
 
 # --- Overridable display callbacks ---

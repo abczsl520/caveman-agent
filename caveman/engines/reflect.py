@@ -309,7 +309,7 @@ Rules:
                     if name:
                         tools.append(name)
                 except (json.JSONDecodeError, TypeError):
-                    pass
+                    pass  # intentional: TypeError suppressed
                 continue
 
             # OpenAI format: assistant turn with tool_calls list

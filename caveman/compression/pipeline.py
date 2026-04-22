@@ -168,8 +168,11 @@ def _msg_hash(msg: dict) -> str:
     return hashlib.md5("|".join(parts).encode()).hexdigest()[:12]
 
 
+_RE_MULTI_NEWLINE = re.compile(r'\n{3,}')
+_RE_TRAILING_SPACES = re.compile(r' +\n')
+
 def _normalize_whitespace(text: str) -> str:
     """Collapse multiple blank lines, strip trailing spaces."""
-    text = re.sub(r'\n{3,}', '\n\n', text)
-    text = re.sub(r' +\n', '\n', text)
+    text = _RE_MULTI_NEWLINE.sub('\n\n', text)
+    text = _RE_TRAILING_SPACES.sub('\n', text)
     return text.strip()

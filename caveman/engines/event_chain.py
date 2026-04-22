@@ -148,6 +148,102 @@ def wire_inner_flywheel(
         bus.on(EventType.MEMORY_STORE, _on_memory_store_lint)
         handlers.append((EventType.MEMORY_STORE, _on_memory_store_lint))
 
+
+    # Chain 5: LOOP_END → Outcome scoring + RL Router feedback
+    # PRD §5.2 Ring 3: "Skills don't just get created — they improve."
+    # This is the critical feedback signal that closes the outer flywheel.
+    if engines.outcome:
+        outcome_ref = engines.outcome
+
+        async def _on_loop_end_outcome(event: Event) -> None:
+            """Task completed → score outcome, feed RL Router + memory trust."""
+            task = event.data.get("task", "")
+            result = event.data.get("result", "")
+            recalled_ids = event.data.get("recalled_ids", [])
+            matched_skills = event.data.get("matched_skills", [])
+            if not task:
+                return
+            try:
+                await outcome_ref.score_and_propagate(
+                    task=task, result=result,
+                    matched_skills=matched_skills,
+                    recalled_ids=recalled_ids,
+                )
+            except Exception as e:
+                logger.debug("LOOP_END→Outcome chain failed: %s", e)
+
+        bus.on(EventType.LOOP_END, _on_loop_end_outcome)
+        handlers.append((EventType.LOOP_END, _on_loop_end_outcome))
+
+    # Chain 6: LOOP_END → Reflect (post-task skill evolution)
+    # PRD §5.3: Reflect analyzes what worked/failed and evolves skills.
+    # Previously in post_task_engines (gated by engine_flags), now event-driven.
+    if engines.reflect:
+        reflect_ref = engines.reflect
+
+        async def _on_loop_end_reflect(event: Event) -> None:
+            """Task completed → Reflect on what worked/failed."""
+            task = event.data.get("task", "")
+            if not task:
+                return
+            turns = get_turns() if get_turns else []
+            if len(turns) < 2:
+                return  # Not enough context to reflect on
+            try:
+                await reflect_ref.run(turns, task=task)
+            except Exception as e:
+                logger.debug("LOOP_END→Reflect chain failed: %s", e)
+
+        bus.on(EventType.LOOP_END, _on_loop_end_reflect)
+        handlers.append((EventType.LOOP_END, _on_loop_end_reflect))
+
+
+    # Chain 7: NUDGE_EXTRACT → Wiki auto-trigger
+    # PRD §5.2 Ring 5: "Wiki is the crystallized knowledge layer."
+    # When enough memories accumulate, auto-compile wiki for structured knowledge.
+    try:
+        from caveman.wiki.auto_trigger import WikiAutoTrigger
+        from caveman.wiki.compiler import WikiCompiler
+        _wiki_trigger = WikiAutoTrigger(compiler=WikiCompiler(), threshold=5, cooldown=300)
+
+        async def _on_nudge_wiki(event: Event) -> None:
+            """Nudge extracted memories → check if wiki should compile."""
+            count = event.data.get("count", 1)
+            _wiki_trigger.on_nudge_extract(count)
+
+        bus.on(EventType.NUDGE_EXTRACT, _on_nudge_wiki)
+        handlers.append((EventType.NUDGE_EXTRACT, _on_nudge_wiki))
+    except Exception as e:
+        logger.debug("Wiki auto-trigger unavailable: %s", e)
+
+
+    # Chain 8: LOOP_END → Memory Decay (periodic trust erosion)
+    # PRD §5.2 Ring 2: "Memories that aren't used should fade."
+    # Run decay every N tasks to prevent stale memories from polluting retrieval.
+    _decay_task_count = [0]
+    _DECAY_INTERVAL = 10  # run decay every 10 tasks
+
+    async def _on_loop_end_decay(event: Event) -> None:
+        """Periodically run memory decay after N tasks."""
+        _decay_task_count[0] += 1
+        if _decay_task_count[0] < _DECAY_INTERVAL:
+            return
+        _decay_task_count[0] = 0
+        try:
+            from caveman.memory.decay import MemoryDecay
+            decay = MemoryDecay()
+            result = decay.run()
+            if result.memories_decayed > 0 or result.memories_pruned > 0:
+                logger.info(
+                    "Memory decay: %d decayed, %d pruned",
+                    result.memories_decayed, result.memories_pruned,
+                )
+        except Exception as e:
+            logger.debug("LOOP_END→Decay failed: %s", e)
+
+    bus.on(EventType.LOOP_END, _on_loop_end_decay)
+    handlers.append((EventType.LOOP_END, _on_loop_end_decay))
+
     logger.info(
         "Inner flywheel wired: %d event chains registered",
         len(handlers),

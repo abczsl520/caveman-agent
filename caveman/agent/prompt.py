@@ -9,12 +9,43 @@ import logging
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
+from enum import Enum
 from typing import Any, Optional
 
 from caveman.skills.types import Skill
 from caveman.agent.workspace import WorkspaceLoader
+from caveman.agent.context import _estimate_str_tokens
+
+__all__ = [
+    "PromptSection",
+    "DEFAULT_BUDGETS",
+    "SAFETY_RULES",
+    "BASE_PERSONA",
+    "BASE_SYSTEM_PROMPT",
+    "PromptLayer",
+    "PromptBuildResult",
+    "scan_content",
+    "PromptBuilder",
+    "build_system_prompt",
+]
+
 
 logger = logging.getLogger(__name__)
+
+
+class PromptSection(str, Enum):
+    """Prompt layer identifiers — compile-time checked, no typos."""
+    IDENTITY = "identity"
+    SAFETY = "safety"
+    RESPONSE_STYLE = "response_style"
+    WORKSPACE = "workspace"
+    MEMORY = "memory"
+    RECALL = "recall"
+    SKILLS = "skills"
+    TOOLS = "tools"
+    WIKI = "wiki"
+    EXTRA = "extra"
+    META = "meta"
 
 # Default token budgets per layer (total ~80K tokens for a 200K context)
 DEFAULT_BUDGETS = {
@@ -47,16 +78,7 @@ SAFETY_RULES = """## Safety Rules
 - Never execute dangerous commands without explicit confirmation
 - Never expose secrets, API keys, or credentials in output
 - Always verify file changes before overwriting
-- Respect permission boundaries
-
-## Gateway Communication (MANDATORY when running via Discord/Telegram)
-When you have the `progress` tool available, you MUST use it:
-1. FIRST action: `progress("开始做X…")` — announce what you're about to do
-2. Every 2-3 tool calls: `progress("进度更新")` — report what you found/did
-3. LAST action: `progress("完成摘要")` — summarize results
-4. If stuck: `progress("遇到问题：…")` — report immediately
-VIOLATION: 3+ consecutive tool calls without a progress update is a failure.
-The user CANNOT see your text responses — ONLY progress tool messages reach them."""
+- Respect permission boundaries"""
 
 BASE_PERSONA = """You are Caveman, an AI agent that learns, executes, and evolves.
 
@@ -93,7 +115,6 @@ class PromptLayer:
 
     @property
     def token_estimate(self) -> int:
-        from caveman.agent.context import _estimate_str_tokens
         return _estimate_str_tokens(self.content)
 
 
@@ -129,7 +150,6 @@ def scan_content(content: str, filename: str = "") -> tuple[str, list[str]]:
 
 def _truncate(content: str, max_tokens: int) -> tuple[str, bool]:
     """Truncate content to fit token budget (CJK-aware)."""
-    from caveman.agent.context import _estimate_str_tokens
     if _estimate_str_tokens(content) <= max_tokens:
         return content, False
     # Binary search for the right cut point
@@ -156,13 +176,20 @@ class PromptBuilder:
         self._layers: list[PromptLayer] = []
 
     def add_layer(
-        self, name: str, content: str,
+        self, name: str | PromptSection, content: str,
         priority: int = 50, required: bool = False,
         budget: Optional[int] = None,
     ) -> None:
-        """Add a prompt layer."""
+        """Add a prompt layer. Validates against contract if defined."""
+        # Normalize enum to string for storage
+        name = name.value if isinstance(name, PromptSection) else name
         if not content or not content.strip():
             return
+        # Contract validation (warn, don't block — workspace content is user-controlled)
+        from caveman.agent.prompt_contract import validate_layer
+        violations = validate_layer(name, content.strip())
+        for v in violations:
+            logger.warning("Prompt contract: %s", v.detail)
         layer_budget = budget or self.budgets.get(name, 5_000)
         self._layers.append(PromptLayer(
             name=name, content=content.strip(),
@@ -183,7 +210,6 @@ class PromptBuilder:
             # Layer-level budget
             if est > layer.budget:
                 content, _ = _truncate(content, layer.budget)
-                from caveman.agent.context import _estimate_str_tokens
                 est = _estimate_str_tokens(content)
                 result.layers_truncated.append(layer.name)
 
@@ -198,7 +224,7 @@ class PromptBuilder:
             # Add with section separator
             if result.prompt:
                 result.prompt += "\n\n"
-            result.prompt = (result.prompt or "") + content
+            result.prompt += content
 
         result.total_tokens = tokens_used
         return result
@@ -263,6 +289,7 @@ def build_system_prompt(
     wiki_context: str = "",
     total_budget: int = 80_000,
     surface: str = "cli",
+    conversation_state: Any = None,
 ) -> str:
     """Build the complete system prompt with dynamic context.
 
@@ -270,6 +297,7 @@ def build_system_prompt(
     Args:
         surface: Output surface ("discord", "telegram", "cli", "gateway").
                  Controls response formatting rules.
+        conversation_state: Optional ConversationState for phase-aware formatting.
     """
     from caveman.agent.response_style import get_response_style
 
@@ -281,19 +309,24 @@ def build_system_prompt(
     workspace_files = loader.load()
 
     if workspace_content:
-        builder.add_layer("workspace", workspace_content, priority=5)
+        builder.add_layer(PromptSection.WORKSPACE, workspace_content, priority=5)
 
     # 2. Identity
     if "SOUL.md" not in workspace_files:
-        builder.add_layer("identity", BASE_PERSONA, priority=10)
+        builder.add_layer(PromptSection.IDENTITY, BASE_PERSONA, priority=10)
 
     # 3. Safety (always included)
-    builder.add_layer("safety", SAFETY_RULES, priority=15, required=True)
+    builder.add_layer(PromptSection.SAFETY, SAFETY_RULES, priority=15, required=True)
 
     # 3b. Response style (surface-aware formatting)
     style = get_response_style(surface)
     if style:
-        builder.add_layer("response_style", style, priority=12)
+        builder.add_layer(PromptSection.RESPONSE_STYLE, style, priority=12)
+
+    # 3c. Conversation lifecycle phase rules are NOT included in the cached
+    # system prompt. They are injected as ephemeral messages before each LLM
+    # call so they update dynamically as the conversation progresses.
+    # See AgentLoop.run_stream() for the injection point.
 
     # 4. Recall context (from prior sessions)
     if recall_context:
@@ -315,13 +348,13 @@ def build_system_prompt(
     if memories:
         mem_text = _format_memories(memories)
         if mem_text:
-            builder.add_layer("memory", mem_text, priority=30)
+            builder.add_layer(PromptSection.MEMORY, mem_text, priority=30)
 
     # 6. Skills
     if skills:
         skill_text = _format_skills(skills)
         if skill_text:
-            builder.add_layer("skills", skill_text, priority=40)
+            builder.add_layer(PromptSection.SKILLS, skill_text, priority=40)
 
     # 7. Tools
     if tool_schemas:
@@ -341,7 +374,7 @@ def build_system_prompt(
         )
 
     # 9. Meta
-    builder.add_layer("meta", _build_meta_section(), priority=99)
+    builder.add_layer(PromptSection.META, _build_meta_section(), priority=99)
 
     result = builder.build()
 

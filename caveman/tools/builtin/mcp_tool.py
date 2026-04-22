@@ -5,6 +5,14 @@ import logging
 
 from caveman.tools.registry import tool
 
+__all__ = [
+    "mcp_connect",
+    "mcp_list_tools",
+    "mcp_call",
+    "mcp_disconnect",
+]
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -27,6 +35,17 @@ async def mcp_connect(
         return {"error": "mcp_manager not available"}
     cmd_list = command.split() if command else None
     url_val = url or None
+
+    # OSV malware check for package-based MCP servers
+    if cmd_list and len(cmd_list) >= 1:
+        try:
+            from caveman.security.osv_check import check_package_for_malware
+            warning = check_package_for_malware(cmd_list[0], cmd_list[1:])
+            if warning:
+                return {"error": warning}
+        except Exception:
+            pass  # OSV check is best-effort
+
     try:
         client = await mgr.add_server(name, command=cmd_list, url=url_val)
     except Exception as e:

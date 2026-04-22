@@ -4,14 +4,23 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime
-from pathlib import Path
 from uuid import uuid4
 
 from caveman.tools.registry import tool
 
 logger = logging.getLogger(__name__)
 
-_TODO_FILE = Path.home() / ".caveman" / "todos.json"
+from caveman.paths import CAVEMAN_HOME
+
+__all__ = [
+    "todo_add",
+    "todo_list",
+    "todo_done",
+    "todo_remove",
+]
+
+
+_TODO_FILE = CAVEMAN_HOME / "todos.json"
 
 
 def _load() -> list[dict]:

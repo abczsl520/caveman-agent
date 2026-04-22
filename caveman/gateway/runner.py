@@ -1,183 +1,251 @@
-"""Gateway runner — streaming session management for Discord/Telegram.
-
-Architecture (Hermes-inspired three-layer):
-- Layer 1: Conversation history keeps ALL text (including tool-call messages)
-- Layer 2: Interim messages — text before tool_calls is sent to user as commentary
-           (stripped of think blocks, deduplicated)
-- Layer 3: Final response — only the last no-tool-call text is the "real" reply
-
-- _SmartBuffer: time-aware flush (chars OR silence timeout OR boundary)
-- Tool heartbeat: "⏳ Running {tool}..." during long tools
-- progress_tool is the ONLY way agent explicitly sends mid-task updates
-- Autonomous mode: detects "继续不要停"/"keep going" and auto-continues
-- SessionStore persists full transcript to disk
-"""
+"""Gateway runner — streaming session management for Discord/Telegram."""
 from __future__ import annotations
-import asyncio
-import logging
+import asyncio, logging
 import re
 import time
-from typing import Any
+from typing import Any, NamedTuple
 
 from caveman.agent.factory import create_loop
-from caveman.agent.session_store import SessionStore, SessionMeta
+from caveman.agent.session_store import SessionMeta
+from caveman.agent.session_db import SessionDB
 from caveman.config.loader import load_config
 from caveman.gateway.router import GatewayRouter
-from caveman.gateway.smart_buffer import _SmartBuffer
 from caveman.gateway.task_runner import run_single_task
+from caveman.gateway.infra import GatewayInfra
+from caveman.gateway.session_context import set_session_context, clear_session_context
+from caveman.gateway.message_pipeline import (
+    MessageContext, MessageAction, normalize_message, dedupe_message, DedupeCache,
+)
+from caveman.gateway.reply_queue import QueueManager
+from caveman.gateway.routing import resolve_route
 from caveman.paths import CAVEMAN_HOME
+from caveman.timeouts import TASK_DEFAULT, TASK_SHORT
+__all__ = ["SESSION_TTL", "GatewayServer", "run_gateway", "run_gateway_forever"]
 
 logger = logging.getLogger("caveman.gateway")
+# Patterns to clean legacy metadata injections from persisted transcripts.
+_TOOL_COUNT_PREFIX = re.compile(r"^(\[使用了\s*\d+\s*个工具调用\]\s*)+", re.MULTILINE)
+_FORMAT_REMINDER = re.compile(r"\n?\[Format:\s*\w+\s*—[^\]]*\]\s*$")
+_STYLE_RESET = re.compile(r"^\[Style reset\]\s*")
+_COMPACTION_NOTE = re.compile(r"\n*\[Note: Earlier turns compacted.*\]\s*$")
 
-_shared_router = GatewayRouter()
-_sessions: dict[str, dict] = {}
-_session_locks: dict[str, asyncio.Lock] = {}  # Per-session locks (not global)
-SESSION_TTL = 30 * 60
-_store = SessionStore(CAVEMAN_HOME / "gateway_sessions")
+def _clean_transcript_message(role: str, content: str) -> str | None:
+    """Clean legacy metadata injections from a transcript message."""
+    if not content: return content
+    if role == "assistant":
+        content = _TOOL_COUNT_PREFIX.sub("", content).lstrip()
+    elif role == "user":
+        content = _FORMAT_REMINDER.sub("", content).rstrip()
+    elif role == "system":
+        if _STYLE_RESET.match(content): return None
+        content = _COMPACTION_NOTE.sub("", content).rstrip()
+    return content
 
-# Activity-based idle detection (replaces hard timeout)
-
-# Stuck-loop detection: same tool+args repeated N times
-
-# Autonomous mode: max consecutive auto-continues before requiring user input
 _AUTO_MAX_ROUNDS = 20
+_AUTO_PATTERNS = re.compile(r'不要停|不间断|持续|一直|keep\s*going|don.t\s*stop|autonomous|auto.?continue', re.I)
+SESSION_TTL = 30 * 60
 
-# Patterns that activate autonomous mode
-_AUTO_PATTERNS = re.compile(
-    r'不要停|不间断|持续|一直|keep\s*going|don.t\s*stop|autonomous|auto.?continue',
-    re.IGNORECASE,
-)
+class _SendResult(NamedTuple):
+    id: str
 
+class _AdapterBridge:
+    """Bridge: BasePlatformAdapter → legacy Gateway interface for router.send()."""
+    def __init__(self, adapter):
+        self._a = adapter
+    @property
+    def name(self) -> str:
+        return self._a.name
+    async def send_message(self, channel_id: str, content: str) -> None:
+        r = await self._a.send(channel_id, content)
+        return _SendResult(id=r.message_id) if r.success else None
+    async def send_reply(self, channel_id: str, content: str, reply_to: int) -> None:
+        r = await self._a.send(channel_id, content, reply_to=str(reply_to))
+        return _SendResult(id=r.message_id) if r.success else None
 
-def _session_key(ctx: dict[str, Any]) -> str:
-    return f"{ctx.get('gateway_name','discord')}:{ctx.get('channel_id','?')}:{ctx.get('user_id','?')}"
+class GatewayServer:
+    """Owns all gateway state: sessions, store, router, locks."""
 
+    def __init__(self, db_path=None, config_path: str | None = None):
+        self.router = GatewayRouter()
+        self.sessions: dict[str, dict] = {}
+        self.session_locks: dict[str, asyncio.Lock] = {}
+        self.store = SessionDB(db_path or (CAVEMAN_HOME / "sessions.db"))
+        self.config_path = config_path
+        from caveman.providers.usage_pricing import UsageTracker
+        self.usage_tracker = UsageTracker()
+        self._dedupe_cache = DedupeCache()
+        self._queue_manager = QueueManager()
+        self._infra = GatewayInfra()
+        self._cached_config = load_config(self.config_path)
+        self._migrate_json_store()
 
-def _get_session_lock(key: str) -> asyncio.Lock:
-    """Get or create a per-session lock (allows parallel sessions)."""
-    if key not in _session_locks:
-        _session_locks[key] = asyncio.Lock()
-    return _session_locks[key]
+    def _migrate_json_store(self):
+        json_dir = CAVEMAN_HOME / "gateway_sessions"
+        if json_dir.exists():
+            try:
+                migrated = self.store.migrate_from_json(json_dir)
+                if migrated:
+                    logger.info("Migrated %d sessions from JSON to SQLite", migrated)
+            except Exception as e:
+                logger.warning("JSON→SQLite migration failed: %s", e)
 
+    def _cfg(self) -> dict: return self._cached_config
 
-async def _cleanup_session(key: str, session: dict) -> None:
-    """Run end-of-session hooks before evicting a session."""
-    try:
-        loop = session.get("loop")
-        if loop:
-            from caveman.agent.session_hooks import on_session_end
-            result = await on_session_end(
-                shield=loop._shield, nudge=loop._nudge,
-                trajectory=loop.trajectory_recorder,
-                task=loop._nudge_task_ref or "",
-            )
-            logger.info("Session %s cleanup: %s", key, result)
-    except Exception as e:
-        logger.warning("Session %s cleanup failed: %s", key, e)
-
-
-async def _get_or_create_session(key: str, config_path: str | None) -> dict:
-    now = time.monotonic()
-    if key in _sessions:
-        s = _sessions[key]
-        if now - s["last_active"] < SESSION_TTL:
-            s["last_active"] = now
-            return s
-        # Session expired — run cleanup synchronously before evicting
-        try:
-            loop = asyncio.get_running_loop()
-            await _cleanup_session(key, s)
-        except RuntimeError:
-            pass  # No running loop — skip async cleanup
-        del _sessions[key]
-        _session_locks.pop(key, None)  # Fix #8: clean up lock too
-
-    # Extract surface from session key (e.g. "discord:123:456" → "discord")
-    surface = key.split(":")[0] if ":" in key else "cli"
-    loop = create_loop(config_path=config_path, surface=surface)
-    loop.gateway_router = _shared_router
-    loop.tool_registry.set_context("gateway_router", _shared_router)
-
-    session_id = key.replace(":", "_")
-    meta = _store.load_meta(session_id)
-    if meta:
-        transcript = _store.load_transcript(session_id)
-        if transcript:
-            logger.info("Restoring session %s (%d turns)", key, len(transcript))
-            from caveman.agent.context import AgentContext
-            ctx = AgentContext(max_tokens=loop.provider.context_length)
-            restored = 0
-            budget = loop.provider.context_length * 0.6
-            est_tokens = 0
-            for turn in transcript[-40:]:
-                turn_tokens = len(turn.get("content", "")) / 3.5
-                if est_tokens + turn_tokens > budget:
-                    break
-                ctx.add_message(turn["role"], turn["content"])
-                est_tokens += turn_tokens
-                restored += 1
-            # Load persisted snapshot if available, fallback to meta
-            import json
-            snap_path = _store._session_dir(session_id) / "loop_snapshot.json"
-            if snap_path.exists():
-                try:
-                    snap = json.loads(snap_path.read_text())
-                except Exception:
-                    snap = {}
-            else:
-                snap = {}
-            snap.setdefault("turn_number", meta.turn_count)
-            snap.setdefault("turn_count", meta.turn_count)
-            snap.setdefault("surface", meta.surface or surface)
-            loop.restore(snap, context=ctx)
-            logger.info("Restored session %s: %d turns, surface=%s, prompt=%d chars",
-                         key, restored, loop.surface, len(loop._system_prompt_cache or ""))
-            if restored < len(transcript[-40:]):
-                logger.info("Restored %d/%d turns (budget limit)", restored, min(len(transcript), 40))
-    else:
-        meta = SessionMeta(
-            session_id=session_id,
-            model=getattr(loop.provider, 'model_name', ''),
-            started_at=time.time(),
-            surface=surface,
+    def _session_key(self, ctx: dict[str, Any]) -> str:
+        route = resolve_route(
+            platform=ctx.get("gateway_name", "discord"),
+            chat_id=str(ctx.get("channel_id", "?")),
+            sender_id=str(ctx.get("user_id", "")),
+            thread_id=str(ctx.get("thread_id", "")),
         )
-        _store.save_meta(meta)
-        logger.info("New session: %s", key)
+        return route.session_key
 
-    session = {"loop": loop, "meta": meta, "last_active": now, "task_count": 0}
-    _sessions[key] = session
-    return session
+    def _get_lock(self, key: str) -> asyncio.Lock:
+        return self.session_locks.setdefault(key, asyncio.Lock())
 
-async def run_gateway(config_path: str | None = None):
-    config = load_config(config_path)
-    gw_config = config.get("gateway", {})
-    if not gw_config:
-        logger.error("No gateway config found.")
-        return
+    async def _cleanup_session(self, key: str, session: dict) -> None:
+        try:
+            loop = session.get("loop")
+            if loop:
+                from caveman.agent.session_hooks import on_session_end
+                result = await on_session_end(
+                    shield=loop.shield, nudge=loop.nudge,
+                    trajectory=loop.trajectory_recorder,
+                    task=loop.nudge_task_ref,
+                )
+                logger.info("Session %s cleanup: %s", key, result)
+                await loop.close()
+        except Exception as e:
+            logger.warning("Session %s cleanup failed: %s", key, e)
 
-    async def handle_task(task: str, context: dict[str, Any]) -> str:
-        key = _session_key(context)
-        lock = _get_session_lock(key)
+    async def _get_or_create_session(self, key: str) -> dict:
+        now = time.monotonic()
+        if key in self.sessions:
+            s = self.sessions[key]
+            if now - s["last_active"] < SESSION_TTL:
+                s["last_active"] = now
+                return s
+            try: await self._cleanup_session(key, s)
+            except RuntimeError: pass  # intentional: cleanup best-effort
+            del self.sessions[key]
+            self.session_locks.pop(key, None)
 
-        # Enrich task with reply context if present
+        surface = key.split(":")[0] if ":" in key else "cli"
+        loop = create_loop(config_path=self.config_path, surface=surface)
+        loop.gateway_router = self.router
+        loop.tool_registry.set_context("gateway_router", self.router)
+        sid = key.replace(":", "_")
+        meta = self.store.load_meta(sid)
+        if meta:
+            self._restore_session(key, sid, meta, loop, surface)
+        else:
+            meta = SessionMeta(session_id=sid, model=getattr(loop.provider, 'model_name', ''),
+                               started_at=time.time(), surface=surface)
+            self.store.save_meta(meta)
+        session = {"loop": loop, "meta": meta, "last_active": now, "task_count": 0}
+        self.sessions[key] = session
+        return session
+
+    def _restore_session(self, key, session_id, meta, loop, surface):
+        transcript = self.store.load_transcript(session_id)
+        if not transcript:
+            return
+        from caveman.agent.context import AgentContext
+        from caveman.utils import estimate_tokens as _est
+        ctx = AgentContext(max_tokens=loop.provider.context_length)
+        restored, tok = 0, 0
+        budget = loop.provider.context_length * 0.6 - getattr(loop, 'system_prompt_len', 0)
+        for turn in transcript[-40:]:
+            t = _est(turn.get("content", ""))
+            if tok + t > budget:
+                break
+            c = _clean_transcript_message(turn["role"], turn.get("content", ""))
+            if c is None:
+                continue
+            ctx.add_message(turn["role"], c)
+            tok += t
+            restored += 1
+        snap = self.store.load_snapshot(session_id)
+        for k, v in [("turn_number", meta.turn_count), ("turn_count", meta.turn_count), ("surface", meta.surface or surface)]:
+            snap.setdefault(k, v)
+        loop.restore(snap, context=ctx)
+        logger.info("Restored %s: %d turns, %s, prompt=%d", key, restored, loop.surface, loop.system_prompt_len)
+
+    async def handle_task(self, task: str, context: dict[str, Any]) -> str:
+        # --- Message Pipeline: Normalize + Dedupe ---
+        msg_ctx = MessageContext(
+            body=task,
+            message_id=str(context.get("message_id", "")),
+            platform=context.get("gateway_name", "discord"),
+            chat_id=str(context.get("channel_id", "")),
+            sender_id=str(context.get("user_id", "")),
+            sender_name=context.get("user_name", ""),
+            thread_id=str(context.get("thread_id", "")),
+            chat_type=context.get("chat_type", "dm"),
+            is_mention=context.get("is_mention", False),
+            is_reply_to_bot=context.get("is_reply_to_bot", False),
+        )
+        msg_ctx = normalize_message(msg_ctx)
+        msg_ctx = dedupe_message(msg_ctx, self._dedupe_cache)
+        if msg_ctx.action == MessageAction.REJECTED:
+            logger.debug("Message deduplicated: %s", msg_ctx.message_id)
+            return ""
+
+        set_session_context(
+            platform=msg_ctx.platform,
+            chat_id=msg_ctx.chat_id,
+            thread_id=msg_ctx.thread_id,
+            sender_id=msg_ctx.sender_id,
+        )
+
+        key = self._session_key(context)
+        lock = self._get_lock(key)
+
+        task = msg_ctx.body
+
+        if not msg_ctx.body.strip(): return ""
+
+        # --- Command dispatch: /commands bypass agent loop ---
+        if task.startswith("/"):
+            from caveman.commands.dispatcher import dispatch as cmd_dispatch
+            session = await self._get_or_create_session(key)
+            gw = context.get("gateway_name", "discord")
+            ch = str(context.get("channel_id", ""))
+            respond = lambda msg, _g=gw, _c=ch: asyncio.ensure_future(self.router.send(_g, _c, msg))
+            if await cmd_dispatch(task, session["loop"], surface=gw, session_key=key, respond_fn=respond):
+                return ""
+
         reply_to = context.get("reply_to")
         if reply_to and reply_to.get("content"):
             task = f'[回复 {reply_to.get("author", "?")} 的消息: "{reply_to["content"]}"]\n{task}'
 
+        if lock.locked():
+            session = self.sessions.get(key)
+            if session:
+                session["_interrupt"] = True
+                ctx = session.get("_task_ctx")
+                if ctx: ctx.shutdown_flag = True
+                logger.info("Interrupting running task for new message: %s", key)
+                await self.router.send(
+                    context.get("gateway_name", "discord"),
+                    str(context.get("channel_id", "")),
+                    "⏹️ 收到新消息，正在停止当前任务...",
+                )
+
         async with lock:
-            session = await _get_or_create_session(key, config_path)
+            session = await self._get_or_create_session(key)
             gw_name = context.get("gateway_name", "discord")
             channel_id = str(context.get("channel_id", ""))
 
             source_channel = {
                 "gateway": gw_name, "channel_id": channel_id,
-                "user_id": context.get("user_id"), "_progress_sent": 0,
+                "user_id": context.get("user_id"),
+                "message_id": context.get("message_id"),
+                "_progress_sent": 0,
             }
-
             session["task_count"] += 1
             logger.info("Task #%d [%s]: %s", session["task_count"], key, task[:100])
 
-            # Detect autonomous mode
             auto_mode = bool(_AUTO_PATTERNS.search(task))
             if auto_mode:
                 session.setdefault("auto_rounds", 0)
@@ -185,128 +253,198 @@ async def run_gateway(config_path: str | None = None):
             try:
                 result = await run_single_task(
                     task, session, gw_name, channel_id, source_channel,
-                    _shared_router, _store, config,
+                    self.router, self.store, self._cfg(),
                 )
 
-                # Autonomous continuation loop
+                # --- Hooks: emit post-task event ---
+                await self._infra.emit_hook("agent:end", {
+                    "session_key": key, "task": task[:200],
+                    "result_length": len(result or ""),
+                })
+
                 if auto_mode:
-                    auto_round = 0
-                    while auto_round < _AUTO_MAX_ROUNDS:
-                        auto_round += 1
-                        session["auto_rounds"] = auto_round
+                    result = await self._auto_continue(
+                        result, session, gw_name, channel_id, source_channel)
 
-                        # Generate continuation prompt
-                        cont_task = (
-                            f"继续飞轮 (自动第 {auto_round}/{_AUTO_MAX_ROUNDS} 轮)。"
-                            f"上一轮结果摘要：{(result or '')[:200]}。"
-                            f"继续下一个最高复利的改进。完成后报告。"
-                        )
-
-                        logger.info("Auto-continue round %d/%d [%s]", auto_round, _AUTO_MAX_ROUNDS, key)
-                        await _shared_router.send(
-                            gw_name, channel_id,
-                            f"🔄 飞轮自动继续 ({auto_round}/{_AUTO_MAX_ROUNDS})..."
-                        )
-
-                        # Reset progress counter for new round
-                        source_channel["_progress_sent"] = 0
-
-                        try:
-                            result = await asyncio.wait_for(
-                                run_single_task(
-                                    cont_task, session, gw_name, channel_id,
-                                    source_channel, _shared_router, _store, config,
-                                ),
-                                timeout=600.0,  # 10 min per auto-round
-                            )
-                        except asyncio.TimeoutError:
-                            await _shared_router.send(
-                                gw_name, channel_id,
-                                f"⏰ 飞轮第 {auto_round} 轮超时，暂停自动模式。发消息可继续。"
-                            )
-                            break
-                        except Exception as e:
-                            logger.warning("Auto-continue round %d failed: %s", auto_round, e)
-                            await _shared_router.send(
-                                gw_name, channel_id,
-                                f"⚠️ 飞轮第 {auto_round} 轮出错：{str(e)[:200]}。暂停自动模式。"
-                            )
-                            break
-
-                    if auto_round >= _AUTO_MAX_ROUNDS:
-                        await _shared_router.send(
-                            gw_name, channel_id,
-                            f"✅ 飞轮自动模式完成 {_AUTO_MAX_ROUNDS} 轮。发消息可继续。"
-                        )
+                # --- Reply Queue: drain queued messages ---
+                queued = self._queue_manager.drain(key)
+                for qm in queued:
+                    logger.info("Processing queued message for %s: %s", key, qm.body[:80])
+                    source_channel["_progress_sent"] = 0
+                    await run_single_task(
+                        qm.body, session, gw_name, channel_id, source_channel,
+                        self.router, self.store, self._cfg(),
+                    )
 
                 return "" if result else "Done."
-
             except Exception as e:
                 logger.exception("Task failed: %s", e)
-                # Don't delete session — transcript is persisted, context can be restored
-                return f"⚠️ Something went wrong. Please try again."
+                return "⚠️ Something went wrong. Please try again."
+            finally:
+                clear_session_context()
 
-    gateways = []
-    discord_cfg = gw_config.get("discord", {})
-    if discord_cfg.get("enabled") and discord_cfg.get("token"):
-        from caveman.gateway.discord_gw import DiscordGateway
-        dg = DiscordGateway(
-            token=discord_cfg["token"],
-            prefix=discord_cfg.get("prefix", "!cave"),
-            trigger=discord_cfg.get("trigger", "all"),
-            allowed_channels=discord_cfg.get("allowed_channels"),
-            allowed_users=discord_cfg.get("allowed_users"),
-            locale=config.get("locale", "en"),
-        )
-        dg.on_task(handle_task)
-        _shared_router.register(dg)
-        gateways.append(("Discord", dg))
-
-    telegram_cfg = gw_config.get("telegram", {})
-    if telegram_cfg.get("enabled") and telegram_cfg.get("token"):
-        from caveman.gateway.telegram_gw import TelegramGateway
-        tg = TelegramGateway(
-            token=telegram_cfg["token"],
-            allowed_users=telegram_cfg.get("allowed_users"),
-        )
-        tg.on_task(handle_task)
-        _shared_router.register(tg)
-        gateways.append(("Telegram", tg))
-
-    if not gateways:
-        logger.error("No gateways enabled.")
-        return
-
-    logger.info("Starting %d gateway(s): %s", len(gateways), ", ".join(n for n, _ in gateways))
-    tasks = [asyncio.create_task(gw.start()) for _, gw in gateways]
-    try:
-        await asyncio.gather(*tasks)
-    except (KeyboardInterrupt, asyncio.CancelledError):
-        pass
-    finally:
-        for _, gw in gateways:
+    async def _auto_continue(self, result, session, gw_name, channel_id, source_channel):
+        config = self._cfg()
+        for rnd in range(1, _AUTO_MAX_ROUNDS + 1):
+            session["auto_rounds"] = rnd
+            cont_task = (f"继续飞轮 (自动第 {rnd}/{_AUTO_MAX_ROUNDS} 轮)。"
+                         f"上一轮结果摘要：{(result or '')[:200]}。继续下一个最高复利的改进。完成后报告。")
+            logger.info("Auto-continue round %d/%d", rnd, _AUTO_MAX_ROUNDS)
+            await self.router.send(gw_name, channel_id, f"🔄 飞轮自动继续 ({rnd}/{_AUTO_MAX_ROUNDS})...")
+            source_channel["_progress_sent"] = 0
             try:
-                await gw.stop()
+                result = await asyncio.wait_for(
+                    run_single_task(cont_task, session, gw_name, channel_id,
+                                    source_channel, self.router, self.store, config), timeout=TASK_DEFAULT)
+            except asyncio.TimeoutError:
+                await self.router.send(gw_name, channel_id, f"⏰ 飞轮第 {rnd} 轮超时，暂停。")
+                break
             except Exception as e:
-                logger.debug("Suppressed in runner: %s", e)
+                logger.warning("Auto-continue round %d failed: %s", rnd, e)
+                await self.router.send(gw_name, channel_id, f"⚠️ 飞轮第 {rnd} 轮出错：{str(e)[:200]}。暂停。")
+                break
+        else:
+            await self.router.send(gw_name, channel_id, f"✅ 飞轮自动模式完成 {_AUTO_MAX_ROUNDS} 轮。")
+        return result
 
+    async def start(self) -> None:
+        """Start all configured gateways."""
+        self._cached_config = load_config(self.config_path)
+        config = self._cached_config
+        gw_config = config.get("gateway", {})
+        if not gw_config:
+            logger.error("No gateway config found.")
+            return
 
-async def run_gateway_forever(config_path: str | None = None, max_restarts: int = 10):
-    """Run gateway with auto-restart on crash. Backs off exponentially."""
-    restarts = 0
-    while restarts < max_restarts:
+        # Wire all subsystems
+        from caveman.gateway.wiring import wire_gateway
+        from caveman.wiring import wire_all
+        self._wired = wire_gateway(self)
+        wire_all()
+
+        self._infra.load_hooks()
+        self._infra.load_task_registry()
+        await self._infra.emit_hook("gateway:startup", {"config_keys": list(gw_config.keys())})
+
+        # Try new platform adapters first, fall back to legacy
+        gateways = await self._start_platform_adapters(gw_config, config)
+        if not gateways:
+            gateways = await self._start_legacy_gateways(gw_config, config)
+        if not gateways:
+            logger.error("No gateways enabled.")
+            return
+
+        logger.info("Starting %d gateway(s): %s", len(gateways), ", ".join(n for n, _ in gateways))
+        tasks = [asyncio.create_task(gw.connect() if hasattr(gw, 'connect') else gw.start())
+                 for _, gw in gateways
+                 if (hasattr(gw, 'connect') or hasattr(gw, 'start')) and not getattr(gw, '_running', False)]
+        reaper = asyncio.create_task(self._session_reaper())
+        cron_task = asyncio.create_task(self._start_cron(config))
         try:
-            logger.info("Gateway starting (attempt %d/%d)", restarts + 1, max_restarts)
-            await run_gateway(config_path)
-            logger.info("Gateway exited cleanly")
-            break
+            await asyncio.gather(*tasks)
         except (KeyboardInterrupt, asyncio.CancelledError):
-            logger.info("Gateway stopped by user")
-            break
-        except Exception as e:
-            restarts += 1
-            delay = min(5 * (2 ** (restarts - 1)), 120)  # 5s, 10s, 20s, ... 120s max
-            logger.error("Gateway crashed (attempt %d): %s. Restarting in %ds...", restarts, e, delay)
-            await asyncio.sleep(delay)
-    else:
-        logger.error("Gateway exceeded max restarts (%d). Giving up.", max_restarts)
+            pass  # intentional: KeyboardInterrupt suppressed
+        finally:
+            reaper.cancel()
+            cron_task.cancel()
+            for _, gw in gateways:
+                try:
+                    await (gw.disconnect() if hasattr(gw, 'disconnect') else gw.stop())
+                except Exception as e:
+                    logger.debug("Suppressed: %s", e)
+
+    async def _start_platform_adapters(self, gw_config: dict, config: dict) -> list:
+        """Start gateways using the new BasePlatformAdapter system."""
+        from caveman.gateway.platform_types import PlatformConfig
+        from caveman.gateway.platform_registry import get_adapter
+        gateways = []
+        for name in ("discord", "telegram", "slack", "whatsapp", "signal", "matrix", "feishu"):
+            pcfg = gw_config.get(name, {})
+            if not pcfg.get("enabled"):
+                continue
+            adapter = get_adapter(name, PlatformConfig.from_dict(pcfg))
+            if adapter:
+                adapter.set_message_handler(self._adapter_message_handler)
+                # Register adapter as a legacy gateway bridge so router.send() works
+                self.router.register(_AdapterBridge(adapter))
+                gateways.append((adapter.name, adapter))
+        return gateways
+
+    async def _adapter_message_handler(self, event) -> str | None:
+        """Bridge: BasePlatformAdapter → existing handle_task."""
+        src = event.source
+        context = {
+            "channel_id": src.chat_id if src else "",
+            "user_id": src.user_id if src else "",
+            "username": src.user_name if src else "",
+            "message_id": event.message_id,
+            "gateway_name": src.platform.value if src else "unknown",
+            "is_thread": src.chat_type == "thread" if src else False,
+        }
+        if event.media_urls:
+            context["attachments"] = [{"url": u, "content_type": t}
+                                      for u, t in zip(event.media_urls, event.media_types)]
+        if event.reply_to_text:
+            context["reply_to"] = {"content": event.reply_to_text}
+        return await self.handle_task(event.text, context)
+
+    async def _start_legacy_gateways(self, gw_config: dict, config: dict) -> list:
+        """Start gateways using the legacy Gateway ABC system."""
+        from caveman.gateway.legacy_startup import start_legacy_gateways
+        return await start_legacy_gateways(gw_config, config, self.handle_task, self.router)
+
+    async def _session_reaper(self):
+        """Periodically clean up expired sessions."""
+        while True:
+            await asyncio.sleep(TASK_SHORT)  # 5 minutes
+            now = time.monotonic()
+            expired = [
+                k for k, s in self.sessions.items()
+                if now - s.get("last_active", 0) >= SESSION_TTL
+            ]
+            for key in expired:
+                session = self.sessions.get(key)
+                if not session:
+                    continue
+                try:
+                    await self._cleanup_session(key, session)
+                    self.sessions.pop(key, None)  # pop AFTER successful cleanup
+                    self.session_locks.pop(key, None)
+                    logger.info("Reaped expired session: %s", key)
+                except Exception as e:
+                    logger.warning("Reaper cleanup failed for %s, will retry: %s", key, e)
+
+    async def _start_cron(self, config: dict):
+        """Start the cron scheduler."""
+        from caveman.gateway.cron_integration import start_cron_scheduler
+        await start_cron_scheduler(
+            config=config,
+            get_or_create_session=self._get_or_create_session,
+            router=self.router,
+            store=self.store,
+        )
+
+# --- Backward-compatible module-level API (use GatewayServer directly) ---
+_server: GatewayServer | None = None
+
+def _get_server() -> GatewayServer:
+    global _server
+    if _server is None:
+        _server = GatewayServer()
+    return _server
+
+async def run_gateway(config_path: str | None = None) -> None:
+    """Backward-compatible entry point. Creates the singleton GatewayServer."""
+    global _server
+    _server = GatewayServer(config_path=config_path)
+    await _server.start()
+
+async def _drain_active_sessions(timeout: float) -> tuple[int, bool]:
+    from caveman.gateway.gateway_lifecycle import drain_active_sessions
+    srv = _get_server()
+    return await drain_active_sessions(srv.sessions, srv.session_locks, timeout)
+
+async def run_gateway_forever(config_path: str | None = None, max_restarts: int = 10) -> None:
+    """Run the gateway server indefinitely with auto-restart on failure."""
+    from caveman.gateway.gateway_lifecycle import run_gateway_forever as _run
+    await _run(config_path=config_path, max_restarts=max_restarts)

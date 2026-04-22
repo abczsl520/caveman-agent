@@ -17,12 +17,15 @@ class TestSnapshotRestore:
 
     def test_snapshot_captures_all_state(self):
         from caveman.agent.loop import AgentLoop
+        from caveman.agent.iteration_budget import IterationBudget
         loop = AgentLoop.__new__(AgentLoop)
         loop._turn_number = 5
         loop._turn_count = 10
         loop._tool_call_count = 3
         loop.surface = "discord"
         loop._system_prompt_cache = "test prompt"
+        loop.budget = IterationBudget(50)
+        loop.max_iterations = 50
 
         snap = loop.snapshot()
         assert snap["turn_number"] == 5
@@ -77,8 +80,11 @@ class TestSnapshotRestore:
 
     def test_snapshot_restore_roundtrip(self):
         from caveman.agent.loop import AgentLoop
+        from caveman.agent.iteration_budget import IterationBudget
 
         loop1 = AgentLoop.__new__(AgentLoop)
+        loop1.budget = IterationBudget(50)
+        loop1.max_iterations = 50
         loop1._turn_number = 7
         loop1._turn_count = 15
         loop1._tool_call_count = 4

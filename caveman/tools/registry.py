@@ -24,6 +24,7 @@ Usage:
 from __future__ import annotations
 import inspect
 import logging
+import asyncio
 import time
 from typing import Callable, Any
 
@@ -38,7 +39,7 @@ def tool(
     description: str,
     params: dict[str, dict],
     required: list[str] | None = None,
-):
+) -> Any:
     """Decorator: declare a function as a tool with its schema.
 
     The schema is attached to the function; ToolRegistry picks it up automatically.
@@ -50,7 +51,7 @@ def tool(
     if required:
         schema["required"] = required
 
-    def decorator(fn: Callable):
+    def decorator(fn: Callable) -> Any:
         fn._tool_meta = {
             "name": name,
             "description": description,
@@ -126,10 +127,16 @@ class ToolRegistry:
     def get_tool_by_name(self, name: str) -> dict | None:
         return self._tools.get(name)
 
-    async def dispatch(self, name: str, args: dict[str, Any]) -> Any:
-        from caveman.errors import ToolNotFoundError
+    async def dispatch(self, name: str, args: dict[str, Any], timeout: float = 120.0) -> Any:
+        from caveman.errors import ToolNotFoundError, ToolTimeoutError
         if name not in self._tools:
-            raise ToolNotFoundError(f"Unknown tool: {name}", context={"tool": name})
+            # Try to repair the tool name before failing
+            repaired = self._repair_tool_name(name)
+            if repaired:
+                logger.warning("Repaired tool name: '%s' → '%s'", name, repaired)
+                name = repaired
+            else:
+                raise ToolNotFoundError(f"Unknown tool: {name}", context={"tool": name})
         tool_info = self._tools[name]
         fn = tool_info["fn"]
 
@@ -140,16 +147,38 @@ class ToolRegistry:
             args = {k: v for k, v in args.items() if k in tool_info["param_names"]}
 
         start = time.monotonic()
-        if tool_info["is_async"]:
-            result = await fn(**args)
-        else:
-            result = fn(**args)
+        try:
+            if tool_info["is_async"]:
+                result = await asyncio.wait_for(fn(**args), timeout=timeout)
+            else:
+                result = fn(**args)
+        except asyncio.TimeoutError:
+            elapsed = time.monotonic() - start
+            raise ToolTimeoutError(
+                f"Tool '{name}' timed out after {elapsed:.1f}s",
+                context={"tool": name, "timeout": timeout},
+            )
         elapsed = time.monotonic() - start
 
         if elapsed > 1.0:
             logger.warning("Slow tool dispatch: %s took %.2fs", name, elapsed)
 
         return result
+
+    def _repair_tool_name(self, name: str) -> str | None:
+        """Attempt to repair a mismatched tool name. Ported from Hermes."""
+        from difflib import get_close_matches
+        valid = set(self._tools.keys())
+        # 1. Lowercase
+        if name.lower() in valid:
+            return name.lower()
+        # 2. Normalize (hyphens/spaces → underscores)
+        normalized = name.lower().replace("-", "_").replace(" ", "_")
+        if normalized in valid:
+            return normalized
+        # 3. Fuzzy match (cutoff=0.7)
+        matches = get_close_matches(name.lower(), valid, n=1, cutoff=0.7)
+        return matches[0] if matches else None
 
     def _register_builtins(self) -> None:
         """Auto-register built-in tools via @tool decorator."""
@@ -176,6 +205,50 @@ class ToolRegistry:
         import caveman.tools.builtin.flywheel_tool  # noqa: F401
         import caveman.tools.builtin.progress_tool  # noqa: F401
         import caveman.tools.builtin.metrics_tool  # noqa: F401
+        import caveman.tools.builtin.session_search_tool  # noqa: F401
+        import caveman.tools.builtin.branch_tool  # noqa: F401
+        import caveman.tools.builtin.cron_tool  # noqa: F401
+        import caveman.tools.builtin.clarify_tool  # noqa: F401
+        import caveman.tools.builtin.moa_tool  # noqa: F401
+        import caveman.tools.builtin.tts_tool  # noqa: F401
+        import caveman.tools.builtin.homeassistant_tool  # noqa: F401
+        import caveman.tools.builtin.terminal_tool  # noqa: F401
+        import caveman.tools.builtin.tool_wrappers  # noqa: F401
+
+        # Wire remaining orphan tool modules (non-fatal)
+        _orphan_tools = [
+            "caveman.tools.builtin.skills_hub",
+            "caveman.tools.builtin.mcp_client",
+            "caveman.tools.builtin.mcp_lifecycle",
+            "caveman.tools.builtin.mcp_sampling",
+            "caveman.tools.builtin.code_execution",
+            "caveman.tools.builtin.voice_mode",
+            "caveman.tools.builtin.llm_router",
+            "caveman.tools.builtin.process_registry",
+            "caveman.tools.builtin.approval",
+            "caveman.tools.builtin.skills_guard",
+            "caveman.tools.builtin.web_research",
+            "caveman.tools.builtin.browser_providers",
+            "caveman.tools.builtin.cronjob",
+            "caveman.tools.builtin.website_policy",
+            "caveman.tools.builtin.vision_tools",
+            "caveman.tools.builtin.send_message_tool",
+            "caveman.tools.builtin.browser_v2",
+            "caveman.tools.builtin.web_fetch_v2",
+            "caveman.tools.builtin.terminal_v2",
+            "caveman.tools.builtin.file_ops_v2",
+            "caveman.tools.credential_files",
+            "caveman.tools.env_passthrough",
+            "caveman.tools.debug_helpers",
+            "caveman.tools.budget_config",
+            "caveman.tools.interrupt",
+            "caveman.tools.patch_parser",
+        ]
+        for mod_name in _orphan_tools:
+            try:
+                __import__(mod_name)
+            except Exception as exc:
+                logger.debug("unknown: suppressed %s", exc)
 
         count = self.auto_discover()
         logger.debug("Auto-discovered %d built-in tools", count)

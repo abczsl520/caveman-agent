@@ -1,2 +1,4 @@
 """Gateway — Discord, Telegram, and extensible chat interfaces."""
-__all__ = ["base", "discord_gw", "router", "runner", "telegram_gw"]
+from caveman.gateway.flows import FlowEngine, Flow  # noqa: F401
+
+__all__ = ["base", "discord_gw", "router", "runner", "telegram_gw", "FlowEngine", "Flow"]

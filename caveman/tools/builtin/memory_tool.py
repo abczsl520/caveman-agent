@@ -5,6 +5,13 @@ import logging
 
 from caveman.tools.registry import tool
 
+__all__ = [
+    "memory_search",
+    "memory_store",
+    "memory_recent",
+]
+
+
 logger = logging.getLogger(__name__)
 
 

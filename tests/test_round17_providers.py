@@ -223,7 +223,11 @@ class TestBuildApiKwargs:
             messages=[{"role": "user", "content": "Hi"}],
             system="You are helpful",
         )
-        assert kwargs["system"] == "You are helpful"
+        # System is now structured for cache optimization
+        sys = kwargs["system"]
+        assert isinstance(sys, list)
+        assert sys[0]["text"] == "You are helpful"
+        assert sys[0]["cache_control"] == {"type": "ephemeral"}
 
 
 class TestHelpers:
@@ -283,7 +287,8 @@ class TestAnthropicProvider:
             system="Be helpful",
         )
         assert params["model"] == "claude-sonnet-4-5"
-        assert params["system"] == "Be helpful"
+        assert isinstance(params["system"], list)
+        assert params["system"][0]["text"] == "Be helpful"
 
     def test_usage_stats_initial(self):
         p = AnthropicProvider(api_key="key")

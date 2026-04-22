@@ -32,13 +32,32 @@ class GatewayRouter:
             except Exception as e:
                 logger.warning("Failed to stop gateway %s: %s", name, e)
 
-    async def send(self, gateway_name: str, channel_id: str, content: str) -> dict:
+    async def send(self, gateway_name: str, channel_id: str, content: str,
+                   reply_to: int | None = None) -> dict:
         gw = self._gateways.get(gateway_name)
         if not gw:
             raise ValueError(f"Unknown gateway: {gateway_name}")
-        msg = await gw.send_message(channel_id, content)
+        if reply_to and hasattr(gw, 'send_reply'):
+            msg = await gw.send_reply(channel_id, content, reply_to)
+        else:
+            msg = await gw.send_message(channel_id, content)
         msg_id = getattr(msg, 'id', None) if msg else None
         return {"ok": True, "gateway": gateway_name, "channel_id": channel_id, "message_id": msg_id}
+
+    async def send_confirm(self, gateway_name: str, channel_id: str, content: str) -> bool | None:
+        """Send a confirmation prompt with Yes/No buttons. Returns True/False/None."""
+        gw = self._gateways.get(gateway_name)
+        if not gw or not hasattr(gw, 'send_confirm'):
+            return None
+        return await gw.send_confirm(channel_id, content)
+
+    async def send_choices(self, gateway_name: str, channel_id: str,
+                           content: str, choices: list[str]) -> str | None:
+        """Send a choice prompt with buttons. Returns selected choice or None."""
+        gw = self._gateways.get(gateway_name)
+        if not gw or not hasattr(gw, 'send_choices'):
+            return None
+        return await gw.send_choices(channel_id, content, choices)
 
     async def edit(self, gateway_name: str, channel_id: str, message_id: int, content: str) -> dict:
         gw = self._gateways.get(gateway_name)

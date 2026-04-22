@@ -22,6 +22,9 @@ class TestSystemPromptRestore:
         loop = AgentLoop.__new__(AgentLoop)
         loop._system_prompt_cache = None
         loop.surface = "discord"
+        loop._turn_count = 1
+        loop._turn_number = 1
+        loop._tool_call_count = 0
         loop.tool_registry = MagicMock()
         loop.tool_registry.get_schemas.return_value = []
         loop.skill_manager = MagicMock()

@@ -19,10 +19,18 @@ import logging
 import os
 from pathlib import Path
 from typing import Any, Callable, Awaitable
+from caveman.aio import aio_exists, aio_mkdir, aio_unlink
 
 logger = logging.getLogger(__name__)
 
-from caveman.paths import UDS_SOCK, OPENCLAW_SOCK
+from caveman.paths import UDS_SOCK
+
+__all__ = [
+    "CAVEMAN_SOCK",
+    "UDSClient",
+    "UDSServer",
+]
+
 
 # Re-export for backward compat
 CAVEMAN_SOCK = UDS_SOCK
@@ -121,9 +129,9 @@ class UDSServer:
         """Start UDS server."""
         # Clean up stale socket
         sock_path = Path(self.socket_path)
-        if sock_path.exists():
-            sock_path.unlink()
-        sock_path.parent.mkdir(parents=True, exist_ok=True)
+        if await aio_exists(sock_path):
+            await aio_unlink(sock_path)
+        await aio_mkdir(sock_path.parent, parents=True, exist_ok=True)
 
         self._server = await asyncio.start_unix_server(
             self._handle_client, path=self.socket_path
@@ -140,8 +148,8 @@ class UDSServer:
             await self._server.wait_closed()
         # Clean socket file
         sock_path = Path(self.socket_path)
-        if sock_path.exists():
-            sock_path.unlink()
+        if await aio_exists(sock_path):
+            await aio_unlink(sock_path)
         # Cancel clients
         for task in self._clients:
             task.cancel()
@@ -191,8 +199,8 @@ class UDSServer:
 
                 writer.write((json.dumps(response, ensure_ascii=False) + "\n").encode())
                 await writer.drain()
-        except (ConnectionResetError, BrokenPipeError):
-            pass
+        except (ConnectionResetError, BrokenPipeError) as exc:
+            logger.debug("_handle_client: suppressed %s", exc)
         finally:
             writer.close()
             if task:

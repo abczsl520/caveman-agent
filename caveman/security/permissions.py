@@ -34,9 +34,10 @@ DEFAULT_PERMISSIONS: dict[str, PermissionLevel] = {
 
 class PermissionManager:
     """Manages permission checks and approval flows for agent actions."""
-    def __init__(self, permissions: dict[str, PermissionLevel] | None = None):
+    def __init__(self, permissions: dict[str, PermissionLevel] | None = None, bus=None):
         self._permissions = permissions or DEFAULT_PERMISSIONS.copy()
         self._approval_callback: Callable | None = None
+        self._bus = bus
 
     def set_approval_callback(self, callback: Callable) -> None:
         self._approval_callback = callback
@@ -45,11 +46,22 @@ class PermissionManager:
         return self._permissions.get(action, PermissionLevel.ASK)
 
     async def request(self, action: str, description: str) -> bool:
+        from caveman.events import EventType
         level = self.check(action)
         if level == PermissionLevel.AUTO:
+            if self._bus:
+                await self._bus.emit(
+                    EventType.PERMISSION_CHECK,
+                    {"action": action, "level": "auto", "granted": True},
+                )
             return True
         if level == PermissionLevel.DENY:
             logger.warning("Permission DENIED for action '%s': %s", action, description[:100])
+            if self._bus:
+                await self._bus.emit(
+                    EventType.PERMISSION_CHECK,
+                    {"action": action, "level": "deny", "granted": False},
+                )
             return False
         if self._approval_callback:
             return await self._approval_callback(action, description)

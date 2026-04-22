@@ -4,10 +4,46 @@ from __future__ import annotations
 from caveman.commands.types import CommandContext
 from caveman.commands.handlers._helpers import load_config_safe, CAVEMAN_HOME
 
+__all__ = [
+    "handle_restart",
+    "handle_update",
+    "handle_profile",
+    "handle_sethome",
+    "handle_quit",
+]
+
+
 
 async def handle_restart(ctx: CommandContext) -> None:
-    """Restart the gateway."""
-    ctx.respond(ctx.t("🔄 Restarting gateway...", "🔄 正在重启网关…"))
+    """Restart the gateway gracefully via SIGUSR1 or service manager."""
+    from caveman.gateway.restart import trigger_restart
+    from caveman.gateway.status import get_running_pid
+
+    pid = get_running_pid()
+    if pid is None:
+        ctx.respond(ctx.t(
+            "⚠️ No running gateway found. Start with `caveman serve`.",
+            "⚠️ 没有找到运行中的网关。用 `caveman serve` 启动。",
+        ))
+        return
+
+    ctx.respond(ctx.t(
+        "🔄 Restarting gateway (graceful)...",
+        "🔄 正在优雅重启网关…",
+    ))
+
+    result = await trigger_restart()
+    if result["ok"]:
+        ctx.respond(ctx.t(
+            f"✅ Restart requested via {result['method']}. Gateway will restart shortly.",
+            f"✅ 已通过 {result['method']} 请求重启。网关即将重启。",
+        ))
+    else:
+        detail = result.get("detail", "unknown error")
+        ctx.respond(ctx.t(
+            f"❌ Restart failed: {detail}",
+            f"❌ 重启失败：{detail}",
+        ))
 
 
 async def handle_update(ctx: CommandContext) -> None:

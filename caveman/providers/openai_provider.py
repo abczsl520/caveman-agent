@@ -9,25 +9,54 @@ import json
 import logging
 from typing import AsyncIterator, Any
 from .llm import LLMProvider, normalize_stop_reason
-from caveman.providers.error_classifier import classify_error, ClassifiedError
+from caveman.providers.error_classifier import classify_error
 from caveman.providers.retry import jittered_backoff
+from caveman.timeouts import HTTP_LLM
 
 logger = logging.getLogger(__name__)
+
+
+def _repair_json(raw: str) -> dict:
+    """Attempt to repair malformed JSON from tool call arguments.
+
+    Common issues: trailing commas, unquoted keys, truncated output.
+    Falls back to {"raw": ...} if repair fails.
+    """
+    import re
+    if not raw or not raw.strip():
+        return {}
+    # Try: strip trailing comma before }
+    cleaned = re.sub(r',\s*}', '}', raw)
+    cleaned = re.sub(r',\s*]', ']', cleaned)
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        pass  # intentional: Exception suppressed
+    # Try: wrap in braces if it looks like key-value pairs
+    if not raw.strip().startswith('{'):
+        try:
+            return json.loads('{' + raw + '}')
+        except json.JSONDecodeError:
+            pass  # intentional: Exception suppressed
+    return {"raw": raw}
 
 
 class OpenAIProvider(LLMProvider):
     """OpenAI GPT provider with streaming tool use."""
 
-    def __init__(self, api_key: str, model: str | None = None, max_tokens: int | None = None, base_url: str | None = None):
+    def __init__(self, api_key: str, model: str | None = None, max_tokens: int | None = None,
+                 base_url: str | None = None, credential_pool: Any | None = None):
         from caveman.paths import DEFAULT_OPENAI_MODEL, DEFAULT_MAX_TOKENS_OPENAI
         self.api_key = api_key
         self.model = model or DEFAULT_OPENAI_MODEL
         self.max_tokens = max_tokens or DEFAULT_MAX_TOKENS_OPENAI
         self.base_url = base_url
         self._client = None
+        self._credential_pool = credential_pool
         self._total_input_tokens = 0
         self._total_output_tokens = 0
         self._call_count = 0
+        self._rate_limit_state = None
 
     @property
     def context_length(self) -> int:
@@ -47,7 +76,7 @@ class OpenAIProvider(LLMProvider):
                             max_connections=20,
                             max_keepalive_connections=10,
                         ),
-                        timeout=300.0,
+                        timeout=HTTP_LLM,
                     ),
                 }
                 if self.base_url:
@@ -62,6 +91,23 @@ class OpenAIProvider(LLMProvider):
         if self._client is not None:
             await self._client.close()
             self._client = None
+
+    def _capture_rate_limits(self, response) -> None:
+        """Parse rate limit headers from HTTP response."""
+        try:
+            headers = getattr(response, 'headers', None)
+            if not headers:
+                return
+            from caveman.providers.rate_limit import parse_rate_limit_headers
+            state = parse_rate_limit_headers(dict(headers), provider="openai")
+            if state:
+                self._rate_limit_state = state
+        except Exception as exc:
+            logger.debug("_capture_rate_limits: suppressed %s", exc)
+
+    @property
+    def rate_limit_state(self) -> dict:
+        return self._rate_limit_state
 
     async def __aenter__(self):
         return self
@@ -81,6 +127,10 @@ class OpenAIProvider(LLMProvider):
         if system:
             api_messages.append({"role": "system", "content": system})
         api_messages.extend(messages)
+
+        # Sanitize orphaned tool calls/results before API call
+        from caveman.providers.message_sanitizer import sanitize_messages
+        api_messages = sanitize_messages(api_messages)
 
         openai_tools = None
         if tools:
@@ -141,6 +191,21 @@ class OpenAIProvider(LLMProvider):
                 if classification.should_compress:
                     yield {"type": "error", "error": "context_too_long", "action": "compress"}
                     return
+
+                # Credential rotation on 429/401
+                if classification.should_rotate and self._credential_pool:
+                    next_cred = self._credential_pool.mark_exhausted(
+                        "openai", self.api_key,
+                        code=getattr(e, "status_code", None),
+                        message=str(e)[:100],
+                    )
+                    if next_cred:
+                        logger.info("Rotating to credential: %s", next_cred.label or next_cred.key[:8])
+                        self.api_key = next_cred.key
+                        if next_cred.base_url:
+                            self.base_url = next_cred.base_url
+                        self._client = None
+
                 delay = jittered_backoff(attempt)
                 await asyncio.sleep(delay)
                 continue  # discard buffer, retry
@@ -153,6 +218,10 @@ class OpenAIProvider(LLMProvider):
     async def _stream(self, client, params) -> AsyncIterator[dict]:
         tc_buf: dict[int, dict] = {}
         async with client.chat.completions.create(**params) as stream:
+            # Capture rate limit headers from the HTTP response
+            raw_response = getattr(stream, 'response', None)
+            if raw_response:
+                self._capture_rate_limits(raw_response)
             async for chunk in stream:
                 choice = chunk.choices[0] if chunk.choices else None
                 if not choice:
@@ -177,7 +246,7 @@ class OpenAIProvider(LLMProvider):
                         try:
                             inp = json.loads(tc["arguments"]) if tc["arguments"] else {}
                         except json.JSONDecodeError:
-                            inp = {"raw": tc["arguments"]}
+                            inp = _repair_json(tc["arguments"])
                         yield {"type": "tool_call", "id": tc["id"], "name": tc["name"], "input": inp}
                     yield {"type": "done", "stop_reason": normalize_stop_reason(choice.finish_reason), "usage": {}}
 
@@ -194,7 +263,7 @@ class OpenAIProvider(LLMProvider):
                 try:
                     inp = json.loads(tc.function.arguments)
                 except json.JSONDecodeError:
-                    inp = {"raw": tc.function.arguments}
+                    inp = _repair_json(tc.function.arguments)
                 yield {"type": "tool_call", "id": tc.id, "name": tc.function.name, "input": inp}
         yield {
             "type": "done",

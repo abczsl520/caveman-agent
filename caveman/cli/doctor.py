@@ -11,6 +11,7 @@
 Also integrates Lint Engine results and LLM Scheduler stats.
 """
 from __future__ import annotations
+import asyncio
 import json
 import os
 from datetime import datetime
@@ -22,6 +23,7 @@ from caveman.memory.types import MemoryType
 from caveman.skills.manager import SkillManager
 
 import logging
+from caveman.aio import aio_exists, aio_glob, aio_is_file, aio_read_text, aio_stat
 logger = logging.getLogger(__name__)
 
 
@@ -35,7 +37,7 @@ class DoctorReport:
         self.errors: list[str] = []
         self.score: float = 1.0
 
-    def add_check(self, name: str, status: str, detail: str = "", value: Any = None):
+    def add_check(self, name: str, status: str, detail: str = "", value: Any = None) -> None:
         icon = {"ok": "\u2705", "warn": "\u26a0\ufe0f", "error": "\u274c", "info": "\u2139\ufe0f"}.get(status, "\u2753")
         self.checks.append({"name": name, "status": status, "detail": detail, "value": value, "icon": icon})
         if status == "warn":
@@ -45,7 +47,7 @@ class DoctorReport:
             self.errors.append(f"{name}: {detail}")
             self.score -= 0.15
 
-    def add_metric(self, name: str, value: float, target: float, unit: str = ""):
+    def add_metric(self, name: str, value: float, target: float, unit: str = "") -> None:
         status = "ok" if value >= target else ("warn" if value >= target * 0.5 else "error")
         self.metrics[name] = {"value": value, "target": target, "unit": unit, "status": status}
         if status == "error":
@@ -98,7 +100,7 @@ async def run_doctor(config_dir: str | None = None) -> DoctorReport:
 
     # --- Config ---
     config_path = base / "config.yaml"
-    if config_path.exists():
+    if await aio_exists(config_path):
         report.add_check("Config", "ok", f"Found at {config_path}")
     else:
         report.add_check("Config", "warn", "No config.yaml \u2014 run `caveman setup`")
@@ -114,6 +116,22 @@ async def run_doctor(config_dir: str | None = None) -> DoctorReport:
         report.add_check("Memory", "warn", "No memories yet \u2014 flywheel cold start")
     else:
         report.add_check("Memory", "ok", f"{total} memories ({type_counts})")
+
+    # --- Flywheel deep diagnostics ---
+    try:
+        from caveman.memory.flywheel_metrics import FlywheelHealth
+        fw = await FlywheelHealth.diagnose(mm)
+        report.add_metric("Avg Trust", fw.avg_trust * 100, 40, "%")
+        report.add_metric("Feedback Rate", fw.feedback_rate * 100, 10, "%")
+        if fw.total_memories > 0:
+            never_pct = fw.memories_never_recalled / fw.total_memories * 100
+            report.add_metric("Recall Coverage", 100 - never_pct, 20, "%")
+        for issue in fw.issues:
+            report.add_check("Flywheel", "warn", issue)
+        if fw.is_healthy and fw.total_memories > 0:
+            report.add_check("Flywheel", "ok", fw.summary())
+    except Exception as e:
+        report.add_check("Flywheel", "info", f"Diagnostics unavailable: {e}")
 
     # --- Lint scan ---
     try:
@@ -148,13 +166,13 @@ async def run_doctor(config_dir: str | None = None) -> DoctorReport:
 
     # --- Trajectories ---
     traj_dir = base / "trajectories"
-    if traj_dir.exists():
-        traj_files = list(traj_dir.glob("*.json"))
+    if await aio_exists(traj_dir):
+        traj_files = list(await aio_glob(traj_dir, "*.json"))
         if traj_files:
             scores = []
             for p in traj_files:
                 try:
-                    data = json.loads(p.read_text(encoding="utf-8"))
+                    data = json.loads(await aio_read_text(p, encoding="utf-8"))
                     qs = data.get("metadata", {}).get("quality_score")
                     if qs is not None:
                         scores.append(qs)
@@ -175,8 +193,8 @@ async def run_doctor(config_dir: str | None = None) -> DoctorReport:
 
     # --- Sessions (Shield recovery) ---
     sessions_dir = base / "sessions"
-    if sessions_dir.exists():
-        session_files = list(sessions_dir.glob("*.yaml"))
+    if await aio_exists(sessions_dir):
+        session_files = list(await aio_glob(sessions_dir, "*.yaml"))
         report.add_check("Shield Sessions", "ok" if session_files else "info",
             f"{len(session_files)} session essences stored")
     else:
@@ -186,8 +204,9 @@ async def run_doctor(config_dir: str | None = None) -> DoctorReport:
     report.add_check("LLM Scheduler", "info", "Stats available at runtime via scheduler.get_stats()")
 
     # --- Disk ---
-    if base.exists():
-        total_size = sum(f.stat().st_size for f in base.rglob("*") if f.is_file())
+    if await aio_exists(base):
+        total_size = await asyncio.to_thread(
+            lambda: sum(f.stat().st_size for f in base.rglob("*") if f.is_file()))
         mb = total_size / (1024 * 1024)
         report.add_check("Disk", "ok" if mb < 500 else "warn", f"{mb:.1f} MB")
 

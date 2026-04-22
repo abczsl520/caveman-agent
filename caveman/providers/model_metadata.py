@@ -11,12 +11,12 @@ __all__ = [
     "ModelInfo", "get_model_info", "strip_provider_prefix",
     "is_local_endpoint", "detect_local_server_type",
     "estimate_tokens", "MINIMUM_CONTEXT_LENGTH",
+    "infer_provider_from_url",
 ]
 
 import logging
 import re
-from dataclasses import dataclass, field
-from typing import Any
+from dataclasses import dataclass
 from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
@@ -211,13 +211,9 @@ _CHARS_PER_TOKEN_CJK = 2.0
 _CJK_RE = re.compile(r"[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]")
 
 
-def estimate_tokens(text: str) -> int:
-    """Rough token estimate without a tokenizer."""
-    if not text:
-        return 0
-    cjk_chars = len(_CJK_RE.findall(text))
-    other_chars = len(text) - cjk_chars
-    return int(cjk_chars / _CHARS_PER_TOKEN_CJK + other_chars / _CHARS_PER_TOKEN_EN)
+# Re-export from canonical source
+from caveman.utils import estimate_tokens  # noqa: E402, F401
+from caveman.timeouts import HTTP_FAST
 
 
 # --- Local server detection ---
@@ -262,7 +258,8 @@ def is_local_endpoint(base_url: str) -> bool:
     url = normalized if "://" in normalized else f"http://{normalized}"
     try:
         host = urlparse(url).hostname or ""
-    except Exception:
+    except Exception as e:
+        logger.debug("suppressed: %s", e)
         return False
     if host in _LOCAL_HOSTS:
         return True
@@ -276,7 +273,7 @@ def is_local_endpoint(base_url: str) -> bool:
             if a == 10 or (a == 172 and 16 <= b <= 31) or (a == 192 and b == 168):
                 return True
         except ValueError:
-            pass
+            pass  # intentional: ValueError suppressed
     return False
 
 
@@ -288,7 +285,7 @@ def detect_local_server_type(base_url: str) -> str | None:
     server = normalized[:-3] if normalized.endswith("/v1") else normalized
 
     try:
-        with httpx.Client(timeout=2.0) as client:
+        with httpx.Client(timeout=HTTP_FAST) as client:
             # LM Studio
             try:
                 r = client.get(f"{server}/api/v1/models")

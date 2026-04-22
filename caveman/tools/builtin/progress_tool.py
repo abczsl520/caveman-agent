@@ -13,8 +13,7 @@ from caveman.tools.registry import tool
     description=(
         "Send a progress update to the user in the current conversation. "
         "Use this to report what you're doing, what you found, or when you're done. "
-        "IMPORTANT: Use this every 2-3 tool calls to keep the user informed. "
-        "On Discord/Telegram: start with an emoji (🔍📌⚡✅❌🔧) and use **bold** for key terms."
+        "IMPORTANT: Use this every 2-3 tool calls to keep the user informed."
     ),
     params={
         "message": {

@@ -10,11 +10,18 @@ from pathlib import Path
 
 from caveman.paths import CAVEMAN_HOME
 
+__all__ = [
+    "WORKSPACE_FILES",
+    "WORKSPACE_PATHS",
+    "WorkspaceLoader",
+]
+
+
 logger = logging.getLogger(__name__)
 
 WORKSPACE_FILES = (
     "SOUL.md", "USER.md", "MEMORY.md", "AGENTS.md",
-    "HEARTBEAT.md", "TOOLS.md", "IDENTITY.md",
+    "HEARTBEAT.md", "TOOLS.md",
 )
 
 WORKSPACE_PATHS = [
@@ -45,6 +52,8 @@ class WorkspaceLoader:
         not from external workspaces like OpenClaw.
         """
         found: dict[str, str] = {}
+        # Track provenance: which file came from where
+        self._provenance: dict[str, str] = {}
         primary_ws = None
 
         for ws_dir in self.paths:
@@ -60,7 +69,8 @@ class WorkspaceLoader:
                 if fp.is_file():
                     try:
                         found[name] = fp.read_text(encoding="utf-8")
-                        logger.debug("Loaded workspace file: %s", fp)
+                        self._provenance[name] = str(fp)
+                        logger.info("Workspace: %s → %s", name, fp)
                     except Exception:
                         logger.warning("Failed to read %s", fp, exc_info=True)
 

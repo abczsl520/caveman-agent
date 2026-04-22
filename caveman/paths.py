@@ -8,6 +8,57 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+__all__ = [
+    "CAVEMAN_HOME",
+    "MEMORY_DIR",
+    "SKILLS_DIR",
+    "WIKI_DIR",
+    "PLUGINS_DIR",
+    "TRAJECTORIES_DIR",
+    "SESSIONS_DIR",
+    "TRAINING_DIR",
+    "TRAINING_SFT_DIR",
+    "TRAINING_RL_DIR",
+    "HUB_CACHE_DIR",
+    "CONFIG_PATH",
+    "MEMORY_DB_PATH",
+    "UDS_SOCK",
+    "OPENCLAW_SOCK",
+    "DEFAULT_MODEL",
+    "DEFAULT_OPENAI_MODEL",
+    "DEFAULT_MAX_TOKENS_ANTHROPIC",
+    "DEFAULT_MAX_TOKENS_OPENAI",
+    "DEFAULT_CONTEXT_WINDOW",
+    "OPENAI_CONTEXT_WINDOW",
+    "DEFAULT_MAX_ITERATIONS",
+    "DEFAULT_COMPRESSION_THRESHOLD",
+    "DEFAULT_SUBTASK_TIMEOUT",
+    "DEFAULT_SYSTEM_PROMPT",
+    "DEFAULT_ACP_TIMEOUT",
+    "BROWSER_NAV_TIMEOUT",
+    "BROWSER_CLICK_TIMEOUT",
+    "OPENCLAW_GATEWAY_PORT",
+    "MCP_PROTOCOL_VERSION",
+    "DEFAULT_MAX_SEQ_LENGTH",
+    "EMBEDDING_MAX_INPUT",
+    "TRUNCATE_SHORT",
+    "TRUNCATE_MEDIUM",
+    "TRUNCATE_LONG",
+    "UDS_SOCKET_MODE",
+    "JSONRPC_PARSE_ERROR",
+    "JSONRPC_INTERNAL_ERROR",
+    "PROJECTS_DIR",
+    "LOGS_DIR",
+    "REQUIRED_DIRS",
+    "ensure_home",
+    "DEFAULT_GATEWAY_PORT",
+    "DEFAULT_GATEWAY_URL",
+    "DEFAULT_OLLAMA_URL",
+    "DEFAULT_HERMES_URL",
+    "DEFAULT_LLM_IDLE_TIMEOUT",
+]
+
+
 # ── Paths ──
 
 CAVEMAN_HOME = Path(os.environ.get("CAVEMAN_HOME", "~/.caveman")).expanduser()
@@ -46,6 +97,12 @@ OPENAI_CONTEXT_WINDOW = 128_000
 DEFAULT_MAX_ITERATIONS = 50
 DEFAULT_COMPRESSION_THRESHOLD = 0.75
 DEFAULT_SUBTASK_TIMEOUT = 300  # seconds
+DEFAULT_SYSTEM_PROMPT = (
+    "You are Caveman, an AI agent that learns, executes, and evolves.\n"
+    "You have tools for bash, file ops, web search, and more.\n"
+    "Think step-by-step. Be concise but thorough.\n"
+    "Memory is automatic — Shield saves session state after each task."
+)
 DEFAULT_ACP_TIMEOUT = 300  # seconds
 
 # ── Network / Browser ──
@@ -79,6 +136,10 @@ JSONRPC_INTERNAL_ERROR = -32603
 
 PROJECTS_DIR = CAVEMAN_HOME / "projects"
 
+# ── Logs ──
+
+LOGS_DIR = CAVEMAN_HOME / "logs"
+
 
 # ── Home directory initialization ──
 
@@ -96,6 +157,7 @@ REQUIRED_DIRS = [
     PROJECTS_DIR,
     WIKI_DIR,
     HUB_CACHE_DIR,
+    LOGS_DIR,
 ]
 
 
@@ -111,3 +173,6 @@ DEFAULT_GATEWAY_URL = f"ws://127.0.0.1:{DEFAULT_GATEWAY_PORT}"
 # Ollama defaults
 DEFAULT_OLLAMA_URL = "http://localhost:11434"
 DEFAULT_HERMES_URL = "http://localhost:8000"
+
+# LLM idle timeout — abort if no token received for this long (seconds)
+DEFAULT_LLM_IDLE_TIMEOUT = 120  # 2 minutes between tokens

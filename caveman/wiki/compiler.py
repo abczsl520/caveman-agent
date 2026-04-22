@@ -21,8 +21,7 @@ __all__ = ["WikiCompiler"]
 import hashlib
 import logging
 import time
-from datetime import datetime, timezone, timedelta
-from typing import Any
+from datetime import datetime, timezone
 
 from caveman.wiki import (
     TIER_CONFIG,

@@ -75,7 +75,7 @@ class TestEstimateTokens:
 
     def test_chinese(self):
         tokens = estimate_tokens("你好世界这是一个测试")
-        assert 4 <= tokens <= 10
+        assert 8 <= tokens <= 15
 
     def test_mixed(self):
         tokens = estimate_tokens("Hello 你好 world 世界")

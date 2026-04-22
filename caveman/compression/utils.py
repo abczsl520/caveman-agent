@@ -7,11 +7,22 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+__all__ = [
+    "IDENTIFIER_PRESERVATION",
+    "estimate_tokens",
+    "estimate_msg_tokens",
+    "sanitize_tool_pairs",
+    "align_forward",
+    "align_backward",
+    "serialize_turns",
+    "build_template",
+]
+
+
 logger = logging.getLogger(__name__)
 
 # --- Constants ---
 
-_CHARS_PER_TOKEN = 4
 _PRUNED_TOOL_PLACEHOLDER = "[Old tool output cleared to save context space]"
 
 # OpenClaw identifier preservation (MIT, Peter Steinberger)
@@ -32,24 +43,41 @@ _TOOL_ARGS_HEAD = 1200
 # --- Token estimation ---
 
 def estimate_tokens(messages: list[dict]) -> int:
-    """Rough token estimate: ~4 chars per token."""
+    """Estimate tokens for a message list. Delegates to utils.estimate_tokens for CJK awareness."""
+    from caveman.utils import estimate_tokens as _est_str
     total = 0
     for m in messages:
         content = m.get("content", "")
         if isinstance(content, str):
-            total += len(content) // _CHARS_PER_TOKEN + 10
+            total += _est_str(content) + 10  # +10 for role/structure overhead
         elif isinstance(content, list):
             for block in content:
                 if isinstance(block, dict):
-                    total += len(str(block.get("text", ""))) // _CHARS_PER_TOKEN
+                    total += _est_str(str(block.get("text", "")))
         for tc in m.get("tool_calls") or []:
             if isinstance(tc, dict):
                 args = tc.get("function", {}).get("arguments", "")
-                total += len(args) // _CHARS_PER_TOKEN
+                total += _est_str(args)
     return max(total, 1)
 
 
 # --- Tool pair sanitization ---
+
+def estimate_msg_tokens(msg: dict) -> int:
+    """Estimate tokens for a single message. CJK-aware."""
+    from caveman.utils import estimate_tokens as _est_str
+    content = msg.get("content") or ""
+    total = _est_str(content) + 10 if isinstance(content, str) else 10
+    if isinstance(content, list):
+        for block in content:
+            if isinstance(block, dict):
+                total += _est_str(str(block.get("text", "")))
+    for tc in msg.get("tool_calls") or []:
+        if isinstance(tc, dict):
+            args = tc.get("function", {}).get("arguments", "")
+            total += _est_str(args)
+    return total
+
 
 def _get_tool_call_id(tc: Any) -> str:
     """Extract call ID from a tool_call entry (dict or object)."""

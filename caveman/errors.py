@@ -19,6 +19,22 @@ Base:
 """
 from __future__ import annotations
 
+__all__ = [
+    "CavemanError",
+    "ConfigError",
+    "ProviderError",
+    "RateLimitError",
+    "AuthError",
+    "ToolError",
+    "ToolNotFoundError",
+    "ToolPermissionError",
+    "ToolTimeoutError",
+    "MemoryError",
+    "BridgeError",
+    "SecurityError",
+]
+
+
 
 class CavemanError(Exception):
     """Base exception for all Caveman errors."""

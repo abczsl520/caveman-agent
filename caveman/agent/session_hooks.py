@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 
-from caveman.engines.shield import CompactionShield, SessionEssence
+from caveman.engines.shield import CompactionShield
 from caveman.memory.nudge import MemoryNudge
 from caveman.trajectory.recorder import TrajectoryRecorder
 

@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 
 from caveman.tools.registry import tool
+from caveman.timeouts import SUBPROCESS_FLYWHEEL
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +77,7 @@ async def flywheel_exec(
         output_lines = []
         while True:
             line = await asyncio.wait_for(
-                proc.stdout.readline(), timeout=600.0
+                proc.stdout.readline(), timeout=SUBPROCESS_FLYWHEEL
             )
             if not line:
                 break
