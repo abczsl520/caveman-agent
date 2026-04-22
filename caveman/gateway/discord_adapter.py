@@ -374,6 +374,14 @@ class DiscordAdapter(BasePlatformAdapter):
             if parts:
                 task = task + "\n" + "\n".join(parts) if task else "\n".join(parts)
 
+        # Interaction flags
+        is_mention = bool(self._client and self._client.user and self._client.user in message.mentions)
+        is_reply_to_bot = False
+        if message.reference and getattr(message.reference, "resolved", None):
+            ref_author = getattr(message.reference.resolved, "author", None)
+            if ref_author and self._client and self._client.user:
+                is_reply_to_bot = ref_author.id == self._client.user.id
+
         # Reply context
         reply_to_text = None
         if message.reference and message.reference.resolved:
@@ -390,6 +398,8 @@ class DiscordAdapter(BasePlatformAdapter):
             media_types=media_types,
             reply_to_message_id=str(message.reference.message_id) if message.reference else None,
             reply_to_text=reply_to_text,
+            is_mention=is_mention,
+            is_reply_to_bot=is_reply_to_bot,
         )
 
     async def _sync_slash_commands(self) -> None:
