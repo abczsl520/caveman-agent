@@ -18,6 +18,10 @@ if TYPE_CHECKING:
 from caveman.aio import aio_write_text, aio_mkdir
 from caveman.paths import CAVEMAN_HOME
 
+_STUCK_LOOP_THRESHOLD = 5
+_PATTERN_LOOP_REPEATS = 3
+
+
 logger = logging.getLogger(__name__)
 
 async def _activity_monitor(ctx: _TaskContext) -> None:
