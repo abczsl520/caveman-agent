@@ -434,3 +434,319 @@ class TestReports:
         report = format_detect_report({"openclaw": True, "hermes": False})
         assert "openclaw" in report
         assert "hermes" in report
+
+
+# ---------------------------------------------------------------------------
+# OpenClaw MEMORY.md dual import (PRD §8.8.1)
+# ---------------------------------------------------------------------------
+
+class TestOpenClawMemoryMdDualImport:
+    """MEMORY.md should produce BOTH workspace AND memory items."""
+
+    def test_memory_md_produces_workspace_and_memory_items(self, tmp_path):
+        from caveman.import_.openclaw import OpenClawImporter
+        root = tmp_path / "openclaw"
+        ws = root / "workspace"
+        ws.mkdir(parents=True)
+        (ws / "MEMORY.md").write_text(
+            "## P0 — 核心记忆\n\n### 服务器\n"
+            "- **阿里云** `39.99.235.193` Windows（业务主力）\n"
+            "- **新服务器** `8.138.104.108` Ubuntu\n\n"
+            "## P1 — 按需查\n\n"
+            "高频入口已在 AGENTS.md 触发器表。其余知识通过 memory_search 语义检索自动发现。",
+            encoding="utf-8",
+        )
+
+        imp = OpenClawImporter(caveman_home=tmp_path)
+        imp.root = root
+        manifest = imp.scan()
+
+        ws_items = [i for i in manifest.items if i.target_type == "workspace"]
+        mem_items = [i for i in manifest.items if i.target_type == "memory"]
+
+        # Should have 1 workspace item (the file copy)
+        assert len(ws_items) == 1
+        assert ws_items[0].source_path.name == "MEMORY.md"
+
+        # Should have 2+ memory items (sections parsed from MEMORY.md)
+        assert len(mem_items) >= 2
+        # Memory items should contain the actual content
+        all_content = " ".join(i.content for i in mem_items)
+        assert "39.99.235.193" in all_content
+        assert "AGENTS.md" in all_content
+
+    def test_soul_md_does_not_produce_memory_items(self, tmp_path):
+        """Only MEMORY.md should get dual treatment, not SOUL.md."""
+        from caveman.import_.openclaw import OpenClawImporter
+        root = tmp_path / "openclaw"
+        ws = root / "workspace"
+        ws.mkdir(parents=True)
+        (ws / "SOUL.md").write_text(
+            "## Identity\nI am Caveman, a self-evolving AI agent system.\n\n"
+            "## Style\nFriendly and natural conversation style always.",
+            encoding="utf-8",
+        )
+
+        imp = OpenClawImporter(caveman_home=tmp_path)
+        imp.root = root
+        manifest = imp.scan()
+
+        ws_items = [i for i in manifest.items if i.target_type == "workspace"]
+        mem_items = [i for i in manifest.items if i.target_type == "memory"]
+
+        assert len(ws_items) == 1
+        assert len(mem_items) == 0  # SOUL.md should NOT be in memory
+
+
+# ---------------------------------------------------------------------------
+# OpenClaw HEARTBEAT.md cron registration (PRD §8.8.1)
+# ---------------------------------------------------------------------------
+
+class TestOpenClawHeartbeatCron:
+    def test_heartbeat_produces_cron_register(self, tmp_path):
+        from caveman.import_.openclaw import OpenClawImporter
+        root = tmp_path / "openclaw"
+        ws = root / "workspace"
+        ws.mkdir(parents=True)
+        (ws / "HEARTBEAT.md").write_text(
+            "# HEARTBEAT.md\n\nRun health checks every 5 minutes.\n"
+            "Check session health and sub-agent health.",
+            encoding="utf-8",
+        )
+
+        imp = OpenClawImporter(caveman_home=tmp_path)
+        imp.root = root
+        manifest = imp.scan()
+
+        ws_items = [i for i in manifest.items if i.target_type == "workspace"]
+        cron_items = [i for i in manifest.items if i.target_type == "cron_register"]
+
+        assert len(ws_items) == 1  # workspace copy
+        assert len(cron_items) == 1  # cron registration
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_cron_writes_file(self, tmp_path):
+        from caveman.import_.openclaw import OpenClawImporter
+        root = tmp_path / "openclaw"
+        ws = root / "workspace"
+        ws.mkdir(parents=True)
+        (ws / "HEARTBEAT.md").write_text(
+            "# HEARTBEAT.md\nRun health checks periodically for system monitoring.",
+            encoding="utf-8",
+        )
+
+        caveman_home = tmp_path / "caveman"
+        caveman_home.mkdir()
+        imp = OpenClawImporter(caveman_home=caveman_home, dry_run=False)
+        imp.root = root
+        manifest = imp.scan()
+        result = await imp.execute(manifest, memory_manager=None)
+
+        cron_file = caveman_home / "cron" / "heartbeat-cron.json"
+        assert cron_file.exists()
+        data = json.loads(cron_file.read_text())
+        assert data["name"] == "heartbeat"
+        assert "schedule" in data
+
+
+# ---------------------------------------------------------------------------
+# Claude Code project CLAUDE.md scanning
+# ---------------------------------------------------------------------------
+
+class TestClaudeCodeProjectScan:
+    def test_finds_project_claude_md(self, tmp_path):
+        from caveman.import_.claude_code import ClaudeCodeImporter, _PROJECT_SEARCH_PATHS
+        root = tmp_path / "claude"
+        root.mkdir(parents=True)
+        (root / "settings.json").write_text('{}', encoding="utf-8")
+
+        # Create a fake project with CLAUDE.md
+        project = tmp_path / "myproject"
+        project.mkdir()
+        (project / "CLAUDE.md").write_text(
+            "## Conventions\nUse snake_case for all Python function names and variables.\n\n"
+            "## Architecture\nThe project follows a hexagonal architecture pattern.",
+            encoding="utf-8",
+        )
+
+        imp = ClaudeCodeImporter(caveman_home=tmp_path)
+        imp.root = root
+        # Override search paths to use our tmp_path
+        import caveman.import_.claude_code as cc_mod
+        original_paths = cc_mod._PROJECT_SEARCH_PATHS
+        cc_mod._PROJECT_SEARCH_PATHS = (tmp_path,)
+        try:
+            manifest = imp.scan()
+        finally:
+            cc_mod._PROJECT_SEARCH_PATHS = original_paths
+
+        mem_items = [i for i in manifest.items if i.target_type == "memory"]
+        assert len(mem_items) >= 2
+        # Should contain project name prefix
+        assert any("[Project: myproject]" in i.content for i in mem_items)
+
+    def test_skips_node_modules(self, tmp_path):
+        from caveman.import_.claude_code import ClaudeCodeImporter
+        root = tmp_path / "claude"
+        root.mkdir(parents=True)
+        (root / "settings.json").write_text('{}', encoding="utf-8")
+
+        # CLAUDE.md inside node_modules should be skipped
+        nm = tmp_path / "project" / "node_modules" / "some-pkg"
+        nm.mkdir(parents=True)
+        (nm / "CLAUDE.md").write_text(
+            "## Pkg\nThis should not be imported from node_modules directory.",
+            encoding="utf-8",
+        )
+
+        imp = ClaudeCodeImporter(caveman_home=tmp_path)
+        imp.root = root
+        import caveman.import_.claude_code as cc_mod
+        original_paths = cc_mod._PROJECT_SEARCH_PATHS
+        cc_mod._PROJECT_SEARCH_PATHS = (tmp_path,)
+        try:
+            manifest = imp.scan()
+        finally:
+            cc_mod._PROJECT_SEARCH_PATHS = original_paths
+
+        mem_items = [i for i in manifest.items if i.target_type == "memory"]
+        # node_modules CLAUDE.md should not appear
+        assert not any("node_modules" in str(i.source_path) for i in mem_items)
+
+
+# ---------------------------------------------------------------------------
+# WorkspaceMemorySync
+# ---------------------------------------------------------------------------
+
+class TestWorkspaceMemorySync:
+    """Test the runtime workspace → Memory Store sync."""
+
+    @pytest.mark.asyncio
+    async def test_sync_inserts_sections(self, tmp_path):
+        from caveman.agent.workspace_memory_sync import WorkspaceMemorySync
+
+        # Create workspace with MEMORY.md
+        ws = tmp_path / "workspace"
+        ws.mkdir()
+        (ws / "MEMORY.md").write_text(
+            "## Servers\n- Aliyun `39.99.235.193` Windows\n\n"
+            "## Rules\nAlways pull before editing code on remote servers.",
+            encoding="utf-8",
+        )
+
+        # Mock memory manager
+        stored = []
+        class MockMM:
+            async def store(self, content, mem_type, metadata=None):
+                stored.append({"content": content, "type": mem_type, "meta": metadata})
+                return f"id-{len(stored)}"
+
+        sync = WorkspaceMemorySync(tmp_path, MockMM())
+        sync._workspace_paths = [ws]
+        stats = await sync.sync()
+
+        assert stats["inserted"] == 2
+        assert stats["unchanged"] == 0
+        assert len(stored) == 2
+        # Check source tagging
+        assert all("workspace-sync:MEMORY.md" in s["meta"]["source"] for s in stored)
+
+    @pytest.mark.asyncio
+    async def test_sync_idempotent(self, tmp_path):
+        from caveman.agent.workspace_memory_sync import WorkspaceMemorySync
+
+        ws = tmp_path / "workspace"
+        ws.mkdir()
+        (ws / "MEMORY.md").write_text(
+            "## Facts\nThe server IP is 10.0.0.1 and runs Ubuntu 22.04 LTS.",
+            encoding="utf-8",
+        )
+
+        stored = []
+        class MockMM:
+            async def store(self, content, mem_type, metadata=None):
+                stored.append(content)
+                return f"id-{len(stored)}"
+
+        sync = WorkspaceMemorySync(tmp_path, MockMM())
+        sync._workspace_paths = [ws]
+
+        # First sync
+        stats1 = await sync.sync()
+        assert stats1["inserted"] == 1
+
+        # Second sync — no changes
+        stats2 = await sync.sync()
+        assert stats2["unchanged"] == 1
+        assert stats2["inserted"] == 0
+        assert len(stored) == 1  # No new stores
+
+    @pytest.mark.asyncio
+    async def test_sync_detects_changes(self, tmp_path):
+        from caveman.agent.workspace_memory_sync import WorkspaceMemorySync
+
+        ws = tmp_path / "workspace"
+        ws.mkdir()
+        (ws / "MEMORY.md").write_text(
+            "## V1\nOriginal content about the project architecture and design.",
+            encoding="utf-8",
+        )
+
+        stored = []
+        deleted = []
+        class MockMM:
+            async def store(self, content, mem_type, metadata=None):
+                stored.append(content)
+                return f"id-{len(stored)}"
+            async def delete(self, mid):
+                deleted.append(mid)
+
+        sync = WorkspaceMemorySync(tmp_path, MockMM())
+        sync._workspace_paths = [ws]
+
+        # First sync
+        await sync.sync()
+        assert len(stored) == 1
+
+        # Modify file
+        (ws / "MEMORY.md").write_text(
+            "## V2\nUpdated content with new server configuration details.",
+            encoding="utf-8",
+        )
+
+        # Second sync — should detect change
+        stats2 = await sync.sync()
+        assert stats2["deleted"] == 1  # old section removed
+        assert stats2["inserted"] == 1  # new section added
+
+    @pytest.mark.asyncio
+    async def test_force_resync(self, tmp_path):
+        from caveman.agent.workspace_memory_sync import WorkspaceMemorySync
+
+        ws = tmp_path / "workspace"
+        ws.mkdir()
+        (ws / "MEMORY.md").write_text(
+            "## Data\nImportant data about the production environment setup.",
+            encoding="utf-8",
+        )
+
+        stored = []
+        deleted = []
+        class MockMM:
+            async def store(self, content, mem_type, metadata=None):
+                stored.append(content)
+                return f"id-{len(stored)}"
+            async def delete(self, mid):
+                deleted.append(mid)
+
+        sync = WorkspaceMemorySync(tmp_path, MockMM())
+        sync._workspace_paths = [ws]
+
+        # Initial sync
+        await sync.sync()
+        assert len(stored) == 1
+
+        # Force resync — should delete old and re-insert
+        stats = await sync.force_resync()
+        assert len(deleted) == 1
+        assert stats["inserted"] == 1

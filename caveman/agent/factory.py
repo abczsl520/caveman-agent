@@ -117,6 +117,25 @@ def create_loop(
         retrieval_log=retrieval_log,
     )
 
+    # WorkspaceMemorySync: keep MEMORY.md etc. synced to vector DB (PRD §8.8.1)
+    # Runs on every session start, fast no-op if nothing changed.
+    _workspace_sync = None
+    try:
+        from caveman.agent.workspace_memory_sync import WorkspaceMemorySync
+        from caveman.paths import CAVEMAN_HOME
+        _workspace_sync = WorkspaceMemorySync(CAVEMAN_HOME, memory_manager)
+        import asyncio
+        try:
+            loop_obj = asyncio.get_running_loop()
+            # Already in async context — schedule as task
+            loop_obj.create_task(_workspace_sync.sync())
+        except RuntimeError:
+            # No running loop — run synchronously
+            asyncio.run(_workspace_sync.sync())
+        logger.debug("WorkspaceMemorySync completed")
+    except Exception as e:
+        logger.debug("WorkspaceMemorySync unavailable: %s", e)
+
     skill_manager = SkillManager(skills_dir=skills_dir)
 
     # Create all engines via EngineManager (unified lifecycle)
@@ -222,6 +241,10 @@ def create_loop(
 
     # Store bridge reference for later use
     loop._openclaw_bridge = openclaw_bridge
+
+    # Store workspace sync reference for manual resync
+    if _workspace_sync is not None:
+        loop._workspace_sync = _workspace_sync
 
     # Compression feasibility check (Hermes pattern)
     try:
