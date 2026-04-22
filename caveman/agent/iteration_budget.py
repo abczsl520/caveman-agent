@@ -38,6 +38,11 @@ class IterationBudget:
                 if reason:
                     logger.debug("Iteration refunded: %s (used=%d)", reason, self._used)
 
+
+    def reset(self) -> None:
+        """Reset budget for a new task/turn."""
+        with self._lock:
+            self._used = 0
     @property
     def used(self) -> int:
         return self._used

@@ -69,7 +69,7 @@ async def openai_embedding(text: str, model: str = "text-embedding-3-small") -> 
         return resp.json()["data"][0]["embedding"]
 
 
-async def ollama_embedding(text: str, model: str = "nomic-embed-text") -> list[float]:
+async def ollama_embedding(text: str, model: str = "qwen3-embedding:0.6b") -> list[float]:
     """Generate embedding via local Ollama."""
     from caveman.paths import DEFAULT_OLLAMA_URL
     ollama_url = os.environ.get("OLLAMA_BASE_URL", DEFAULT_OLLAMA_URL)
