@@ -13,6 +13,8 @@ Separated from runner.py (session management) for single-responsibility.
 from __future__ import annotations
 
 import asyncio
+import os
+import sys
 import logging
 
 logger = logging.getLogger("caveman.gateway")
@@ -221,9 +223,13 @@ async def run_gateway_forever(config_path: str | None = None, max_restarts: int 
                         except (asyncio.CancelledError, Exception):
                             pass  # intentional: Exception suppressed
 
-                        logger.info("Graceful restart complete, exiting with code %d", RESTART_EXIT_CODE)
-                        exit_code = RESTART_EXIT_CODE
-                        return
+                        logger.info("Graceful restart complete, exec-replacing process")
+                        # Clean up before exec
+                        config_watcher.stop()
+                        await health_server.stop()
+                        remove_pid_file()
+                        # Re-exec ourselves — loads fresh code from disk
+                        os.execv(sys.executable, [sys.executable, "-m", "caveman", "serve"])
 
                     if _gateway_stopping:
                         gateway_task.cancel()
