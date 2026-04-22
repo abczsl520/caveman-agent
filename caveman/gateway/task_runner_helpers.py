@@ -85,15 +85,23 @@ async def _handle_tool_call(event, ctx: _TaskContext, buf: _SmartBuffer) -> bool
     # Stuck-loop detection
     stuck = ctx.check_stuck_loop(tool_name, tool_args)
     if stuck:
+        ctx.stuck_warnings += 1
         kind, detail = stuck.split(":", 1)
         if kind == "exact_repeat":
-            msg = f"⚠️ 检测到循环：{detail} 连续 {_STUCK_LOOP_THRESHOLD} 次相同调用，暂停任务。"
+            msg = f"⚠️ 检测到循环：{detail} 连续 {_STUCK_LOOP_THRESHOLD} 次相同调用"
         else:
-            msg = f"⚠️ 检测到模式循环：{detail} 重复 {_PATTERN_LOOP_REPEATS} 次，暂停任务。"
-        logger.warning("Stuck loop detected: %s", stuck)
-        ctx.shutdown_flag = True
-        await ctx.send(f"{msg}进度已保存，发消息可继续。")
-        return True  # break
+            msg = f"⚠️ 检测到模式循环：{detail} 重复 {_PATTERN_LOOP_REPEATS} 次"
+        logger.warning("Stuck loop detected (strike %d): %s", ctx.stuck_warnings, stuck)
+        if ctx.stuck_warnings >= 2:
+            # Second strike — hard shutdown
+            ctx.shutdown_flag = True
+            await ctx.send(f"{msg}，二次触发，暂停任务。进度已保存，发消息可继续。")
+            return True  # break
+        else:
+            # First strike — warn and clear history so agent can self-correct
+            ctx.recent_tool_calls.clear()
+            await ctx.send(f"{msg}。请换个思路继续。")
+            return False  # let agent continue
 
     async def _heartbeat(name: str):
         await asyncio.sleep(15.0)
