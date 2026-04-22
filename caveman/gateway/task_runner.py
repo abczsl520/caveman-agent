@@ -164,6 +164,7 @@ async def run_single_task(
     task: str, session: dict, gw_name: str, channel_id: str,
     source_channel: dict, router: GatewayRouter, store: Any,
     config: dict[str, Any] | None = None,
+    attachments: list[dict[str, str]] | None = None,
 ) -> str:
     """Execute a single task and return the result text."""
     loop = session["loop"]
@@ -191,7 +192,7 @@ async def run_single_task(
         logger.error("🚨 System prompt critically short (%d chars)! Session may have lost its prompt.", prompt_len)
 
     try:
-        async for event in loop.run_stream(task):
+        async for event in loop.run_stream(task, attachments=attachments):
             if ctx.shutdown_flag:
                 logger.info("Graceful shutdown: stopping stream processing")
                 break

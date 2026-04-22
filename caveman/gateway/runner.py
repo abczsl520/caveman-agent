@@ -88,7 +88,6 @@ class GatewayServer:
                     logger.info("Migrated %d sessions from JSON to SQLite", migrated)
             except Exception as e:
                 logger.warning("JSON→SQLite migration failed: %s", e)
-
     def _cfg(self) -> dict: return self._cached_config
 
     def _session_key(self, ctx: dict[str, Any]) -> str:
@@ -254,6 +253,7 @@ class GatewayServer:
                 result = await run_single_task(
                     task, session, gw_name, channel_id, source_channel,
                     self.router, self.store, self._cfg(),
+                    attachments=context.get("attachments"),
                 )
 
                 # --- Hooks: emit post-task event ---
