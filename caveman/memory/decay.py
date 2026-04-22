@@ -17,6 +17,8 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+
+from caveman.db import connect as db_connect
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -81,7 +83,7 @@ class MemoryDecay:
         if not self._db_path.exists():
             return result
 
-        conn = sqlite3.connect(str(self._db_path))
+        conn = db_connect((self._db_path))
         conn.row_factory = sqlite3.Row
 
         try:

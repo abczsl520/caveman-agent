@@ -102,13 +102,15 @@ def start(command: str = "", env: Optional[Dict[str, str]] = None) -> Dict[str, 
     full_env = {**os.environ, **(env or {})}
 
     try:
+        log_fd = open(_LOG_FILE, "a", encoding="utf-8")
         proc = subprocess.Popen(
             cmd.split(),
-            stdout=open(_LOG_FILE, "a", encoding="utf-8"),
+            stdout=log_fd,
             stderr=subprocess.STDOUT,
             env=full_env,
             start_new_session=True,
         )
+        log_fd.close()  # Popen has dup'd the fd; safe to close parent's copy
 
         # Write PID file
         _PID_FILE.parent.mkdir(parents=True, exist_ok=True)

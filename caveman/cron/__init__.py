@@ -13,6 +13,8 @@ import asyncio
 import json
 import logging
 import sqlite3
+
+from caveman.db import connect as db_connect
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -107,8 +109,7 @@ class CronStore:
 
     def __init__(self, db_path: Path | str):
         self._db_path = str(db_path)
-        self._conn = sqlite3.connect(self._db_path)
-        self._conn.row_factory = sqlite3.Row
+        self._conn = db_connect(self._db_path, row_factory=sqlite3.Row)
         self._conn.executescript(_CRON_SCHEMA)
 
     def add_job(self, job: CronJob) -> None:

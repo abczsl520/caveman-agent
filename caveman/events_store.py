@@ -11,6 +11,8 @@ import asyncio
 import json
 import logging
 import sqlite3
+
+from caveman.db import connect as db_connect
 from pathlib import Path
 from typing import Any, AsyncIterator
 
@@ -42,8 +44,7 @@ class EventStore:
     def __init__(self, db_path: Path | str | None = None) -> None:
         self._db_path = Path(db_path) if db_path else DEFAULT_EVENTS_DB
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(str(self._db_path))
-        self._conn.row_factory = sqlite3.Row
+        self._conn = db_connect(self._db_path, row_factory=sqlite3.Row)
         self._conn.executescript(_SCHEMA)
         self._session_id = ""
 

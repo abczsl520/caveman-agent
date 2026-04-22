@@ -7,6 +7,8 @@ logger = logging.getLogger(__name__)
 
 import json
 import sqlite3
+
+from caveman.db import connect as db_connect
 from pathlib import Path
 
 from caveman.paths import CAVEMAN_HOME
@@ -56,7 +58,7 @@ def memory_count() -> int:
     if not db.exists():
         return 0
     try:
-        conn = sqlite3.connect(str(db))
+        conn = db_connect(db)
         count = conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
         conn.close()
         return count
@@ -70,7 +72,7 @@ def memory_search_fts(query: str, limit: int = 5) -> list[str]:
     if not db.exists():
         return []
     try:
-        conn = sqlite3.connect(str(db))
+        conn = db_connect(db)
         rows = conn.execute(
             "SELECT content FROM memories_fts WHERE memories_fts MATCH ? LIMIT ?",
             (query, limit),
@@ -88,7 +90,7 @@ def memory_stats() -> tuple[int, dict[str, int]]:
     if not db.exists():
         return 0, {}
     try:
-        conn = sqlite3.connect(str(db))
+        conn = db_connect(db)
         total = conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
         cats = {}
         try:
@@ -118,7 +120,7 @@ def memory_recent(limit: int = 5) -> list[tuple[str, str, float]]:
     if not db.exists():
         return []
     try:
-        conn = sqlite3.connect(str(db))
+        conn = db_connect(db)
         rows = conn.execute(
             "SELECT content, type, trust_score FROM memories "
             "ORDER BY created_at DESC LIMIT ?", (limit,)
@@ -136,7 +138,7 @@ def memory_top_retrieved(limit: int = 5) -> list[tuple[str, int, float]]:
     if not db.exists():
         return []
     try:
-        conn = sqlite3.connect(str(db))
+        conn = db_connect(db)
         rows = conn.execute(
             "SELECT content, retrieval_count, trust_score FROM memories "
             "WHERE retrieval_count > 0 ORDER BY retrieval_count DESC LIMIT ?", (limit,)
@@ -154,7 +156,7 @@ def memory_high_trust(limit: int = 5) -> list[tuple[str, float, str]]:
     if not db.exists():
         return []
     try:
-        conn = sqlite3.connect(str(db))
+        conn = db_connect(db)
         rows = conn.execute(
             "SELECT content, trust_score, created_at FROM memories "
             "WHERE trust_score >= 0.7 ORDER BY trust_score DESC, created_at DESC LIMIT ?",

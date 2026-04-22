@@ -8,6 +8,8 @@ import asyncio
 import json
 import logging
 import sqlite3
+
+from caveman.db import connect as db_connect
 import threading
 import uuid
 from datetime import datetime
@@ -79,10 +81,7 @@ class SQLiteMemoryStore:
     def _get_conn(self) -> sqlite3.Connection:
         with self._conn_lock:
             if self._conn is None:
-                self._conn = sqlite3.connect(str(self.db_path))
-                self._conn.execute("PRAGMA journal_mode=WAL")
-                self._conn.execute("PRAGMA busy_timeout=5000")
-                self._conn.execute("PRAGMA foreign_keys=ON")
+                self._conn = db_connect(self.db_path)
                 self._conn.executescript(_SCHEMA)
                 migrate_schema(self._conn)
             return self._conn
