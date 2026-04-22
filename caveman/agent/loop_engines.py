@@ -11,18 +11,41 @@ __all__ = [
     "check_termination",
     "update_shield",
     "run_preemptive_compaction",
+    "build_user_content",
 ]
 
 
 logger = logging.getLogger(__name__)
 
 
-async def prepare_multi_turn(loop, task: str, recalled_ids: list[str]) -> tuple:
+def build_user_content(task: str, attachments: list[dict[str, str]] | None = None) -> str | list:
+    """Build user message content with optional vision image blocks.
+
+    Returns plain string if no image attachments, or a list of content blocks
+    (text + image_url) for multimodal messages.
+    """
+    if not attachments:
+        return task
+    image_atts = [a for a in attachments if a.get("content_type", "").startswith("image/")]
+    if not image_atts:
+        return task
+    blocks: list[dict] = [{"type": "text", "text": task}]
+    for att in image_atts:
+        blocks.append({
+            "type": "image_url",
+            "image_url": {"url": att["url"]},
+        })
+    return blocks
+
+
+
+async def prepare_multi_turn(loop, task: str, recalled_ids: list[str], attachments: list[dict[str, str]] | None = None) -> tuple:
     """Reuse context, re-recall memories, rebuild prompt if needed."""
     from caveman.agent.response_style import get_format_reminder
     from caveman.agent.prompt import build_system_prompt
     context = loop._persistent_context
-    context.add_message("user", task)
+    user_content = build_user_content(task, attachments)
+    context.add_message("user", user_content)
     reminder = get_format_reminder(loop.surface)
     if reminder:
         context.add_message("system", reminder, ephemeral=True)

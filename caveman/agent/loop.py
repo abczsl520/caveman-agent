@@ -91,7 +91,6 @@ class AgentLoop(BackgroundTaskMixin):
                 _c._bus = self.bus
         self.engine_flags = engine_flags or EngineFlags()
         self._llm_fn = llm_fn
-        # EngineManager: unified lifecycle with LLM Scheduler + priority
         _em = EngineManager(
             flags=self.engine_flags, memory_manager=self.memory_manager,
             skill_manager=self.skill_manager, llm_fn=llm_fn, bus=self.bus,
@@ -207,9 +206,9 @@ class AgentLoop(BackgroundTaskMixin):
                 tool_schemas=self.tool_registry.get_schemas(), surface=self.surface,
                 conversation_state=self._conversation_state)
         logger.info("Restore: prompt=%d chars, persisted=%s", len(self._system_prompt_cache), bool(persisted))
-    async def _prepare_multi_turn(self, task: str, recalled_ids: list[str]):
+    async def _prepare_multi_turn(self, task: str, recalled_ids: list[str], attachments=None):
         from caveman.agent.loop_engines import prepare_multi_turn
-        return await prepare_multi_turn(self, task, recalled_ids)
+        return await prepare_multi_turn(self, task, recalled_ids, attachments=attachments)
     async def _post_task_engines(self, context, task, result, matched_skills):
         from caveman.agent.loop_engines import post_task_engines
         await post_task_engines(self, context, task, result, matched_skills)
@@ -223,7 +222,7 @@ class AgentLoop(BackgroundTaskMixin):
             if ev.type == "done": result = str(ev.data) if ev.data else ""
             elif ev.type == "error": raise RuntimeError(str(ev.data))
         return result
-    async def run_stream(self, task: str, system_prompt: str | None = None) -> AsyncIterator[StreamEvent]:
+    async def run_stream(self, task: str, system_prompt: str | None = None, attachments: list[dict[str, str]] | None = None) -> AsyncIterator[StreamEvent]:
         """Streaming execution — the SINGLE implementation. run() delegates here."""
         _turn_start = _time.monotonic()
         self._nudge_task_ref = task
@@ -236,7 +235,7 @@ class AgentLoop(BackgroundTaskMixin):
                 _recalled_ids.extend(event.data["recalled_ids"])
         self.bus.on(EventType.MEMORY_RECALL, _capture_recalled)
         if self._persistent_context is not None and self._turn_number > 1:
-            context, system, matched_skills = await self._prepare_multi_turn(task, _recalled_ids)
+            context, system, matched_skills = await self._prepare_multi_turn(task, _recalled_ids, attachments=attachments)
         else:
             context, system, matched_skills = await phase_prepare(
                 task, system_prompt, self.provider, self.skill_manager,
@@ -244,6 +243,7 @@ class AgentLoop(BackgroundTaskMixin):
                 self._recall, self.engine_flags, self.bus, self.tool_registry,
                 surface=self.surface,
                 conversation_state=self._conversation_state,
+                attachments=attachments,
             )
             self._system_prompt_cache = system
         self.bus.off(EventType.MEMORY_RECALL, _capture_recalled)

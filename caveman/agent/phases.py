@@ -54,6 +54,7 @@ async def phase_prepare(
     tool_registry,
     surface: str = "cli",
     conversation_state=None,
+    attachments: list[dict[str, str]] | None = None,
 ) -> tuple[AgentContext, str, list]:
     """Load context, skills, memories. Return (context, system_prompt, matched_skills)."""
     # Cap task length to prevent FTS5/recall waste on extremely long inputs
@@ -116,7 +117,9 @@ async def phase_prepare(
     from caveman.agent.response_style import get_format_reminder
     reminder = get_format_reminder(surface)
 
-    context.add_message("user", task)
+    from caveman.agent.loop_engines import build_user_content
+    user_content = build_user_content(task, attachments)
+    context.add_message("user", user_content)
     if reminder:
         context.add_message("system", reminder, ephemeral=True)
     await trajectory_recorder.record_turn("human", task)
