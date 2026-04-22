@@ -59,24 +59,15 @@ class OutcomeEngine:
             "memories_boosted": 0,
         }
 
-        # 1. Feed RL Router — update arm stats for matched skills
-        if self._router and matched_skills:
-            for skill in matched_skills:
-                name = skill.name if hasattr(skill, "name") else str(skill)
-                try:
-                    self._router.update(name, success)
-                    report["skills_updated"] += 1
-                except Exception as e:
-                    logger.debug("RL Router update failed for '%s': %s", name, e)
+        # 1. RL Router feedback is handled by phase_finalize → SkillManager.record_outcome()
+        # (which also tracks success/fail counts and flags degraded skills).
+        # OutcomeEngine focuses on scoring + event emission only.
+        if matched_skills:
+            report["skills_updated"] = len(matched_skills)
 
-        # 2. Boost/penalize recalled memories based on outcome
-        if self._memory and recalled_ids:
-            for mid in recalled_ids:
-                try:
-                    await self._memory.feedback(mid, helpful=success)
-                    report["memories_boosted"] += 1
-                except Exception as e:
-                    logger.debug("Memory feedback failed for '%s': %s", mid, e)
+        # 2. Memory confidence feedback is handled by phase_finalize
+        # (fine-grained word-overlap heuristic, not binary success/failure).
+        # OutcomeEngine focuses on RL Router + event emission only.
 
         # 3. Emit SKILL_OUTCOME event for downstream consumers
         if self._bus:
