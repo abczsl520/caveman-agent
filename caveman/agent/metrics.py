@@ -26,7 +26,7 @@ class AgentMetrics:
         self._counters[name] += amount
 
     @contextmanager
-    def timer(self, name: str):
+    def timer(self, name: str) -> None:
         """Context manager that records elapsed time."""
         start = time.monotonic()
         try:

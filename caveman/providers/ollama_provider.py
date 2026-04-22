@@ -23,6 +23,7 @@ from caveman.providers.retry import jittered_backoff
 logger = logging.getLogger(__name__)
 
 from caveman.paths import DEFAULT_OLLAMA_URL
+from caveman.timeouts import OLLAMA_DEFAULT, OLLAMA_HEALTH
 DEFAULT_MODEL = "llama3.2"
 
 
@@ -67,8 +68,13 @@ class OllamaProvider(LLMProvider):
     def _get_client(self) -> Any:
         if self._client is None:
             import httpx
-            self._client = httpx.AsyncClient(base_url=self._base_url, timeout=120.0)
+            self._client = httpx.AsyncClient(base_url=self._base_url, timeout=OLLAMA_DEFAULT)
         return self._client
+
+    async def close(self) -> None:
+        if self._client is not None:
+            await self._client.aclose()
+            self._client = None
 
     def _build_params(
         self,
@@ -271,24 +277,26 @@ class OllamaProvider(LLMProvider):
         """Check if Ollama is running and the model is available."""
         import httpx
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
+            async with httpx.AsyncClient(timeout=OLLAMA_HEALTH) as client:
                 resp = await client.get(f"{self._base_url}/api/tags")
                 if resp.status_code != 200:
                     return False
                 data = resp.json()
                 models = [m.get("name", "") for m in data.get("models", [])]
                 return any(self.model in m for m in models)
-        except Exception:
+        except Exception as e:
+            logger.debug("suppressed: %s", e)
             return False
 
     async def list_models(self) -> list[str]:
         """List available models on the Ollama instance."""
         import httpx
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
+            async with httpx.AsyncClient(timeout=OLLAMA_HEALTH) as client:
                 resp = await client.get(f"{self._base_url}/api/tags")
                 resp.raise_for_status()
                 data = resp.json()
                 return [m.get("name", "") for m in data.get("models", [])]
-        except Exception:
+        except Exception as e:
+            logger.debug("suppressed: %s", e)
             return []

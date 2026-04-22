@@ -81,7 +81,7 @@ class OpenClawBridge:
 
     async def _try_websocket(self) -> _Transport | None:
         try:
-            from caveman.bridge.ws_transport import WSTransport
+            from caveman.bridge.ws_transport import WSTransport  # noqa: F401
         except ImportError:
             return None
 
@@ -139,7 +139,7 @@ class OpenClawBridge:
             desc = f"[OpenClaw] {tool.get('description', '')}"
             tool_name = tool["name"]
 
-            async def call_wrapper(_tn=tool_name, **kwargs):
+            async def call_wrapper(_tn=tool_name, **kwargs) -> Any:
                 return await self.call_tool(_tn, kwargs)
 
             registry.register(name, call_wrapper, desc, tool.get("inputSchema", {"type": "object"}))
@@ -199,19 +199,19 @@ class _CLIAdapter(_Transport):
     async def disconnect(self) -> None:
         await self._inner.disconnect()
 
-    async def send_message(self, message, channel, target):
+    async def send_message(self, message, channel, target) -> Any:
         return await self._inner.send_message(message, channel, target)
 
-    async def agent_turn(self, message, **kwargs):
+    async def agent_turn(self, message, **kwargs) -> Any:
         return await self._inner.agent_turn(message, **kwargs)
 
-    async def list_tools(self):
+    async def list_tools(self) -> Any:
         return await self._inner.list_tools()
 
-    async def call_tool(self, tool_name, args):
+    async def call_tool(self, tool_name, args) -> Any:
         return await self._inner.call_tool(tool_name, args)
 
-    def get_tool_schemas(self):
+    def get_tool_schemas(self) -> Any:
         return self._inner.get_tool_schemas()
 
 
@@ -230,7 +230,7 @@ class _WSAdapter(_Transport):
         return "websocket"
 
     async def connect(self) -> bool:
-        from caveman.bridge.ws_transport import WSTransport
+        from caveman.bridge.ws_transport import WSTransport  # noqa: F401
         self._ws = WSTransport(
             url=self._url, token=self._token, password=self._password,
             session_key=self._session_key, agent_id=self._agent_id,
@@ -241,23 +241,23 @@ class _WSAdapter(_Transport):
         if self._ws:
             await self._ws.disconnect()
 
-    async def send_message(self, message, channel, target):
+    async def send_message(self, message, channel, target) -> Any:
         assert self._ws
         return await self._ws.send_message(message, channel=channel or "discord", target=target or "")
 
-    async def agent_turn(self, message, **kwargs):
+    async def agent_turn(self, message, **kwargs) -> Any:
         assert self._ws
         return await self._ws.agent_turn(message)
 
-    async def list_tools(self):
+    async def list_tools(self) -> Any:
         assert self._ws
         return await self._ws.list_tools()
 
-    async def call_tool(self, tool_name, args):
+    async def call_tool(self, tool_name, args) -> Any:
         assert self._ws
         return await self._ws.call_tool(tool_name, args)
 
-    def get_tool_schemas(self):
+    def get_tool_schemas(self) -> list:
         if not self._ws:
             return []
         return [

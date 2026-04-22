@@ -31,14 +31,13 @@ import json
 import logging
 import os
 import tempfile
-import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from caveman.errors import CavemanError
-from caveman.paths import MEMORY_DIR, WIKI_DIR
+from caveman.paths import WIKI_DIR
 
 logger = logging.getLogger(__name__)
 

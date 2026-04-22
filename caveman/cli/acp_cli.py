@@ -11,7 +11,7 @@ def acp_serve(
     host: str = typer.Option("127.0.0.1", "--host", help="Bind address"),
     port: int = typer.Option(8766, "--port", "-p", help="Bind port"),
     model: str = typer.Option("claude-opus-4-6", "--model", "-m", help="LLM model"),
-):
+) -> None:
     """Start ACP server — expose Caveman as an ACP-compatible agent."""
     import asyncio
     from caveman.cli.tui import show_banner
@@ -35,7 +35,7 @@ def acp_serve(
             while True:
                 await asyncio.sleep(3600)
         except asyncio.CancelledError:
-            pass
+            pass  # intentional: Exception suppressed
         finally:
             await server.stop()
 
@@ -47,9 +47,9 @@ def acp_serve(
 
 @app.command(name="acp-send")
 def acp_send(
-    url: str = typer.Argument(..., help="ACP agent URL (e.g. http://localhost:8766)"),
+    url: str = typer.Argument(..., help="ACP agent URL (e.g. http://localhost -> None:8766)"),
     message: str = typer.Argument(..., help="Message to send"),
-):
+) -> None:
     """Send a task to a remote ACP agent."""
     import asyncio
 

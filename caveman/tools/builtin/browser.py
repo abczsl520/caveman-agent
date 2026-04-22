@@ -1,14 +1,12 @@
 """Browser automation tool — @tool-decorated, lifecycle-aware.
 
-Provides browser control as a Caveman tool via the declarative @tool system:
-  - Navigate to URLs
-  - Take snapshots (accessibility tree)
-  - Click, type, interact with elements
-  - Screenshot for visual verification
-
 Two backends:
   1. OpenClaw bridge: Use OpenClaw's browser tool via MCP
-  2. Direct Playwright: Standalone browser automation (fallback)
+  2. Direct Playwright via BrowserManager: Multi-tab, SSRF-safe, cookies
+
+Actions: navigate, snapshot, click, type, screenshot, evaluate,
+         close, new_tab, close_tab, focus_tab, list_tabs, scroll,
+         press, pdf, console
 """
 from __future__ import annotations
 import logging
@@ -18,54 +16,38 @@ from caveman.tools.registry import tool
 
 logger = logging.getLogger(__name__)
 
-# ── Module-level state (initialized via set_bridge / ensure_playwright) ──
-
 _bridge = None
-_playwright_ctx: dict[str, Any] = {"pw": None, "browser": None, "page": None}
+_manager = None  # BrowserManager instance
 
 
 def set_bridge(bridge) -> None:
-    """Set the OpenClaw bridge for browser operations."""
     global _bridge
     _bridge = bridge
 
 
-async def _ensure_playwright() -> Any:
-    """Lazy-init Playwright, return page. Raises on missing dependency."""
-    if _playwright_ctx["page"]:
-        return _playwright_ctx["page"]
-    try:
-        from playwright.async_api import async_playwright
-        pw = await async_playwright().start()
-        browser = await pw.chromium.launch(headless=True)
-        page = await browser.new_page()
-        _playwright_ctx.update(pw=pw, browser=browser, page=page)
-        return page
-    except ImportError:
-        raise RuntimeError(
-            "Playwright not installed. Install with: pip install playwright && playwright install chromium"
-        )
+async def _ensure_manager():
+    """Lazy-init BrowserManager."""
+    global _manager
+    if _manager and _manager.active_page:
+        return _manager
+    from caveman.tools.builtin.browser_manager import BrowserManager
+    _manager = BrowserManager(headless=True, ssrf_protection=True)
+    await _manager.start()
+    return _manager
 
 
 async def close_browser() -> None:
-    """Close browser resources. Called by lifecycle shutdown."""
-    if _playwright_ctx["browser"]:
-        await _playwright_ctx["browser"].close()
-        _playwright_ctx["browser"] = None
-    if _playwright_ctx["pw"]:
-        await _playwright_ctx["pw"].stop()
-        _playwright_ctx["pw"] = None
-    _playwright_ctx["page"] = None
+    global _manager
+    if _manager:
+        await _manager.stop()
+        _manager = None
 
 
 def _mode() -> str:
     return "bridge" if _bridge else "standalone"
 
 
-# ── Bridge helpers ──
-
 async def _bridge_call(action: str, **kwargs) -> dict[str, Any]:
-    """Call OpenClaw browser tool via bridge."""
     try:
         result = await _bridge.call_tool("browser", {"action": action, **kwargs})
         return {"ok": True, "data": result.get("result", "")}
@@ -73,23 +55,29 @@ async def _bridge_call(action: str, **kwargs) -> dict[str, Any]:
         return {"ok": False, "error": str(e)}
 
 
-# ── The @tool-decorated entry point ──
-
 @tool(
     name="browser",
-    description="Browser automation: navigate, snapshot, click, type, screenshot, evaluate",
+    description="Browser automation: navigate, snapshot, click, type, screenshot, evaluate, tabs, scroll, pdf, console",
     params={
         "action": {
             "type": "string",
-            "enum": ["navigate", "snapshot", "click", "type", "screenshot", "evaluate", "close"],
+            "enum": [
+                "navigate", "snapshot", "click", "type", "screenshot",
+                "evaluate", "close", "new_tab", "close_tab", "focus_tab",
+                "list_tabs", "scroll", "press", "pdf", "console",
+            ],
             "description": "Browser action to perform",
         },
         "url": {"type": "string", "description": "URL for navigate"},
-        "ref": {"type": "string", "description": "Element reference for click/type"},
+        "ref": {"type": "string", "description": "Element selector for click/type"},
         "text": {"type": "string", "description": "Text for type action"},
         "js": {"type": "string", "description": "JavaScript for evaluate"},
         "full_page": {"type": "boolean", "description": "Full page screenshot"},
         "compact": {"type": "boolean", "description": "Compact snapshot mode"},
+        "tab_id": {"type": "string", "description": "Tab ID for tab operations"},
+        "direction": {"type": "string", "description": "Scroll direction (up/down)"},
+        "key": {"type": "string", "description": "Key for press action"},
+        "path": {"type": "string", "description": "File path for pdf/screenshot save"},
     },
     required=["action"],
 )
@@ -101,93 +89,59 @@ async def browser_dispatch(
     js: str = "",
     full_page: bool = False,
     compact: bool = True,
+    tab_id: str = "",
+    direction: str = "down",
+    key: str = "",
+    path: str = "",
 ) -> dict:
-    """Dispatch browser action by name. Works with bridge or standalone Playwright."""
-    dispatch_table = {
-        "navigate": lambda: _do_navigate(url),
-        "snapshot": lambda: _do_snapshot(compact),
-        "click": lambda: _do_click(ref),
-        "type": lambda: _do_type(ref, text),
-        "screenshot": lambda: _do_screenshot(full_page),
-        "evaluate": lambda: _do_evaluate(js),
-        "close": lambda: _do_close(),
-    }
-    handler = dispatch_table.get(action)
-    if not handler:
-        return {"ok": False, "error": f"Unknown browser action: {action}"}
-    return await handler()
+    """Dispatch browser action."""
+    # Bridge mode — delegate to OpenClaw
+    if _mode() == "bridge" and action in ("navigate", "snapshot", "click", "type", "screenshot", "evaluate"):
+        return await _bridge_call(action, url=url, ref=ref, text=text, js=js,
+                                  full_page=full_page, compact=compact)
 
+    # Standalone mode — use BrowserManager
+    mgr = await _ensure_manager()
 
-# ── Action implementations (bridge-first, Playwright fallback) ──
-
-async def _do_navigate(url: str) -> dict:
-    if _mode() == "bridge":
-        return await _bridge_call("navigate", url=url)
-    page = await _ensure_playwright()
-    try:
-        from caveman.paths import BROWSER_NAV_TIMEOUT
-        await page.goto(url, wait_until="domcontentloaded", timeout=BROWSER_NAV_TIMEOUT)
-        return {"ok": True, "url": page.url, "title": await page.title()}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
-
-
-async def _do_snapshot(compact: bool) -> dict:
-    if _mode() == "bridge":
-        return await _bridge_call("snapshot", compact=compact)
-    page = await _ensure_playwright()
-    try:
-        tree = await page.accessibility.snapshot()
-        return {"ok": True, "data": tree}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
-
-
-async def _do_click(ref: str) -> dict:
-    if _mode() == "bridge":
-        return await _bridge_call("act", kind="click", ref=ref)
-    page = await _ensure_playwright()
-    try:
-        from caveman.paths import BROWSER_CLICK_TIMEOUT
-        await page.click(ref, timeout=BROWSER_CLICK_TIMEOUT)
+    if action == "navigate":
+        return await mgr.navigate(url)
+    if action == "snapshot":
+        return await mgr.snapshot(compact)
+    if action == "click":
+        return await mgr.click(ref)
+    if action == "type":
+        return await mgr.fill(ref, text)
+    if action == "screenshot":
+        return await mgr.screenshot(full_page=full_page, path=path or None)
+    if action == "evaluate":
+        return await mgr.evaluate(js)
+    if action == "scroll":
+        return await mgr.scroll(direction)
+    if action == "press":
+        return await mgr.press(key)
+    if action == "pdf":
+        return await mgr.pdf(path or "/tmp/page.pdf")
+    if action == "console":
+        logs = mgr.get_console_logs(tab_id)
+        return {"ok": True, "logs": logs[-50:], "total": len(logs)}
+    if action == "new_tab":
+        tid = await mgr.new_tab(tab_id)
+        return {"ok": True, "tab_id": tid}
+    if action == "close_tab":
+        return {"ok": mgr.close_tab(tab_id) if tab_id else False}
+    if action == "focus_tab":
+        return {"ok": mgr.focus_tab(tab_id) if tab_id else False}
+    if action == "list_tabs":
+        return {"ok": True, "tabs": mgr.list_tabs()}
+    if action == "close":
+        await close_browser()
         return {"ok": True}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
 
+    return {"ok": False, "error": f"Unknown action: {action}"}
 
-async def _do_type(ref: str, text: str) -> dict:
-    if _mode() == "bridge":
-        return await _bridge_call("act", kind="type", ref=ref, text=text)
-    page = await _ensure_playwright()
-    try:
-        await page.fill(ref, text)
-        return {"ok": True}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
+__all__ = [
+    "set_bridge",
+    "close_browser",
+    "browser_dispatch",
+]
 
-
-async def _do_screenshot(full_page: bool) -> dict:
-    if _mode() == "bridge":
-        return await _bridge_call("screenshot", fullPage=full_page)
-    page = await _ensure_playwright()
-    try:
-        buf = await page.screenshot(full_page=full_page)
-        return {"ok": True, "size": len(buf)}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
-
-
-async def _do_evaluate(js: str) -> dict:
-    if _mode() == "bridge":
-        return await _bridge_call("act", kind="evaluate", fn=js)
-    page = await _ensure_playwright()
-    try:
-        result = await page.evaluate(js)
-        return {"ok": True, "result": result}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
-
-
-async def _do_close() -> dict:
-    await close_browser()
-    return {"ok": True}

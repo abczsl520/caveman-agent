@@ -1,5 +1,9 @@
 """Memory provider abstraction — pluggable backends.
 
+.. deprecated:: 0.3.0
+    This module is dead code. The production MemoryManager lives in
+    caveman.memory.manager. Will be removed in 0.4.0.
+
 Ported from Hermes MemoryProvider ABC (MIT, Nous Research) with Caveman
 adaptations. Simplified to essential hooks for single-user agent.
 

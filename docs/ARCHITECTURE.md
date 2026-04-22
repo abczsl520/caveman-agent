@@ -24,23 +24,29 @@ Three pillars:
 ## 2. System Overview
 
 ```
-caveman/                    # 20 subsystems, 159 Python files
-├── agent/                  # Core agent loop + execution
+caveman/                    # 25 subsystems, 399 Python files, 72.2K LOC
+├── acp/                    # Agent Communication Protocol (orchestrate external coding agents)
+├── agent/                  # Core agent loop + execution + factory + prompt building
 ├── bridge/                 # External agent bridges (Hermes, OpenClaw, CLI agents)
-├── cli/                    # CLI entry points + TUI
+├── cli/                    # CLI entry points + TUI + Doctor
+├── commands/               # Slash command registration + handlers
 ├── compression/            # 3-layer context compression pipeline
 ├── config/                 # YAML config loader + validation
 ├── coordinator/            # Multi-agent orchestration + verification
+├── cron/                   # Scheduled task execution
 ├── engines/                # 6 cognitive engines (the flywheel)
-├── gateway/                # Messaging gateways (Telegram, Discord)
+├── environments/           # Runtime environment detection + adaptation
+├── gateway/                # Discord + Telegram + message_splitting (canonical)
 ├── hub/                    # Hub client for agent registry
+├── import_/                # External data import pipelines
 ├── mcp/                    # MCP server + client
 ├── memory/                 # SQLite+FTS5 memory with hybrid retrieval
 ├── plugins/                # Plugin system
 ├── providers/              # LLM providers (Anthropic, OpenAI, Ollama)
+├── sandbox/                # Sandboxed execution (Docker/process isolation)
 ├── security/               # Sandbox, encryption, PII redaction, scanning
 ├── skills/                 # Skill management, execution, RL routing
-├── tools/                  # 30 built-in tools
+├── tools/                  # 91 @tool registrations (first-wins dedup)
 │   └── builtin/            # Tool implementations
 ├── training/               # Embedding fine-tuning, SFT/RL data export
 ├── trajectory/             # Trajectory recording, scoring, compression
@@ -62,7 +68,7 @@ User Task
 │     ├── Base identity                        │
 │     ├── Wiki context (compiled knowledge)    │
 │     ├── Recall context (restored memories)   │
-│     └── Tool schemas (30 tools)              │
+│     └── Tool schemas (91 tools, first-wins dedup)              │
 │                                              │
 │  2. LLM call (streaming)                     │
 │     └── Provider abstraction (providers/)    │
@@ -239,7 +245,9 @@ Context too large?
 
 ## 7. Tools System
 
-`caveman/tools/` provides 30 built-in tools with a registry pattern.
+`caveman/tools/` provides 91 built-in tools with a registry pattern.
+
+**Deduplication:** ToolRegistry uses first-wins semantics — when multiple modules register a tool with the same name, only the first registration is kept (line 116-118: `if meta["name"] not in self._tools`). This allows v1/v2 coexistence without conflicts; v2 modules can provide unique tools while their duplicates are silently ignored.
 
 ```
 ToolRegistry
@@ -285,13 +293,24 @@ Context injection: tools that need access to internal systems (e.g., memory_tool
 
 ## 10. Gateway
 
-`caveman/gateway/` provides messaging platform integration.
+`caveman/gateway/` provides messaging platform integration for 7+ platforms.
 
-- `telegram_gw.py` — Telegram bot gateway
-- `discord_gw.py` — Discord bot gateway
+**Platform adapters:**
+- `telegram_gw.py` / `telegram_adapter.py` — Telegram
+- `discord_gw.py` / `discord_adapter.py` — Discord
+- `slack_gw.py` / `slack_adapter.py` — Slack
+- `feishu_adapter.py` — Feishu/Lark
+- `matrix_adapter.py` — Matrix
+- `signal_adapter.py` — Signal
+- `whatsapp_adapter.py` — WhatsApp
+
+**Infrastructure:**
+- `platform_adapter.py` — Base adapter (message splitting, media extraction)
 - `router.py` — Message routing between gateways
 - `runner.py` — Gateway lifecycle management
-- `base.py` — Gateway ABC
+- `message_splitting.py` — Unified message chunking (code-fence aware, all adapters delegate here)
+- `message_pipeline.py` — Outbound message processing pipeline
+- `outbound.py` — Delivery orchestration
 
 Session isolation and error info leak prevention are enforced.
 
@@ -324,8 +343,9 @@ Session isolation and error info leak prevention are enforced.
 - `sandbox.py` — Command execution sandboxing (fail-closed)
 - `encryption.py` — E2E encryption for sensitive memories
 - `redact.py` — PII redaction
-- `scanner.py` — Security scanning for stored content
-- `permissions.py` — Permission management
+- `scanner.py` — 12-pattern secret scanning (API keys, tokens, credentials)
+- `permissions.py` — AUTO/ASK/DENY three-tier permission model (fail-closed: ASK without callback → DENY)
+- `path_safety.py` — Blocked path enforcement (sensitive directories)
 
 ## 14. Training Pipeline
 
@@ -457,7 +477,7 @@ Optional:
 
 ## 20. Testing
 
-1,253 tests across 71 test files:
+2,929 tests across 160 test files:
 - Unit tests with mocks for isolated component testing
 - Integration tests verifying real interactions between subsystems
 - E2E tests for full lifecycle verification

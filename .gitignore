@@ -41,3 +41,13 @@ hermes-src/
 openclaw-src/
 gateway_sessions/
 *.log
+
+# Sensitive / personal data — never push
+memory/
+*.env
+.env.*
+config.yaml
+hermes-src/
+openclaw-src/
+.caveman/
+test-key

@@ -14,9 +14,19 @@ from __future__ import annotations
 import logging
 import re
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
-from typing import Optional
+
+__all__ = [
+    "REQUIRED_SECTIONS",
+    "SafeguardPhase",
+    "SafeguardState",
+    "CompactionSafeguard",
+    "extract_identifiers",
+    "audit_summary",
+    "build_compaction_instructions",
+]
+
 
 logger = logging.getLogger(__name__)
 

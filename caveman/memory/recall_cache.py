@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import hashlib
 import time
-from typing import Any
 
 from .types import MemoryType
 

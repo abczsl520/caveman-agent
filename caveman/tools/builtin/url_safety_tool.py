@@ -27,8 +27,17 @@ _IP_PATTERN = re.compile(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$")
     required=["url"],
 )
 async def url_check(url: str) -> dict:
-    """Check a URL for suspicious patterns."""
+    """Check a URL for suspicious patterns and website policy."""
     warnings: list[str] = []
+
+    # Website policy check (blocklist/allowlist)
+    try:
+        from caveman.security.website_policy import check_url
+        allowed, reason = check_url(url)
+        if not allowed:
+            return {"ok": True, "safe": False, "warnings": [f"Blocked by policy: {reason}"], "domain": ""}
+    except Exception:
+        pass  # Policy check is optional
 
     # Basic parse
     try:

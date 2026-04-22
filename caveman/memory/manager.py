@@ -17,6 +17,7 @@ from .types import MemoryType, MemoryEntry
 from .retrieval import HybridScorer, tokenize
 from .recall_cache import RecallCache
 from caveman.utils import cosine_similarity as _cosine_similarity
+from caveman.aio import aio_exists, aio_read_text, aio_write_text
 
 if TYPE_CHECKING:
     from .backend import MemoryBackend
@@ -261,13 +262,13 @@ class MemoryManager:
                 for e in self._memories.get(mt, [])
             ]
             tmp = path.with_suffix(".tmp")
-            tmp.write_text(json.dumps(entries, ensure_ascii=False, indent=2), encoding="utf-8")
+            await aio_write_text(tmp, json.dumps(entries, ensure_ascii=False, indent=2), encoding="utf-8")
             tmp.replace(path)
 
         if self._embeddings:
             emb_path = self.base_dir / "_embeddings.json"
             emb_tmp = emb_path.with_suffix(".tmp")
-            emb_tmp.write_text(json.dumps(self._embeddings, ensure_ascii=False), encoding="utf-8")
+            await aio_write_text(emb_tmp, json.dumps(self._embeddings, ensure_ascii=False), encoding="utf-8")
             emb_tmp.replace(emb_path)
 
     async def load(self) -> None:
@@ -275,10 +276,10 @@ class MemoryManager:
             return
         for mt in MemoryType:
             path = self.base_dir / f"{mt.value}.json"
-            if not path.exists():
+            if not await aio_exists(path):
                 continue
             try:
-                data = json.loads(path.read_text(encoding="utf-8"))
+                data = json.loads(await aio_read_text(path, encoding="utf-8"))
                 self._memories[mt] = [
                     MemoryEntry(
                         id=e["id"], content=e["content"],
@@ -292,9 +293,9 @@ class MemoryManager:
                 logger.warning("Failed to load memories from %s: %s", path, e)
 
         emb_path = self.base_dir / "_embeddings.json"
-        if emb_path.exists():
+        if await aio_exists(emb_path):
             try:
-                self._embeddings = json.loads(emb_path.read_text(encoding="utf-8"))
+                self._embeddings = json.loads(await aio_read_text(emb_path, encoding="utf-8"))
             except json.JSONDecodeError as e:
                 logger.warning("Failed to load embeddings: %s", e)
 
@@ -344,4 +345,4 @@ class MemoryManager:
         return ids
 
     async def recall_batch(self, queries: list[str], limit: int = 5) -> list[list[MemoryEntry]]:
-        return [await self.recall(q, top_k=limit) for q in queries]
+        return list(await asyncio.gather(*(self.recall(q, top_k=limit) for q in queries)))

@@ -8,10 +8,14 @@ import time
 from pathlib import Path
 
 from caveman.tools.registry import tool
+from caveman.aio import aio_exists, aio_mkdir, aio_read_bytes, aio_write_bytes
 
 logger = logging.getLogger(__name__)
 
-_OUTPUT_DIR = Path.home() / ".caveman" / "generated_images"
+from caveman.paths import CAVEMAN_HOME
+from caveman.timeouts import HTTP_IMAGE_GEN
+
+_OUTPUT_DIR = CAVEMAN_HOME / "generated_images"
 
 
 @tool(
@@ -28,7 +32,7 @@ async def image_generate(prompt: str, model: str = "dall-e-3", size: str = "1024
     """Generate an image from a text prompt."""
     import httpx
 
-    _OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    await aio_mkdir(_OUTPUT_DIR, parents=True, exist_ok=True)
 
     try:
         if model.startswith("stable-"):
@@ -48,7 +52,7 @@ async def _generate_dalle(prompt: str, model: str, size: str) -> dict:
     if not api_key:
         return {"ok": False, "error": "OPENAI_API_KEY not set"}
 
-    async with httpx.AsyncClient(timeout=120) as client:
+    async with httpx.AsyncClient(timeout=HTTP_IMAGE_GEN) as client:
         resp = await client.post(
             "https://api.openai.com/v1/images/generations",
             headers={"Authorization": f"Bearer {api_key}"},
@@ -64,7 +68,7 @@ async def _generate_dalle(prompt: str, model: str, size: str) -> dict:
     ts = int(time.time())
     h = hashlib.md5(prompt.encode()).hexdigest()[:8]
     out_path = _OUTPUT_DIR / f"{ts}_{h}.png"
-    out_path.write_bytes(base64.b64decode(b64))
+    await aio_write_bytes(out_path, base64.b64decode(b64))
 
     return {"ok": True, "path": str(out_path), "url": "", "revised_prompt": revised}
 
@@ -78,7 +82,7 @@ async def _generate_stability(prompt: str, model: str, size: str) -> dict:
         return {"ok": False, "error": "STABILITY_API_KEY not set"}
 
     w, h_val = (int(x) for x in size.split("x"))
-    async with httpx.AsyncClient(timeout=120) as client:
+    async with httpx.AsyncClient(timeout=HTTP_IMAGE_GEN) as client:
         resp = await client.post(
             "https://api.stability.ai/v1/generation/stable-diffusion-xl-1024-v1-0/text-to-image",
             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
@@ -91,7 +95,7 @@ async def _generate_stability(prompt: str, model: str, size: str) -> dict:
     ts = int(time.time())
     h = hashlib.md5(prompt.encode()).hexdigest()[:8]
     out_path = _OUTPUT_DIR / f"{ts}_{h}.png"
-    out_path.write_bytes(base64.b64decode(b64))
+    await aio_write_bytes(out_path, base64.b64decode(b64))
 
     return {"ok": True, "path": str(out_path), "url": "", "revised_prompt": prompt}
 
@@ -112,18 +116,18 @@ async def image_edit(image_path: str, prompt: str, model: str = "dall-e-2") -> d
     import base64
 
     path = Path(image_path)
-    if not path.exists():
+    if not await aio_exists(path):
         return {"ok": False, "error": f"Image not found: {image_path}"}
 
     api_key = os.environ.get("OPENAI_API_KEY", "")
     if not api_key:
         return {"ok": False, "error": "OPENAI_API_KEY not set"}
 
-    _OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    await aio_mkdir(_OUTPUT_DIR, parents=True, exist_ok=True)
 
     try:
-        img_bytes = path.read_bytes()
-        async with httpx.AsyncClient(timeout=120) as client:
+        img_bytes = await aio_read_bytes(path)
+        async with httpx.AsyncClient(timeout=HTTP_IMAGE_GEN) as client:
             resp = await client.post(
                 "https://api.openai.com/v1/images/edits",
                 headers={"Authorization": f"Bearer {api_key}"},
@@ -137,7 +141,7 @@ async def image_edit(image_path: str, prompt: str, model: str = "dall-e-2") -> d
         ts = int(time.time())
         h = hashlib.md5(prompt.encode()).hexdigest()[:8]
         out_path = _OUTPUT_DIR / f"{ts}_{h}_edit.png"
-        out_path.write_bytes(base64.b64decode(b64))
+        await aio_write_bytes(out_path, base64.b64decode(b64))
 
         return {"ok": True, "path": str(out_path)}
     except httpx.HTTPError as e:

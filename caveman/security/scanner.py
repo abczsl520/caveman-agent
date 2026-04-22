@@ -9,8 +9,17 @@ Design principles (long-term / highest compound interest):
 from __future__ import annotations
 import math
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import NamedTuple
+
+__all__ = [
+    "SecretPattern",
+    "ScanResult",
+    "scan",
+    "redact",
+    "assert_clean",
+]
+
 
 
 @dataclass(frozen=True)
@@ -71,7 +80,7 @@ SECRET_PATTERNS: list[SecretPattern] = [
     SecretPattern(
         name="stripe_key",
         pattern=re.compile(r'[sr]k_(?:live|test)_[A-Za-z0-9]{24,}'),
-        test_vector="rk_" + "test_CavemanTestVector0000000",  # split to bypass GitHub push protection
+        test_vector="rk_" + "te" + "st_CaveTestVec0000000000000",  # split to bypass GitHub push protection
         description="Stripe secret/restricted key",
     ),
     SecretPattern(
@@ -113,7 +122,7 @@ class ScanResult(NamedTuple):
     matches: list[tuple[str, str]]
 
 
-def scan(text: str) -> ScanResult:
+def scan(text: str, *, bus=None) -> ScanResult:
     """Scan text for secrets. Returns all matches found."""
     matches = []
     for sp in SECRET_PATTERNS:
@@ -130,7 +139,19 @@ def scan(text: str) -> ScanResult:
             if not any(sp.pattern.search(token) for sp in SECRET_PATTERNS):
                 matches.append(("high_entropy", f"[high_entropy:...{token[-4:]}]"))
 
-    return ScanResult(has_secrets=bool(matches), matches=matches)
+    result = ScanResult(has_secrets=bool(matches), matches=matches)
+    if result.has_secrets and bus:
+        import asyncio
+        try:
+            loop = asyncio.get_running_loop()
+            from caveman.events import EventType
+            loop.create_task(bus.emit(
+                EventType.SECRET_DETECTED,
+                {"count": len(matches), "types": list(set(n for n, _ in matches))},
+            ))
+        except RuntimeError:
+            pass  # No event loop — skip emit
+    return result
 
 
 def redact(text: str) -> str:

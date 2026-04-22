@@ -7,8 +7,8 @@ from __future__ import annotations
 
 import os
 import re
-from dataclasses import dataclass, field
-from typing import Any, Callable
+from dataclasses import dataclass
+from typing import Any
 
 from caveman.providers.llm import LLMProvider
 
@@ -94,6 +94,14 @@ _REGISTRY: list[ProviderSpec] = [
         config_section="openai",
         priority=80,
     ),
+    ProviderSpec(
+        name="openrouter",
+        cls_path="caveman.providers.openrouter_provider.OpenRouterProvider",
+        model_patterns=[r"openrouter", r".*/.*"],  # matches "provider/model" format
+        env_key="OPENROUTER_API_KEY",
+        config_section="openrouter",
+        priority=90,  # lowest priority — catch-all for unknown models
+    ),
 ]
 
 
@@ -109,6 +117,7 @@ def resolve_provider(
     model: str,
     providers_cfg: dict[str, Any],
     default_max_tokens: dict[str, int] | None = None,
+    credential_pool: Any = None,
 ) -> LLMProvider:
     """Resolve a provider from model name and config.
 
@@ -129,17 +138,17 @@ def resolve_provider(
     if explicit:
         for spec in sorted_specs:
             if spec.name == explicit:
-                return _create_provider(spec, model, providers_cfg, default_max_tokens)
+                return _create_provider(spec, model, providers_cfg, default_max_tokens, credential_pool)
 
     # Step 2: model name pattern matching
     for spec in sorted_specs:
         for pattern in spec.model_patterns:
             if re.search(pattern, model, re.IGNORECASE):
-                return _create_provider(spec, model, providers_cfg, default_max_tokens)
+                return _create_provider(spec, model, providers_cfg, default_max_tokens, credential_pool)
 
     # Step 3: fallback to anthropic
     anthropic_spec = next(s for s in sorted_specs if s.name == "anthropic")
-    return _create_provider(anthropic_spec, model, providers_cfg, default_max_tokens)
+    return _create_provider(anthropic_spec, model, providers_cfg, default_max_tokens, credential_pool)
 
 
 def _create_provider(
@@ -147,6 +156,7 @@ def _create_provider(
     model: str,
     providers_cfg: dict[str, Any],
     default_max_tokens: dict[str, int],
+    credential_pool: Any = None,
 ) -> LLMProvider:
     """Instantiate a provider from its spec."""
     section = providers_cfg.get(spec.config_section or spec.name, {})
@@ -177,5 +187,12 @@ def _create_provider(
     if spec.name == "ollama" and not base_url:
         from caveman.paths import DEFAULT_OLLAMA_URL
         kwargs["base_url"] = os.environ.get("OLLAMA_BASE_URL", DEFAULT_OLLAMA_URL)
+
+    # Pass credential pool if provider supports it
+    if credential_pool:
+        import inspect
+        sig = inspect.signature(cls.__init__)
+        if "credential_pool" in sig.parameters:
+            kwargs["credential_pool"] = credential_pool
 
     return cls(**kwargs)

@@ -3,6 +3,25 @@ from __future__ import annotations
 
 from caveman.commands.types import CommandContext
 
+__all__ = [
+    "handle_new",
+    "handle_clear",
+    "handle_history",
+    "handle_retry",
+    "handle_undo",
+    "handle_title",
+    "handle_branch",
+    "handle_compress",
+    "handle_rollback",
+    "handle_stop",
+    "handle_approve",
+    "handle_deny",
+    "handle_background",
+    "handle_btw",
+    "handle_queue",
+]
+
+
 
 async def handle_new(ctx: CommandContext) -> None:
     """Start a new session."""

@@ -9,6 +9,8 @@ import time
 from pathlib import Path
 
 from caveman.tools.registry import tool
+from caveman.aio import aio_exists, aio_read_text, aio_stat, aio_unlink, aio_write_bytes
+from caveman.timeouts import HTTP_TRANSCRIBE
 
 logger = logging.getLogger(__name__)
 
@@ -28,12 +30,12 @@ _MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB
 async def transcribe(file_path: str, language: str = "auto") -> dict:
     """Transcribe audio/video file using whisper CLI."""
     path = Path(file_path)
-    if not path.exists():
+    if not await aio_exists(path):
         return {"error": f"File not found: {file_path}"}
     suffix = path.suffix.lower()
     if suffix not in _SUPPORTED_FORMATS:
         return {"error": f"Unsupported format: {suffix}. Supported: {', '.join(sorted(_SUPPORTED_FORMATS))}"}
-    file_size = path.stat().st_size
+    file_size = (await aio_stat(path)).st_size
     if file_size > _MAX_FILE_SIZE:
         return {"error": f"File too large: {file_size} bytes (max {_MAX_FILE_SIZE})"}
 
@@ -65,8 +67,8 @@ async def transcribe(file_path: str, language: str = "auto") -> dict:
 
     # Whisper outputs a .txt file next to the input
     txt_path = path.with_suffix(".txt")
-    if txt_path.exists():
-        text = txt_path.read_text().strip()
+    if await aio_exists(txt_path):
+        text = (await aio_read_text(txt_path)).strip()
     else:
         text = stdout_b.decode("utf-8", errors="replace").strip()
 
@@ -98,10 +100,10 @@ async def transcribe_url(url: str, language: str = "auto") -> dict:
         tmp = tempfile.NamedTemporaryFile(suffix=ext, delete=False)
         tmp.close()
 
-        async with httpx.AsyncClient(timeout=120) as client:
+        async with httpx.AsyncClient(timeout=HTTP_TRANSCRIBE) as client:
             resp = await client.get(url)
             resp.raise_for_status()
-            Path(tmp.name).write_bytes(resp.content)
+            await aio_write_bytes(Path(tmp.name), resp.content)
 
         return await transcribe(tmp.name, language=language)
     except httpx.HTTPError as e:
@@ -111,6 +113,6 @@ async def transcribe_url(url: str, language: str = "auto") -> dict:
     finally:
         if tmp:
             try:
-                os.unlink(tmp.name)
+                await aio_unlink(tmp.name)
             except OSError:
-                pass
+                pass  # intentional: OSError suppressed

@@ -16,11 +16,12 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
-from caveman.engines.shield import CompactionShield, SessionEssence
+from caveman.engines.shield import SessionEssence
 from caveman.engines.project_identity import ProjectIdentity, ProjectIdentityStore
 from caveman.paths import SESSIONS_DIR
+from caveman.aio import aio_exists, aio_glob, aio_read_text
 
 logger = logging.getLogger(__name__)
 
@@ -166,6 +167,18 @@ class RecallEngine:
         if not memories:
             return "", 0
 
+        # Grounding gate: verify memories against reality before use
+        try:
+            from caveman.memory.grounding import ground
+            grounded = ground(memories, check_paths=True)
+            # Filter out severely stale memories (confidence < 0.2)
+            memories = [m for m, r in grounded if r["confidence_modifier"] >= 0.2]
+        except Exception as e:
+            logger.debug("Grounding gate skipped: %s", e)
+
+        if not memories:
+            return "", 0
+
         lines = ["## Relevant Memories"]
         tokens_used = 0
         count = 0
@@ -264,7 +277,7 @@ class RecallEngine:
 
     async def _load_recent_essences(self) -> list[SessionEssence]:
         """Load the N most recent session essences."""
-        if not self._sessions_dir.exists():
+        if not await aio_exists(self._sessions_dir):
             return []
 
         try:
@@ -275,9 +288,9 @@ class RecallEngine:
         # P0 #3 fix: sort by updated_at field, not filesystem mtime
         # mtime changes on rsync/git/cp, updated_at is the real session time
         essences_with_time: list[tuple[str, SessionEssence]] = []
-        for path in self._sessions_dir.glob("*.yaml"):
+        for path in await aio_glob(self._sessions_dir, "*.yaml"):
             try:
-                data = yaml.safe_load(path.read_text(encoding="utf-8"))
+                data = yaml.safe_load(await aio_read_text(path, encoding="utf-8"))
                 if data:
                     essence = SessionEssence.from_dict(data)
                     sort_key = essence.updated_at or ""
@@ -290,6 +303,6 @@ class RecallEngine:
 
     async def has_previous_sessions(self) -> bool:
         """Check if there are any previous session essences."""
-        if not self._sessions_dir.exists():
+        if not await aio_exists(self._sessions_dir):
             return False
-        return any(self._sessions_dir.glob("*.yaml"))
+        return any(await aio_glob(self._sessions_dir, "*.yaml"))

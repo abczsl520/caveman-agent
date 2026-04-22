@@ -4,6 +4,13 @@ CLI uses Rich panels/tables; other surfaces get Markdown or plain text.
 """
 from __future__ import annotations
 
+__all__ = [
+    "format_panel",
+    "format_table",
+    "format_help",
+]
+
+
 
 def format_panel(title: str, content: str, surface: str = "cli") -> str:
     """Format a titled panel.

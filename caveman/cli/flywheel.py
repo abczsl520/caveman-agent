@@ -20,10 +20,22 @@ import json
 import logging
 import re
 import subprocess
-import sys
 import time
 from datetime import datetime
 from pathlib import Path
+
+__all__ = [
+    "SUBSYSTEMS",
+    "AUDIT_PROMPT",
+    "FIX_PROMPT",
+    "run_flywheel",
+    "run_flywheel_sync",
+    "run_flywheel_parallel",
+    "discover_subsystems",
+    "FlywheelStats",
+    "flywheel_cli",
+]
+
 
 logger = logging.getLogger(__name__)
 
@@ -194,7 +206,8 @@ class FlywheelStats:
     """Track flywheel run history for analysis."""
 
     def __init__(self, stats_file: Path | None = None):
-        self.stats_file = stats_file or Path.home() / ".caveman" / "flywheel_stats.json"
+        from caveman.paths import CAVEMAN_HOME
+        self.stats_file = stats_file or CAVEMAN_HOME / "flywheel_stats.json"
         self.stats_file.parent.mkdir(parents=True, exist_ok=True)
 
     def record(

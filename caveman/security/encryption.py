@@ -18,7 +18,6 @@ import os
 import struct
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +29,7 @@ try:
     from cryptography.hazmat.primitives import hashes
     _HAS_CRYPTO = True
 except ImportError:
-    pass
+    pass  # intentional: ImportError suppressed
 
 
 @dataclass

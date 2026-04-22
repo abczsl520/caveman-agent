@@ -19,7 +19,7 @@ from datetime import datetime
 from typing import Any, Callable, Awaitable
 
 from caveman.memory.manager import MemoryManager
-from caveman.memory.types import MemoryEntry, MemoryType
+from caveman.memory.types import MemoryEntry
 
 logger = logging.getLogger(__name__)
 
@@ -69,10 +69,12 @@ class RippleEngine:
         memory_manager: MemoryManager,
         llm_fn: Callable[[str], Awaitable[str]] | None = None,
         similarity_threshold: float = 0.3,
+        bus: Any = None,
     ):
         self.memory = memory_manager
         self.llm_fn = llm_fn
         self.similarity_threshold = similarity_threshold
+        self._bus = bus
 
     async def propagate(self, new_entry: MemoryEntry) -> RippleEffect:
         """Propagate a new memory write through the knowledge base."""
@@ -113,6 +115,14 @@ class RippleEngine:
 
         if effect.had_impact:
             logger.info("Ripple for %s: %s", new_entry.id, effect.summary)
+
+        if self._bus and effect.had_impact:
+            from caveman.events import EventType
+            await self._bus.emit(
+                EventType.RIPPLE_PROPAGATE,
+                {"entry_id": new_entry.id, "stale": len(effect.stale_marked),
+                 "conflicts": len(effect.conflicts), "xrefs": len(effect.cross_refs_added)},
+            )
 
         return effect
 

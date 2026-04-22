@@ -178,9 +178,11 @@ class TestImageGenTool:
 class TestBrowser:
     @pytest.mark.asyncio
     async def test_browser_navigate_no_bridge_no_playwright(self):
-        from caveman.tools.builtin.browser import browser_dispatch
-        # Without bridge and without playwright, should raise
-        with patch("caveman.tools.builtin.browser._ensure_playwright", new_callable=AsyncMock, side_effect=RuntimeError("no playwright")):
+        from caveman.tools.builtin.browser import browser_dispatch, set_bridge, close_browser
+        set_bridge(None)
+        await close_browser()
+        # Without bridge, _ensure_manager will try to start Playwright
+        with patch("caveman.tools.builtin.browser._ensure_manager", new_callable=AsyncMock, side_effect=RuntimeError("no playwright")):
             with pytest.raises(RuntimeError):
                 await browser_dispatch(action="navigate", url="https://example.com")
 

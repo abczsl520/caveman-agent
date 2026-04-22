@@ -15,6 +15,7 @@ import logging
 from typing import Any
 
 import httpx
+from caveman.timeouts import HTTP_SLOW
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +47,7 @@ class HermesBridge:
             except Exception as e:
                 logger.debug("Suppressed in hermes_bridge: %s", e)
 
-        self._client = httpx.AsyncClient(timeout=60.0)
+        self._client = httpx.AsyncClient(timeout=HTTP_SLOW)
         try:
             resp = await self._client.get(
                 f"{self.base_url}/api/health", headers=self._headers()

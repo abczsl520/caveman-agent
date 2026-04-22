@@ -27,7 +27,14 @@ import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from caveman.aio import aio_mkdir, aio_write_text
+
+__all__ = [
+    "SandboxResult",
+    "SandboxConfig",
+    "Sandbox",
+]
+
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +85,7 @@ class Sandbox:
             # Write code file
             ext = {"python": ".py", "javascript": ".js", "bash": ".sh"}.get(language, ".txt")
             code_file = Path(sandbox_dir) / f"main{ext}"
-            code_file.write_text(code, encoding="utf-8")
+            await aio_write_text(code_file, code, encoding="utf-8")
 
             # Write additional files — with path containment
             if files:
@@ -91,8 +98,8 @@ class Sandbox:
                             exit_code=1, duration=0, timed_out=False,
                             sandbox_dir=sandbox_dir,
                         )
-                    safe_path.parent.mkdir(parents=True, exist_ok=True)
-                    safe_path.write_text(content, encoding="utf-8")
+                    await aio_mkdir(safe_path.parent, parents=True, exist_ok=True)
+                    await aio_write_text(safe_path, content, encoding="utf-8")
 
             # Build command
             cmd = self._build_command(language, str(code_file))
@@ -129,7 +136,7 @@ class Sandbox:
                         pgid = os.getpgid(proc.pid)
                         os.killpg(pgid, signal.SIGTERM)
                     except (ProcessLookupError, PermissionError, OSError):
-                        pass
+                        pass  # intentional: ProcessLookupError/PermissionError/OSError suppressed
                     await asyncio.sleep(1)
                     try:
                         pgid = os.getpgid(proc.pid)
@@ -138,11 +145,11 @@ class Sandbox:
                         try:
                             proc.kill()
                         except (ProcessLookupError, OSError):
-                            pass
+                            pass  # intentional: ProcessLookupError/OSError suppressed
                     try:
                         await asyncio.wait_for(proc.communicate(), timeout=3)
                     except (asyncio.TimeoutError, ProcessLookupError, OSError):
-                        pass
+                        pass  # intentional: ProcessLookupError/OSError suppressed
                     stdout_bytes = b"[timed out]"
                     stderr_bytes = b""
 

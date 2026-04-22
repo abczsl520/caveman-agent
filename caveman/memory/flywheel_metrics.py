@@ -39,89 +39,78 @@ class FlywheelHealth:
             f"feedback rate={self.feedback_rate:.0%}"
         )
 
+    @classmethod
+    async def diagnose(cls, backend) -> "FlywheelHealth":
+        """Build a FlywheelHealth snapshot from a MemoryManager backend.
 
-def diagnose(backend: Any) -> FlywheelHealth:
-    """Run flywheel health diagnosis against SQLite backend."""
-    health = FlywheelHealth()
+        Args:
+            backend: MemoryManager instance with .search() and .list_all() support.
 
-    try:
-        conn = backend._get_conn()
-    except Exception:
-        health.issues.append("Cannot connect to memory database")
+        Returns:
+            FlywheelHealth with populated metrics and issue diagnostics.
+        """
+        health = cls()
+        try:
+            # Support both sync (all_entries) and async (list_all) backends
+            if hasattr(backend, 'all_entries'):
+                entries = backend.all_entries
+                all_memories = entries() if callable(entries) else entries
+            elif hasattr(backend, 'list_all'):
+                all_memories = await backend.list_all()
+            else:
+                all_memories = []
+        except Exception:
+            all_memories = []
+
+        health.total_memories = len(all_memories)
+        if not all_memories:
+            health.issues.append("No memories stored — flywheel not started")
+            return health
+
+        # Trust distribution buckets
+        buckets = {"0.0-0.2": 0, "0.2-0.4": 0, "0.4-0.6": 0, "0.6-0.8": 0, "0.8-1.0": 0}
+        trust_sum = 0.0
+        never_recalled = 0
+        with_feedback = 0
+
+        for mem in all_memories:
+            meta = getattr(mem, "metadata", {}) or {}
+            trust = meta.get("trust_score", getattr(mem, "trust_score", 0.5))
+            trust_sum += trust
+
+            # Bucket
+            if trust < 0.2:
+                buckets["0.0-0.2"] += 1
+            elif trust < 0.4:
+                buckets["0.2-0.4"] += 1
+            elif trust < 0.6:
+                buckets["0.4-0.6"] += 1
+            elif trust < 0.8:
+                buckets["0.6-0.8"] += 1
+            else:
+                buckets["0.8-1.0"] += 1
+
+            # Recall tracking
+            retrieval_count = meta.get("retrieval_count", 0)
+            if retrieval_count == 0:
+                never_recalled += 1
+            if meta.get("trust_score") is not None:
+                with_feedback += 1
+
+        health.trust_distribution = buckets
+        health.avg_trust = trust_sum / len(all_memories) if all_memories else 0.0
+        health.memories_never_recalled = never_recalled
+        health.memories_with_feedback = with_feedback
+        health.feedback_rate = with_feedback / len(all_memories) if all_memories else 0.0
+
+        # Diagnostics
+        if health.avg_trust < 0.3:
+            health.issues.append(f"Low average trust ({health.avg_trust:.2f}) — memories may be unreliable")
+        if health.feedback_rate < 0.1:
+            health.issues.append(f"Low feedback rate ({health.feedback_rate:.0%}) — flywheel not learning")
+        never_pct = never_recalled / len(all_memories) if all_memories else 0
+        if never_pct > 0.8:
+            health.issues.append(f"{never_pct:.0%} memories never recalled — retrieval may be broken")
+
         return health
 
-    # Total memories
-    row = conn.execute("SELECT COUNT(*) FROM memories").fetchone()
-    health.total_memories = row[0] if row else 0
-
-    if health.total_memories == 0:
-        health.issues.append("Empty memory store — flywheel has no fuel")
-        return health
-
-    # Trust distribution
-    buckets = [
-        ("dead (0-0.1)", 0.0, 0.1),
-        ("low (0.1-0.3)", 0.1, 0.3),
-        ("default (0.3-0.6)", 0.3, 0.6),
-        ("good (0.6-0.8)", 0.6, 0.8),
-        ("excellent (0.8-1.0)", 0.8, 1.01),
-    ]
-    for label, lo, hi in buckets:
-        row = conn.execute(
-            "SELECT COUNT(*) FROM memories WHERE trust_score >= ? AND trust_score < ?",
-            (lo, hi),
-        ).fetchone()
-        health.trust_distribution[label] = row[0] if row else 0
-
-    # Average trust
-    row = conn.execute("SELECT AVG(trust_score) FROM memories").fetchone()
-    health.avg_trust = row[0] if row and row[0] else 0.0
-
-    # Never recalled
-    row = conn.execute(
-        "SELECT COUNT(*) FROM memories WHERE retrieval_count = 0"
-    ).fetchone()
-    health.memories_never_recalled = row[0] if row else 0
-
-    # Feedback rate: memories with trust != 0.5 (default) / total
-    row = conn.execute(
-        "SELECT COUNT(*) FROM memories WHERE ABS(trust_score - 0.5) > 0.01"
-    ).fetchone()
-    health.memories_with_feedback = row[0] if row else 0
-    health.feedback_rate = health.memories_with_feedback / health.total_memories
-
-    # Top recalled
-    rows = conn.execute(
-        "SELECT content, retrieval_count, trust_score FROM memories "
-        "ORDER BY retrieval_count DESC LIMIT 5"
-    ).fetchall()
-    health.top_recalled = [
-        {"content": r[0][:80], "recalls": r[1], "trust": r[2]}
-        for r in rows
-    ]
-
-    # Diagnose issues
-    default_pct = health.trust_distribution.get("default (0.3-0.6)", 0) / health.total_memories
-    if default_pct > 0.8:
-        health.issues.append(
-            f"{default_pct:.0%} of memories at default trust — feedback loop not working"
-        )
-
-    never_pct = health.memories_never_recalled / health.total_memories
-    if never_pct > 0.7:
-        health.issues.append(
-            f"{never_pct:.0%} of memories never recalled — recall quality may be poor"
-        )
-
-    if health.avg_trust < 0.3:
-        health.issues.append(
-            f"Average trust {health.avg_trust:.2f} is very low — too much demotion"
-        )
-
-    dead = health.trust_distribution.get("dead (0-0.1)", 0)
-    if dead > health.total_memories * 0.2:
-        health.issues.append(
-            f"{dead} dead memories (trust<0.1) — GC may not be running"
-        )
-
-    return health

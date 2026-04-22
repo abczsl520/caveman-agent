@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
 
 from caveman.paths import CAVEMAN_HOME, MEMORY_DIR, SESSIONS_DIR, SKILLS_DIR, PROJECTS_DIR
 
@@ -121,7 +120,7 @@ def status_text() -> str:
     return "\n".join(lines)
 
 
-def main():
+def main() -> None:
     """Print status dashboard."""
     print(status_text())
 

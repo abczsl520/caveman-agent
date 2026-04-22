@@ -8,7 +8,6 @@ This is the HEART of the Agent OS kernel.
 """
 from __future__ import annotations
 
-import json
 import logging
 import re
 import uuid
@@ -19,9 +18,13 @@ from typing import Any, Callable, Awaitable
 
 from caveman.errors import CavemanError
 from caveman.paths import SESSIONS_DIR
+from caveman.aio import aio_exists, aio_glob, aio_read_text, aio_rename, aio_stat, aio_write_text
 from caveman.engines.project_identity import (
     ProjectIdentity, ProjectIdentityStore, detect_project_from_messages,
 )
+
+__all__ = ["ShieldError", "SessionEssence", "CompactionShield"]
+
 
 logger = logging.getLogger(__name__)
 
@@ -168,7 +171,10 @@ class CompactionShield:
         self._essence = SessionEssence(session_id=self._session_id)
         self._project_store = ProjectIdentityStore()
         self._active_project: ProjectIdentity | None = None
-        self._last_processed: int = 0  # incremental update offset
+        # Incremental processing offset: _extract_heuristic only runs regex
+        # patterns on messages[_last_processed:], not the full history.
+        # This keeps per-turn cost O(new_messages) instead of O(all_messages).
+        self._last_processed: int = 0
 
     @property
     def essence(self) -> SessionEssence:
@@ -214,16 +220,24 @@ class CompactionShield:
         return self._essence
 
     async def save(self) -> Path:
-        """Persist essence to disk as YAML (atomic write). Also saves active project identity."""
+        """Persist essence to disk as YAML (atomic write).
+
+        Side effects beyond writing the essence file:
+        1. If an active project identity is detected, increments its
+           ``session_count`` and saves it via ``ProjectIdentityStore.save()``.
+        2. Returns the path to the written essence file.
+
+        Callers should be aware that this is not a pure persistence operation.
+        """
         if yaml is None:
             raise ShieldError("pyyaml required for Shield persistence")
         path = self._store_dir / f"{self._session_id}.yaml"
         tmp_path = path.with_suffix('.yaml.tmp')
-        tmp_path.write_text(
+        await aio_write_text(tmp_path, 
             yaml.dump(self._essence.to_dict(), allow_unicode=True, default_flow_style=False),
             encoding="utf-8",
         )
-        tmp_path.rename(path)  # Atomic on POSIX
+        await aio_rename(tmp_path, path)  # Atomic on POSIX
         logger.debug("Shield saved essence to %s", path)
 
         # Auto-save project identity if detected
@@ -241,10 +255,10 @@ class CompactionShield:
             return None
         d = Path(store_dir) if store_dir else SESSIONS_DIR
         path = d / f"{session_id}.yaml"
-        if not path.exists():
+        if not await aio_exists(path):
             return None
         try:
-            data = yaml.safe_load(path.read_text(encoding="utf-8"))
+            data = yaml.safe_load(await aio_read_text(path, encoding="utf-8"))
             return SessionEssence.from_dict(data) if data else None
         except Exception as e:
             logger.warning("Failed to load essence %s: %s", path, e)
@@ -254,15 +268,19 @@ class CompactionShield:
     async def load_latest(cls, store_dir: Path | None = None) -> SessionEssence | None:
         """Load the most recent session essence."""
         d = Path(store_dir) if store_dir else SESSIONS_DIR
-        if not d.exists():
+        if not await aio_exists(d):
             return None
-        yamls = sorted(d.glob("*.yaml"), key=lambda p: p.stat().st_mtime, reverse=True)
+        yamls_raw = await aio_glob(d, "*.yaml")
+        yamls_with_mtime = []
+        for y in yamls_raw:
+            yamls_with_mtime.append((y, (await aio_stat(y)).st_mtime))
+        yamls = [y for y, _ in sorted(yamls_with_mtime, key=lambda x: x[1], reverse=True)]
         if not yamls:
             return None
         try:
             if yaml is None:
                 return None
-            data = yaml.safe_load(yamls[0].read_text(encoding="utf-8"))
+            data = yaml.safe_load(await aio_read_text(yamls[0], encoding="utf-8"))
             return SessionEssence.from_dict(data) if data else None
         except Exception as e:
             logger.warning("Failed to load latest essence: %s", e)

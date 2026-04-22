@@ -2,13 +2,12 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from .base import (
-    BaseImporter, ImportItem, ImportManifest, ImportResult,
-    infer_type, split_markdown_sections, write_import_log,
+    BaseImporter, ImportItem, ImportManifest,
+    infer_type, split_markdown_sections,
 )
 
 logger = logging.getLogger(__name__)
@@ -52,43 +51,6 @@ class DirectoryImporter(BaseImporter):
 
         return manifest
 
-    async def execute(self, manifest: ImportManifest, memory_manager: Any) -> ImportResult:
-        """Execute directory import."""
-        from .dedup import ImportDedup
-
-        result = ImportResult()
-        dedup = ImportDedup(memory_manager)
-
-        for item in manifest.items:
-            if item.skip_reason:
-                result.skipped += 1
-                continue
-            try:
-                if dedup.is_duplicate(item.content):
-                    result.duplicates += 1
-                    continue
-                if not self.dry_run:
-                    await memory_manager.store(
-                        item.content, item.memory_type,
-                        metadata={
-                            "source": "import:directory",
-                            "source_file": str(item.source_path),
-                            "imported_at": datetime.now().isoformat(),
-                        },
-                        trusted=self.include_secrets,
-                    )
-                result.imported += 1
-            except Exception as e:
-                result.failed += 1
-                logger.warning("Directory import failed: %s", e)
-            result.files_processed += 1
-
-        if not self.dry_run:
-            write_import_log(self.caveman_home, {
-                "source": "directory", "imported": result.imported,
-                "duplicates": result.duplicates,
-            })
-        return result
 
     def _read_safe(self, path: Path) -> str:
         try:

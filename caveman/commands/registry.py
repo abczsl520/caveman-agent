@@ -10,6 +10,14 @@ from __future__ import annotations
 
 from caveman.commands.types import CommandDef
 
+__all__ = [
+    "C",
+    "rebuild_lookups",
+    "resolve_command",
+    "get_by_category",
+]
+
+
 C = CommandDef  # shorthand
 
 def _zh(zh: str) -> dict[str, str]:

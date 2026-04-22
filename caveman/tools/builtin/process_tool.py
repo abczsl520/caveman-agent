@@ -6,6 +6,14 @@ import logging
 
 from caveman.tools.registry import tool
 
+__all__ = [
+    "process_start",
+    "process_list",
+    "process_output",
+    "process_kill",
+]
+
+
 logger = logging.getLogger(__name__)
 
 # Module-level store for background processes

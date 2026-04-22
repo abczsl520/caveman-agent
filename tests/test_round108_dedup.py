@@ -92,6 +92,7 @@ async def test_boost_trust_no_backend():
     host.memory_manager._backend = None
     # Should not raise
     await host._boost_trust(["id1"])
+    assert True  # No backend = graceful no-op
 
 
 @pytest.mark.asyncio

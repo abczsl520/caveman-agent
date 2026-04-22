@@ -8,6 +8,17 @@ from typing import Callable, Awaitable
 import httpx
 
 from caveman.paths import EMBEDDING_MAX_INPUT
+from caveman.timeouts import HTTP_EMBEDDING
+from caveman.aio import aio_exists
+
+__all__ = [
+    "fastembed_embedding",
+    "openai_embedding",
+    "ollama_embedding",
+    "local_embedding",
+    "get_embedding_fn",
+]
+
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +59,7 @@ async def openai_embedding(text: str, model: str = "text-embedding-3-small") -> 
     if not api_key:
         raise ValueError("OPENAI_API_KEY not set")
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with httpx.AsyncClient(timeout=HTTP_EMBEDDING) as client:
         resp = await client.post(
             "https://api.openai.com/v1/embeddings",
             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
@@ -62,7 +73,7 @@ async def ollama_embedding(text: str, model: str = "nomic-embed-text") -> list[f
     """Generate embedding via local Ollama."""
     from caveman.paths import DEFAULT_OLLAMA_URL
     ollama_url = os.environ.get("OLLAMA_BASE_URL", DEFAULT_OLLAMA_URL)
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with httpx.AsyncClient(timeout=HTTP_EMBEDDING) as client:
         resp = await client.post(
             ollama_url + "/api/embeddings",
             json={"model": model, "prompt": text[:EMBEDDING_MAX_INPUT]},
@@ -83,7 +94,7 @@ async def local_embedding(text: str, model_path: str = "") -> list[float]:
         from caveman.paths import TRAINING_DIR
         model_path = str(TRAINING_DIR / "embedding_output")
 
-    if not Path(model_path).exists():
+    if not await aio_exists(Path(model_path)):
         raise FileNotFoundError(f"Local embedding model not found at {model_path}")
 
     try:

@@ -15,6 +15,14 @@ from dataclasses import dataclass
 from typing import Any
 
 from caveman.errors import CavemanError
+from caveman.timeouts import SUBPROCESS_DEFAULT
+
+__all__ = [
+    "CLIAgentError",
+    "CLIAgentResult",
+    "CLIAgentRunner",
+]
+
 
 logger = logging.getLogger(__name__)
 
@@ -135,7 +143,7 @@ class CLIAgentRunner:
                 timed_out = True
                 proc.send_signal(signal.SIGTERM)
                 try:
-                    await asyncio.wait_for(proc.communicate(), timeout=10)
+                    await asyncio.wait_for(proc.communicate(), timeout=SUBPROCESS_DEFAULT)
                 except asyncio.TimeoutError:
                     proc.kill()
                     await proc.communicate()
@@ -235,7 +243,7 @@ class CLIAgentRunner:
             if timed_out:
                 proc.send_signal(signal.SIGTERM)
                 try:
-                    await asyncio.wait_for(proc.wait(), timeout=10)
+                    await asyncio.wait_for(proc.wait(), timeout=SUBPROCESS_DEFAULT)
                 except asyncio.TimeoutError:
                     proc.kill()
 
@@ -257,12 +265,12 @@ class CLIAgentRunner:
                 try:
                     os.close(master_fd)
                 except OSError:
-                    pass
+                    pass  # intentional: OSError suppressed
             if slave_fd >= 0:
                 try:
                     os.close(slave_fd)
                 except OSError:
-                    pass
+                    pass  # intentional: OSError suppressed
 
         return CLIAgentResult(
             output=output, exit_code=exit_code,

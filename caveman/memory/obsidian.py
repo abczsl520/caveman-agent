@@ -22,7 +22,7 @@ from datetime import datetime
 from pathlib import Path
 
 from caveman.memory.manager import MemoryManager
-from caveman.memory.types import MemoryEntry, MemoryType
+from caveman.memory.types import MemoryEntry
 
 logger = logging.getLogger(__name__)
 

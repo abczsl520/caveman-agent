@@ -26,12 +26,22 @@ from typing import Any, Callable, Awaitable
 logger = logging.getLogger(__name__)
 
 # Default Gateway WebSocket URL (local)
+from caveman.errors import CavemanError
 from caveman.paths import DEFAULT_GATEWAY_URL
+from caveman.timeouts import WS_MESSAGE, WS_PING
+
+__all__ = [
+    "CONNECT_TIMEOUT",
+    "REQUEST_TIMEOUT",
+    "WSTransportError",
+    "WSTransport",
+]
+
 CONNECT_TIMEOUT = 10.0
 REQUEST_TIMEOUT = 30.0
 
 
-class WSTransportError(Exception):
+class WSTransportError(CavemanError):
     """WebSocket transport error."""
     pass
 
@@ -80,7 +90,7 @@ class WSTransport:
                     self.url,
                     max_size=25 * 1024 * 1024,
                     ping_interval=30,
-                    ping_timeout=10,
+                    ping_timeout=WS_PING,
                 ),
                 timeout=CONNECT_TIMEOUT,
             )
@@ -113,7 +123,7 @@ class WSTransport:
             try:
                 await self._recv_task
             except asyncio.CancelledError:
-                pass
+                pass  # intentional: Exception suppressed
         if self._ws:
             try:
                 await self._ws.close()
@@ -183,7 +193,7 @@ class WSTransport:
         return await self.request("agent.turn", {
             "prompt": prompt,
             "sessionKey": self.session_key,
-        }, timeout=120.0)
+        }, timeout=WS_MESSAGE)
 
     async def list_tools(self) -> list[dict]:
         """List available Gateway tools."""
@@ -272,7 +282,7 @@ class WSTransport:
                     logger.debug("Unknown message type: %s", msg_type)
 
         except asyncio.CancelledError:
-            pass
+            pass  # intentional: Exception suppressed
         except Exception as e:
             logger.warning("WebSocket recv loop ended: %s", e)
             self._connected = False

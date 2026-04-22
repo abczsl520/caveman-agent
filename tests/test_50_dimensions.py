@@ -63,11 +63,11 @@ def test_half_life_is_90_days():
 # ── D5: Tool output truncation ──
 
 def test_tool_output_truncation_in_code():
-    """tools_exec.py should truncate large outputs."""
+    """tools_exec.py should handle large outputs (persist or truncate)."""
     from pathlib import Path
     src = (Path(__file__).parent.parent / "caveman/agent/tools_exec.py").read_text()
-    assert "30_000" in src or "30000" in src, \
-        "Tool output should be truncated at ~30K chars"
+    assert "persist_tool_result" in src or "30_000" in src or "30000" in src, \
+        "Tool output should be handled (persisted or truncated)"
 
 
 # ── D1: Task length cap ──

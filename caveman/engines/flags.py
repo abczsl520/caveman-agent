@@ -8,6 +8,13 @@ from __future__ import annotations
 import logging
 from caveman.errors import CavemanError
 
+__all__ = [
+    "EngineError",
+    "ENGINES",
+    "EngineFlags",
+]
+
+
 logger = logging.getLogger(__name__)
 
 

@@ -8,12 +8,12 @@ and factory.py with a single manager that handles:
   - Enable/disable via EngineFlags
   - Health checks
 
-Engines managed: Shield, Nudge, Reflect, Ripple, Lint, Recall
+Engines managed: Shield, Nudge, Reflect, Ripple, Lint, Recall, Outcome
 """
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from caveman.engines.flags import EngineFlags
@@ -30,12 +30,13 @@ class EngineSet:
     ripple: Any = None
     lint: Any = None
     recall: Any = None
+    outcome: Any = None
     scheduler: Any = None  # LLMScheduler instance (if created)
 
     def active_names(self) -> list[str]:
         """Return names of engines that are instantiated."""
         return [
-            name for name in ("shield", "nudge", "reflect", "ripple", "lint", "recall")
+            name for name in ("shield", "nudge", "reflect", "ripple", "lint", "recall", "outcome")
             if getattr(self, name) is not None
         ]
 
@@ -70,9 +71,11 @@ class EngineManager:
         session_id: str | None = None,
         enable_scheduler: bool = True,
         max_rpm: int = 30,
+        bus: Any = None,
     ) -> None:
         self._flags = flags
         self._memory = memory_manager
+        self._bus = bus
         self._skills = skill_manager
         self._llm_fn = llm_fn
         self._session_id = session_id
@@ -134,6 +137,7 @@ class EngineManager:
                 memory_manager=self._memory,
                 llm_fn=nudge_llm,
                 interval=10, first_nudge=3,
+                bus=self._bus,
             )
 
         # Reflect — post-task skill evolution
@@ -148,6 +152,7 @@ class EngineManager:
             from caveman.engines.ripple import RippleEngine
             self._engines.ripple = RippleEngine(
                 memory_manager=self._memory, llm_fn=ripple_llm,
+                bus=self._bus,
             )
             # Wire ripple into memory manager for write-time propagation
             self._memory.set_ripple(self._engines.ripple)
@@ -157,7 +162,22 @@ class EngineManager:
             from caveman.engines.lint import LintEngine
             self._engines.lint = LintEngine(
                 memory_manager=self._memory, llm_fn=lint_llm,
+                bus=self._bus,
             )
+
+
+        # Outcome — task completion scoring + feedback propagation
+        from caveman.engines.outcome import OutcomeEngine
+        try:
+            from caveman.skills.rl_router import SkillRLRouter
+            rl_router = SkillRLRouter()
+        except Exception:
+            rl_router = None
+        self._engines.outcome = OutcomeEngine(
+            rl_router=rl_router,
+            memory_manager=self._memory,
+            bus=self._bus,
+        )
 
         active = self._engines.active_names()
         sched_status = "with scheduler" if scheduler else "no scheduler"

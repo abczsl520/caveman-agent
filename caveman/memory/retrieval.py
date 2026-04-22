@@ -8,9 +8,11 @@ from __future__ import annotations
 import math
 import re
 from datetime import datetime, timezone
-from typing import Any
 
 from caveman.memory.types import MemoryEntry
+
+__all__ = ["tokenize", "jaccard_similarity", "extract_entities", "temporal_decay", "adjust_trust", "HybridScorer", "expand_query_cross_lang"]
+
 
 
 # --- Jaccard similarity ---
@@ -261,7 +263,7 @@ class HybridScorer:
                 if la > effective_age_start.replace(tzinfo=timezone.utc) if effective_age_start.tzinfo is None else la > effective_age_start:
                     effective_age_start = la
             except (ValueError, TypeError):
-                pass
+                pass  # intentional: ValueError/TypeError suppressed
 
         # High-trust memories decay slower
         trust_factor = 0.6 + trust * 1.4  # Range: 0.6 (trust=0) to 2.0 (trust=1)

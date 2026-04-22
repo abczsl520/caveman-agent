@@ -4,12 +4,13 @@ Records in ShareGPT format for fine-tuning compatibility.
 Supports quality scoring, filtering, and batch export.
 """
 from __future__ import annotations
+from typing import Any
 import json
 import logging
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from caveman.aio import aio_write_text
 
 logger = logging.getLogger(__name__)
 
@@ -17,12 +18,13 @@ logger = logging.getLogger(__name__)
 class TrajectoryRecorder:
     """Records agent turns for training data generation."""
 
-    def __init__(self, base_dir: Path | str | None = None):
+    def __init__(self, base_dir: Path | str | None = None, bus: Any = None):
         from caveman.paths import TRAJECTORIES_DIR
         self.base_dir = Path(base_dir).expanduser() if base_dir else TRAJECTORIES_DIR
         self.base_dir.mkdir(parents=True, exist_ok=True)
         self._turns: list[dict] = []
         self._session_id = str(uuid.uuid4())[:12]
+        self._bus = bus
         self._task: str = ""
         self._start_time: datetime = datetime.now()
         self._tool_calls: int = 0
@@ -46,6 +48,13 @@ class TrajectoryRecorder:
             self._tool_calls += 1
         if metadata and metadata.get("error"):
             self._errors += 1
+
+        if self._bus:
+            from caveman.events import EventType
+            await self._bus.emit(
+                EventType.TRAJECTORY_TURN,
+                {"role": role, "turn_index": len(self._turns), "session_id": self._session_id},
+            )
 
     def set_task(self, task: str) -> None:
         self._task = task
@@ -113,7 +122,7 @@ class TrajectoryRecorder:
         self.score_quality()
         save_path = path or self.base_dir / f"{self._session_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
         data = self.to_sharegpt_rich()
-        save_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        await aio_write_text(save_path, json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         return save_path
 
     @staticmethod

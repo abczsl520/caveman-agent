@@ -22,11 +22,11 @@ from typing import Any
 
 from caveman.compression.utils import (
     IDENTIFIER_PRESERVATION,
-    _CHARS_PER_TOKEN,
     _PRUNED_TOOL_PLACEHOLDER,
     align_backward,
     align_forward,
     build_template,
+    estimate_msg_tokens,
     estimate_tokens,
     sanitize_tool_pairs,
     serialize_turns,
@@ -129,11 +129,7 @@ class SmartCompressor:
         for i in range(len(result) - 1, -1, -1):
             msg = result[i]
             content = msg.get("content") or ""
-            msg_tokens = len(content) // _CHARS_PER_TOKEN + 10
-            for tc in msg.get("tool_calls") or []:
-                if isinstance(tc, dict):
-                    args = tc.get("function", {}).get("arguments", "")
-                    msg_tokens += len(args) // _CHARS_PER_TOKEN
+            msg_tokens = estimate_msg_tokens(msg)
             if accumulated + msg_tokens > soft_ceiling and (len(result) - i) >= min_protect:
                 boundary = i
                 break
@@ -166,11 +162,7 @@ class SmartCompressor:
         for i in range(n - 1, head_end - 1, -1):
             msg = messages[i]
             content = msg.get("content") or ""
-            msg_tokens = len(content) // _CHARS_PER_TOKEN + 10
-            for tc in msg.get("tool_calls") or []:
-                if isinstance(tc, dict):
-                    args = tc.get("function", {}).get("arguments", "")
-                    msg_tokens += len(args) // _CHARS_PER_TOKEN
+            msg_tokens = estimate_msg_tokens(msg)
             if accumulated + msg_tokens > soft_ceiling and (n - i) >= min_tail:
                 break
             accumulated += msg_tokens
@@ -319,26 +311,31 @@ class SmartCompressor:
         compressed = []
         for i in range(compress_start):
             msg = messages[i].copy()
-            if i == 0 and msg.get("role") == "system" and self.compression_count == 0:
-                msg["content"] = (
-                    (msg.get("content") or "")
-                    + "\n\n[Note: Earlier turns compacted into a handoff summary.]"
-                )
+            # Don't modify the system prompt — the SUMMARY_PREFIX on the
+            # compaction message itself already signals that turns were compacted.
+            # Appending notes to system prompt is irreversible and accumulates.
             compressed.append(msg)
 
         if not summary:
             # P1 #3 fix: DON'T delete turns if summary generation failed
-            # Return original messages unchanged — data preservation > compression
+            # Retry with simpler strategy: just drop tool results from middle turns
             logger.warning(
-                "Summary generation failed for %d turns — skipping compression to prevent data loss",
+                "Summary generation failed for %d turns — retrying with aggressive pruning",
                 compress_end - compress_start,
             )
+            # Aggressive fallback: prune ALL tool results (not just old ones)
+            pruned_msgs, extra_pruned = self.prune_tool_results(
+                messages, tail_token_budget=0  # prune everything
+            )
+            if extra_pruned > 0:
+                logger.info("Compaction retry: pruned %d additional tool results", extra_pruned)
+                return pruned_msgs
+            # If nothing to prune, return original
             return messages
 
         # Pick role avoiding consecutive same-role
         last_head = messages[compress_start - 1].get("role", "user") if compress_start > 0 else "user"
         first_tail = messages[compress_end].get("role", "user") if compress_end < n else "user"
-        merge = False
 
         summary_role = "user" if last_head in ("assistant", "tool") else "assistant"
         if summary_role == first_tail:
@@ -346,17 +343,18 @@ class SmartCompressor:
             if flipped != last_head:
                 summary_role = flipped
             else:
-                merge = True
+                # Both roles would create consecutive same-role.
+                # Insert a bridge message instead of merging into content.
+                # This avoids polluting the next message's content with summary text.
+                bridge_role = "user" if last_head == "assistant" else "assistant"
+                compressed.append({"role": bridge_role, "content": "(continued)"})
+                # Now summary_role can be the opposite of bridge_role
+                summary_role = "assistant" if bridge_role == "user" else "user"
 
-        if not merge:
-            compressed.append({"role": summary_role, "content": summary})
+        compressed.append({"role": summary_role, "content": summary})
 
         for i in range(compress_end, n):
-            msg = messages[i].copy()
-            if merge and i == compress_end:
-                msg["content"] = summary + "\n\n--- END SUMMARY ---\n\n" + (msg.get("content") or "")
-                merge = False
-            compressed.append(msg)
+            compressed.append(messages[i].copy())
 
         self.compression_count += 1
         compressed = sanitize_tool_pairs(compressed)

@@ -29,12 +29,14 @@ class SessionMeta:
     started_at: float = 0.0
     last_active_at: float = 0.0
     turn_count: int = 0
+    tool_call_count: int = 0
     total_tokens: int = 0
     total_cost_usd: float = 0.0
     compaction_count: int = 0
     title: str = ""
     tags: list[str] = field(default_factory=list)
     surface: str = "cli"
+    system_prompt_hash: str = ""  # SHA256 of cached system prompt (for cache stability)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -43,12 +45,14 @@ class SessionMeta:
             "started_at": self.started_at,
             "last_active_at": self.last_active_at,
             "turn_count": self.turn_count,
+            "tool_call_count": self.tool_call_count,
             "total_tokens": self.total_tokens,
             "total_cost_usd": round(self.total_cost_usd, 6),
             "compaction_count": self.compaction_count,
             "title": self.title,
             "tags": self.tags,
             "surface": self.surface,
+            "system_prompt_hash": self.system_prompt_hash,
         }
 
     @classmethod
@@ -59,12 +63,14 @@ class SessionMeta:
             started_at=data.get("started_at", 0.0),
             last_active_at=data.get("last_active_at", 0.0),
             turn_count=data.get("turn_count", 0),
+            tool_call_count=data.get("tool_call_count", 0),
             total_tokens=data.get("total_tokens", 0),
             total_cost_usd=data.get("total_cost_usd", 0.0),
             compaction_count=data.get("compaction_count", 0),
             title=data.get("title", ""),
             tags=data.get("tags", []),
             surface=data.get("surface", "cli"),
+            system_prompt_hash=data.get("system_prompt_hash", ""),
         )
 
 

@@ -6,12 +6,20 @@ and expands them into context blocks.
 """
 from __future__ import annotations
 
-import os
 import re
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
+
+__all__ = [
+    "REFERENCE_RE",
+    "ContextRef",
+    "ExpansionResult",
+    "parse_refs",
+    "expand_refs",
+]
+
 
 _QUOTED_VALUE = r'(?:`[^`\n]+`|"[^"\n]+"|\'[^\'\n]+\')'
 REFERENCE_RE = re.compile(
@@ -28,9 +36,6 @@ _SENSITIVE_FILES = frozenset({
     ".ssh/id_rsa", ".ssh/id_ed25519", ".ssh/config",
     ".ssh/authorized_keys", ".netrc", ".pgpass", ".npmrc", ".pypirc",
 })
-
-# Approximate chars per token
-_CHARS_PER_TOKEN = 4
 
 
 @dataclass(frozen=True)
@@ -210,13 +215,14 @@ def expand_refs(
             continue
 
         # Token budget check
-        est_tokens = len(content) // _CHARS_PER_TOKEN
+        from caveman.utils import estimate_tokens as _est_tokens
+        est_tokens = _est_tokens(content)
         if tokens_used + est_tokens > token_budget:
-            # Truncate to fit
-            remaining = (token_budget - tokens_used) * _CHARS_PER_TOKEN
+            # Truncate to fit — use 4 chars/token as conservative estimate for truncation point
+            remaining = (token_budget - tokens_used) * 4
             if remaining > 200:
                 content = content[:remaining] + "\n... (truncated)"
-                est_tokens = remaining // _CHARS_PER_TOKEN
+                est_tokens = _est_tokens(content)
             else:
                 result.warnings.append(f"Token budget exceeded, skipping {ref.raw}")
                 continue

@@ -5,7 +5,7 @@ Thanks for your interest in contributing! Here's how to get started.
 ## Development Setup
 
 ```bash
-git clone https://github.com/abczsl520/caveman-agent.git
+git clone https://github.com/caveman-ai/caveman.git
 cd caveman
 python -m venv .venv
 source .venv/bin/activate

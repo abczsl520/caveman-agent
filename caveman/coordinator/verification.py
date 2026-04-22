@@ -20,10 +20,18 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Awaitable
 
+__all__ = [
+    "VerifyResult",
+    "VerificationReport",
+    "VerificationAgent",
+]
+
+
 logger = logging.getLogger(__name__)
 
 
 class VerifyResult(Enum):
+    """Result of a coordinator verification step (pass/fail with diagnostics)."""
     PASS = "pass"
     WARN = "warn"
     FAIL = "fail"

@@ -1,4 +1,9 @@
-"""Memory confidence scoring — memories get more accurate with use.
+"""DEPRECATED: Legacy confidence scoring — replaced by trust_score in sqlite_store.py.
+
+Scheduled for removal in v0.5.0. See PRD §8.9.2 line 1073.
+Use sqlite_store.mark_helpful() + retrieval.adjust_trust() instead.
+
+Original description: Memory confidence scoring — memories get more accurate with use.
 
 NOTE (Round 107): This in-memory tracker is superseded by SQLite's
 trust_score column + mark_helpful() in sqlite_store.py. The real
@@ -22,6 +27,21 @@ import logging
 import time
 from dataclasses import dataclass
 from typing import Any, Optional
+
+__all__ = [
+    "RECALL_SUCCESS",
+    "RECALL_FAILURE",
+    "REFLECT_CONFIRM",
+    "LINT_STALE",
+    "HELPFUL_FEEDBACK",
+    "UNHELPFUL_FEEDBACK",
+    "MIN_CONFIDENCE",
+    "MAX_CONFIDENCE",
+    "DEFAULT_CONFIDENCE",
+    "ConfidenceRecord",
+    "ConfidenceTracker",
+]
+
 
 logger = logging.getLogger(__name__)
 

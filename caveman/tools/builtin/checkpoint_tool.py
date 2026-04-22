@@ -3,6 +3,13 @@ from __future__ import annotations
 
 from caveman.tools.registry import tool
 
+__all__ = [
+    "checkpoint_save",
+    "checkpoint_restore",
+    "checkpoint_list",
+]
+
+
 
 @tool(
     name="checkpoint_save",

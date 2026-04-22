@@ -11,9 +11,15 @@ import json
 import logging
 import sqlite3
 from datetime import datetime
-from typing import List
 
 from .types import MemoryType, MemoryEntry
+
+__all__ = [
+    "SCHEMA_VERSION",
+    "row_to_entry",
+    "migrate_schema",
+]
+
 
 logger = logging.getLogger(__name__)
 
@@ -63,8 +69,8 @@ def migrate_schema(conn: sqlite3.Connection) -> None:
                 conn.execute(sql)
                 applied += 1
                 logger.info("Schema migration: added column '%s'", col)
-            except sqlite3.OperationalError:
-                pass
+            except sqlite3.OperationalError as exc:
+                logger.debug("migrate_schema: suppressed %s", exc)
     if applied:
         conn.commit()
         logger.info("Schema migration complete: %d columns added (schema v%d)", applied, SCHEMA_VERSION)

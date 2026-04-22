@@ -9,9 +9,17 @@ from __future__ import annotations
 import logging
 import time
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
+
+__all__ = [
+    "COOLDOWN_SECONDS",
+    "RotationStrategy",
+    "Credential",
+    "CredentialPool",
+]
+
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +27,7 @@ COOLDOWN_SECONDS = 3600  # 1 hour default cooldown
 
 
 class RotationStrategy(Enum):
+    """Strategy for rotating API credentials across requests."""
     ROUND_ROBIN = "round_robin"
     LEAST_USED = "least_used"
     RANDOM = "random"
@@ -40,11 +49,25 @@ class Credential:
 
     @property
     def is_available(self) -> bool:
+        """Check if credential is available.
+
+        Note: delegates to check_and_reset_cooldown() which mutates state
+        when cooldown has elapsed. For a pure read-only check, inspect
+        ``status`` directly. Inside CredentialPool, prefer calling
+        check_and_reset_cooldown() explicitly under the lock.
+        """
+        return self.check_and_reset_cooldown()
+
+    def check_and_reset_cooldown(self) -> bool:
+        """Check availability and reset status if cooldown has elapsed.
+
+        Mutates self.status/exhausted_at/error_code when cooldown expires.
+        CredentialPool.get() calls this inside the lock before filtering.
+        """
         if self.status == "ok":
             return True
         if self.status == "exhausted" and self.exhausted_at:
-            elapsed = time.time() - self.exhausted_at
-            if elapsed >= COOLDOWN_SECONDS:
+            if (time.time() - self.exhausted_at) >= COOLDOWN_SECONDS:
                 self.status = "ok"
                 self.exhausted_at = None
                 self.error_code = None
@@ -99,42 +122,52 @@ class CredentialPool:
     def get(self, provider: str) -> Optional[Credential]:
         """Get next available credential for provider."""
         with self._lock:
-            pool = self._pools.get(provider, [])
-            available = [c for c in pool if c.is_available]
-            if not available:
-                return None
+            return self._get_locked(provider)
 
-            if self.strategy == RotationStrategy.ROUND_ROBIN:
-                idx = self._indices.get(provider, 0) % len(available)
-                self._indices[provider] = idx + 1
-                cred = available[idx]
-            elif self.strategy == RotationStrategy.LEAST_USED:
-                cred = min(available, key=lambda c: c.request_count)
-            else:  # RANDOM
-                import random
-                cred = random.choice(available)
+    def _get_locked(self, provider: str) -> Optional[Credential]:
+        """Get next available credential (must be called with self._lock held)."""
+        pool = self._pools.get(provider, [])
+        # Reset cooldowns before filtering
+        for c in pool:
+            c.check_and_reset_cooldown()
+        available = [c for c in pool if c.is_available]
+        if not available:
+            return None
 
-            cred.record_use()
-            return cred
+        if self.strategy == RotationStrategy.ROUND_ROBIN:
+            idx = self._indices.get(provider, 0) % len(available)
+            self._indices[provider] = idx + 1
+            cred = available[idx]
+        elif self.strategy == RotationStrategy.LEAST_USED:
+            cred = min(available, key=lambda c: c.request_count)
+        else:  # RANDOM
+            import random
+            cred = random.choice(available)
+
+        cred.record_use()
+        return cred
 
     def mark_exhausted(
         self, provider: str, key: str,
         code: Optional[int] = None, message: str = "",
     ) -> Optional[Credential]:
-        """Mark a credential as exhausted and return next available."""
+        """Mark a credential as exhausted and return next available.
+
+        Both operations happen inside the same lock to avoid TOCTOU races.
+        """
         with self._lock:
             pool = self._pools.get(provider, [])
             for cred in pool:
                 if cred.key == key:
                     cred.mark_exhausted(code, message)
                     break
-
-        # Return next available (outside lock to avoid deadlock)
-        return self.get(provider)
+            return self._get_locked(provider)
 
     def available_count(self, provider: str) -> int:
         with self._lock:
             pool = self._pools.get(provider, [])
+            for c in pool:
+                c.check_and_reset_cooldown()
             return sum(1 for c in pool if c.is_available)
 
     def total_count(self, provider: str) -> int:
@@ -150,6 +183,8 @@ class CredentialPool:
         with self._lock:
             result = {}
             for provider, pool in self._pools.items():
+                for c in pool:
+                    c.check_and_reset_cooldown()
                 ok = sum(1 for c in pool if c.is_available)
                 result[provider] = {
                     "ok": ok,

@@ -4,6 +4,22 @@ from __future__ import annotations
 from caveman.commands.types import CommandContext
 from caveman.commands.handlers._helpers import load_config_safe
 
+__all__ = [
+    "handle_model",
+    "handle_provider",
+    "handle_reasoning",
+    "handle_fast",
+    "handle_verbose",
+    "handle_personality",
+    "handle_yolo",
+    "handle_voice",
+    "handle_skin",
+    "handle_config",
+    "handle_elevated",
+    "handle_activation",
+]
+
+
 
 async def handle_model(ctx: CommandContext) -> None:
     """Show or switch model."""

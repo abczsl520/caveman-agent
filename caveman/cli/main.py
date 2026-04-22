@@ -1,19 +1,19 @@
 """Caveman CLI entry point."""
 import typer
+from pathlib import Path
 from typing import Optional
-
 app = typer.Typer(name="caveman", help="An agent that learns, executes, and evolves.")
 
-
 @app.callback(invoke_without_command=True)
-def main_callback(ctx: typer.Context):
+def main_callback(ctx: typer.Context) -> None:
     """Ensure home directories exist on every CLI invocation."""
     from caveman.paths import ensure_home
+    from caveman.runtime_identity import sanitize_environment
     ensure_home()
+    sanitize_environment()
     if ctx.invoked_subcommand is None:
         # No subcommand → show help
         typer.echo(ctx.get_help())
-
 
 # Register wiki + mcp commands
 from caveman.cli.wiki_mcp import register_wiki_commands, register_mcp_commands
@@ -27,7 +27,7 @@ def run(
     verbose: bool = typer.Option(False, "--verbose", "-v"),
     max_iter: int = typer.Option(50, "--max-iter", help="Max loop iterations"),
     interactive: bool = typer.Option(False, "--interactive", "-i", help="Interactive REPL mode"),
-):
+) -> None:
     """Run Caveman agent with a given task, or interactively."""
     import asyncio
     from caveman.cli.tui import show_banner, show_error
@@ -59,7 +59,7 @@ def run(
         raise typer.Exit(1)
 
 @app.command()
-def skills():
+def skills() -> None:
     """List installed skills."""
     from caveman.skills.manager import SkillManager
 
@@ -72,13 +72,13 @@ def skills():
         typer.echo(f"  {name}: {skill.description} (v{skill.version})")
 
 @app.command()
-def version():
+def version() -> None:
     """Show Caveman version."""
     from caveman import __version__
     typer.echo(f"Caveman v{__version__}")
 
 @app.command()
-def tools():
+def tools() -> None:
     """List available tools."""
     from caveman.tools.registry import ToolRegistry
     reg = ToolRegistry()
@@ -87,7 +87,7 @@ def tools():
         typer.echo(f"  🔧 {schema['name']}: {schema['description']}")
 
 @app.command()
-def setup():
+def setup() -> None:
     """Interactive setup — create ~/.caveman/config.yaml with auto-detection."""
     from caveman.paths import CAVEMAN_HOME, CONFIG_PATH, DEFAULT_MODEL
     CAVEMAN_HOME.mkdir(parents=True, exist_ok=True)
@@ -188,16 +188,22 @@ def _detect_external_configs() -> dict[str, dict]:
 @app.command()
 def serve(
     config: Optional[str] = typer.Option(None, "--config", "-c", help="Config file path"),
-):
+) -> None:
     """Start Caveman as a Discord/Telegram bot."""
     import asyncio
     from caveman.cli.tui import show_banner
-    from caveman.gateway.runner import run_gateway
-
+    from caveman.gateway.runner import run_gateway_forever
+    from caveman.gateway.status import get_running_pid
+    from caveman.logging_config import setup_logging
+    existing = get_running_pid()
+    if existing:
+        typer.echo(f"⚠️ Gateway already running (PID {existing}). Use /restart.")
+        raise typer.Exit(1)
+    setup_logging(level="INFO", log_file=str(Path.home() / ".caveman" / "logs" / "gateway.log"))
     show_banner()
     typer.echo("🌐 Starting gateway service...")
     try:
-        asyncio.run(run_gateway(config_path=config))
+        asyncio.run(run_gateway_forever(config_path=config))
     except KeyboardInterrupt:
         typer.echo("\n🛑 Gateway stopped.")
 
@@ -206,7 +212,7 @@ def export(
     min_quality: float = typer.Option(0.5, "--min-quality", help="Minimum quality score"),
     trajectory_dir: str = typer.Option(None, "--dir"),
     output: Optional[str] = typer.Option(None, "--output", "-o"),
-):
+) -> None:
     """Export trajectories as JSONL for training."""
     from caveman.trajectory.recorder import TrajectoryRecorder
     from caveman.paths import TRAJECTORIES_DIR
@@ -225,7 +231,7 @@ def import_cmd(
     all_sources: bool = typer.Option(False, "--all", help="Import from all detected sources"),
     only: Optional[str] = typer.Option(None, "--only", help="Filter: memory, config, workspace"),
     include_secrets: bool = typer.Option(False, "--include-secrets", help="Also import entries containing secrets/keys"),
-):
+) -> None:
     """Import memories from OpenClaw, Hermes, Codex, or Claude Code."""
     import asyncio
     from caveman.cli.importer import import_memories, detect_sources
@@ -259,13 +265,29 @@ def import_cmd(
     typer.echo(format_result_report(result))
 
 @app.command()
-def doctor():
+def doctor() -> None:
     """Check flywheel health — memory, skills, trajectories, system."""
     import asyncio
     from caveman.cli.doctor import run_doctor
 
     report = asyncio.run(run_doctor())
     typer.echo(report.to_text())
+
+@app.command(name="adapt-workspace")
+def adapt_workspace_cmd(
+    dry_run: bool = typer.Option(True, "--dry-run/--no-dry-run", help="Preview changes without writing"),
+) -> None:
+    """Re-adapt workspace files (fix OpenClaw tool names, remove duplicates)."""
+    from caveman.cli.adapt import adapt_workspace
+    changed, messages = adapt_workspace(dry_run)
+    for msg in messages:
+        typer.echo(f"  {msg}")
+    if changed == 0:
+        typer.echo("✅ All workspace files are already adapted.")
+    elif dry_run:
+        typer.echo(f"\n{changed} file(s) need adaptation. Run with --no-dry-run to apply.")
+    else:
+        typer.echo(f"\n✅ {changed} file(s) adapted.")
 
 @app.command()
 def train(
@@ -279,7 +301,7 @@ def train(
     format: str = typer.Option("sharegpt", "--format", help="Dataset format: sharegpt, chatml, openai"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Build dataset only, skip training"),
     stats: bool = typer.Option(False, "--stats", help="Show trajectory stats without building"),
-):
+) -> None:
     """Train embedding model or export data for researchers."""
     from caveman.cli.tui import show_banner
     show_banner()
@@ -306,7 +328,7 @@ def hub(
     query: str = typer.Argument("", help="Search query"),
     action: str = typer.Option("search", "--action", "-a", help="search, install, publish, stats"),
     name: str = typer.Option("", "--name", "-n", help="Skill/plugin name for install/publish"),
-):
+) -> None:
     """Caveman Hub — discover and share skills & plugins."""
     import asyncio
     from caveman.hub.client import HubClient
@@ -338,7 +360,7 @@ def hub(
 @app.command()
 def plugins(
     action: str = typer.Option("list", "--action", "-a", help="list, load"),
-):
+) -> None:
     """Manage Caveman plugins."""
     from caveman.plugins.manager import PluginManager
 
@@ -358,71 +380,14 @@ def plugins(
         count = mgr.load_all()
         typer.echo(f"Loaded {count} plugins")
 
-@app.command()
-def obsidian(
-    output: str = typer.Option(None, "--output", "-o", help="Output directory"),
-):
-    """Export memories as Obsidian-compatible markdown vault."""
-    from caveman.memory.manager import MemoryManager
-    from caveman.memory.obsidian import export_to_obsidian
-    from caveman.paths import CAVEMAN_HOME
+# Register utility commands (obsidian, status, flywheel, audit, bench, etc.)
+from caveman.cli.utility_commands import register_utility_commands
+register_utility_commands(app)
 
-    out_dir = output or str(CAVEMAN_HOME / "obsidian_vault")
-    mm = MemoryManager.with_sqlite()
-    result = export_to_obsidian(mm, out_dir)
-    typer.echo(f"\u2705 Exported {result['exported']} memories to {result['output_dir']}")
-
-@app.command()
-def status():
-    """Show Caveman status dashboard + project stats."""
-    from caveman.cli.status import status_text
-    from caveman.cli.stats import get_stats
-    typer.echo(status_text())
-    typer.echo(get_stats())
-
-@app.command()
-def flywheel(
-    target: Optional[str] = typer.Option(None, "--target", "-t", help="Target subsystem to audit"),
-    all_: bool = typer.Option(False, "--all", help="Audit all discovered subsystems"),
-    parallel: Optional[list[str]] = typer.Option(None, "--parallel", "-p", help="Audit multiple subsystems in parallel"),
-    rounds: int = typer.Option(5, help="Number of flywheel rounds"),
-    max_iter: int = typer.Option(15, "--max-iter", help="Max LLM iterations per round"),
-    stats: bool = typer.Option(False, "--stats", help="Show flywheel statistics"),
-):
-    """Run the meta-flywheel: Caveman audits and fixes itself."""
-    from caveman.cli.flywheel import flywheel_cli
-    flywheel_cli(
-        target=target, all_=all_, parallel=parallel,
-        rounds=rounds, max_iter=max_iter, stats=stats,
-    )
-
-@app.command()
-def audit():
-    """Run static code quality checks (no LLM needed)."""
-    from caveman.cli.audit import run_audit
-    typer.echo(run_audit())
-
-@app.command()
-def bench(rounds: int = typer.Option(1, help="Number of benchmark rounds")):
-    """Run memory system performance benchmarks."""
-    from caveman.cli.bench import run_bench_sync
-    run_bench_sync(rounds=rounds)
-
-@app.command(name="self-test")
-def self_test():
-    """Run full lifecycle self-test (store→recall→shield→wiki→skills)."""
-    import asyncio
-    from caveman.cli.selftest import run_self_test
-    typer.echo(asyncio.run(run_self_test()))
-
-@app.command()
-def changelog(n: int = typer.Option(20, help="Number of recent commits")):
-    """Auto-generate changelog from git log."""
-    from caveman.cli.changelog import generate_changelog
-    typer.echo(generate_changelog(n=n))
-
-# Register ACP commands from separate module
 import caveman.cli.acp_cli  # noqa: F401, E402
+
+__all__ = ["main_callback", "run", "skills", "version", "tools", "setup", "serve", "export", "import_cmd", "doctor", "adapt_workspace_cmd", "train", "hub", "plugins"]
+
 
 if __name__ == "__main__":
     app()

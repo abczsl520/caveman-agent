@@ -171,6 +171,8 @@ def test_display_functions_exist():
     show_skill_nudge()
     show_error("test error")
     show_thinking()
+    # Verify all are callable
+    assert all(callable(f) for f in [show_tool_call, show_tool_result, show_memory_nudge, show_skill_nudge, show_error, show_thinking])
 
 
 def test_no_circular_import():
@@ -179,6 +181,7 @@ def test_no_circular_import():
     from caveman.agent.loop import AgentLoop
     from caveman.agent.factory import create_loop
     from caveman.cli.tui import interactive_loop
+    assert callable(AgentLoop) and callable(create_loop) and callable(interactive_loop)
     # All three imported successfully = no circular dependency at runtime
 
 

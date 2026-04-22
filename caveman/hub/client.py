@@ -16,9 +16,17 @@ import json
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Any
 
 import httpx
+from caveman.aio import aio_exists, aio_is_dir, aio_mkdir
+from caveman.timeouts import HTTP_FAST, HUB_DEFAULT, HUB_UPLOAD
+
+__all__ = [
+    "HUB_URL",
+    "HubClient",
+    "MigrationTool",
+]
+
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +53,7 @@ class HubClient:
     async def search_skills(self, query: str = "", limit: int = 20) -> list[dict]:
         """Search for skills on the hub."""
         try:
-            async with httpx.AsyncClient(timeout=15) as client:
+            async with httpx.AsyncClient(timeout=HUB_DEFAULT) as client:
                 resp = await client.get(
                     f"{self.hub_url}/api/skills",
                     params={"q": query, "limit": limit},
@@ -60,7 +68,7 @@ class HubClient:
     async def get_skill(self, name: str) -> dict | None:
         """Get skill details from hub."""
         try:
-            async with httpx.AsyncClient(timeout=15) as client:
+            async with httpx.AsyncClient(timeout=HUB_DEFAULT) as client:
                 resp = await client.get(
                     f"{self.hub_url}/api/skills/{name}",
                     headers=self._headers(),
@@ -81,7 +89,7 @@ class HubClient:
 
         from caveman.paths import SKILLS_DIR
         target = Path(target_dir).expanduser() / name if target_dir else SKILLS_DIR / name
-        target.mkdir(parents=True, exist_ok=True)
+        await aio_mkdir(target, parents=True, exist_ok=True)
 
         # Write skill file
         skill_file = target / "skill.yaml"
@@ -95,9 +103,9 @@ class HubClient:
     async def publish_skill(self, skill_path: str) -> dict:
         """Publish a local skill to the hub."""
         path = Path(skill_path).expanduser()
-        skill_file = path / "skill.yaml" if path.is_dir() else path
+        skill_file = path / "skill.yaml" if await aio_is_dir(path) else path
 
-        if not skill_file.exists():
+        if not await aio_exists(skill_file):
             return {"ok": False, "error": f"Skill file not found: {skill_file}"}
 
         import yaml
@@ -107,7 +115,7 @@ class HubClient:
         skill_data["published_at"] = datetime.now().isoformat()
 
         try:
-            async with httpx.AsyncClient(timeout=30) as client:
+            async with httpx.AsyncClient(timeout=HUB_UPLOAD) as client:
                 resp = await client.post(
                     f"{self.hub_url}/api/skills",
                     headers=self._headers(),
@@ -121,7 +129,7 @@ class HubClient:
     async def search_plugins(self, query: str = "", limit: int = 20) -> list[dict]:
         """Search for plugins on the hub."""
         try:
-            async with httpx.AsyncClient(timeout=15) as client:
+            async with httpx.AsyncClient(timeout=HUB_DEFAULT) as client:
                 resp = await client.get(
                     f"{self.hub_url}/api/plugins",
                     params={"q": query, "limit": limit},
@@ -135,7 +143,7 @@ class HubClient:
     async def hub_stats(self) -> dict:
         """Get hub statistics."""
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
+            async with httpx.AsyncClient(timeout=HTTP_FAST) as client:
                 resp = await client.get(
                     f"{self.hub_url}/api/stats",
                     headers=self._headers(),
@@ -148,9 +156,6 @@ class HubClient:
     def _search_local_cache(self, query: str) -> list[dict]:
         """Fallback: search local cache when hub is offline."""
         cache_file = self._cache_dir / "skills_cache.json"
-        if not cache_file.exists():
-            return []
-
         try:
             with open(cache_file, encoding="utf-8") as f:
                 skills = json.load(f)
@@ -159,7 +164,7 @@ class HubClient:
                 return [s for s in skills if query_lower in s.get("name", "").lower()
                         or query_lower in s.get("description", "").lower()]
             return skills
-        except (json.JSONDecodeError, IOError):
+        except (json.JSONDecodeError, IOError, FileNotFoundError):
             return []
 
 

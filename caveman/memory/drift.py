@@ -13,7 +13,7 @@ import re
 from datetime import datetime, timedelta
 from typing import Optional
 
-from .types import MemoryType, MemoryEntry
+from .types import MemoryEntry
 
 logger = logging.getLogger(__name__)
 

@@ -5,6 +5,7 @@ import logging
 import re
 from datetime import datetime
 from pathlib import Path
+from caveman.aio import aio_exists, aio_glob, aio_read_text, aio_unlink, aio_write_text
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +33,8 @@ class CheckpointManager:
     """Save/restore agent state to disk."""
 
     def __init__(self, base_dir: Path | None = None):
-        self.base_dir = base_dir or Path.home() / ".caveman" / "checkpoints"
+        from caveman.paths import CAVEMAN_HOME
+        self.base_dir = base_dir or CAVEMAN_HOME / "checkpoints"
         self.base_dir.mkdir(parents=True, exist_ok=True)
 
     async def save(self, checkpoint: Checkpoint) -> str:
@@ -50,7 +52,7 @@ class CheckpointManager:
             "metadata": checkpoint.metadata,
             "created_at": checkpoint.created_at,
         }
-        path.write_text(json.dumps(data, ensure_ascii=False, indent=2))
+        await aio_write_text(path, json.dumps(data, ensure_ascii=False, indent=2))
         await self._cleanup(checkpoint.session_id)
         return cp_id
 
@@ -61,17 +63,17 @@ class CheckpointManager:
             _validate_id(cp_id, "checkpoint_id")
             path = self.base_dir / f"{cp_id}.json"
         else:
-            candidates = sorted(self.base_dir.glob(f"{session_id}_*.json"), reverse=True)
+            candidates = sorted(await aio_glob(self.base_dir, f"{session_id}_*.json"), reverse=True)
             if not candidates:
                 return None
             path = candidates[0]
         # Verify resolved path stays inside base_dir
         if not path.resolve().parent == self.base_dir.resolve():
             raise ValueError(f"Path traversal detected")
-        if not path.exists():
+        if not await aio_exists(path):
             return None
         try:
-            data = json.loads(path.read_text())
+            data = json.loads(await aio_read_text(path))
         except (json.JSONDecodeError, OSError) as e:
             logger.warning("Corrupt checkpoint file %s: %s", path, e)
             return None
@@ -85,9 +87,9 @@ class CheckpointManager:
             _validate_id(session_id, "session_id")
         pattern = f"{session_id}_*.json" if session_id else "*.json"
         results = []
-        for path in sorted(self.base_dir.glob(pattern), reverse=True):
+        for path in sorted(await aio_glob(self.base_dir, pattern), reverse=True):
             try:
-                data = json.loads(path.read_text())
+                data = json.loads(await aio_read_text(path))
                 results.append({
                     "id": data["id"],
                     "session_id": data["session_id"],
@@ -98,9 +100,9 @@ class CheckpointManager:
         return results
 
     async def _cleanup(self, session_id: str, keep: int = 10):
-        candidates = sorted(self.base_dir.glob(f"{session_id}_*.json"))
+        candidates = sorted(await aio_glob(self.base_dir, f"{session_id}_*.json"))
         for old in candidates[:-keep]:
             try:
-                old.unlink()
+                await aio_unlink(old)
             except OSError as e:
                 logger.warning("Failed to remove old checkpoint %s: %s", old, e)

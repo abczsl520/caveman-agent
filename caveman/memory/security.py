@@ -41,7 +41,15 @@ _INVISIBLE_CHARS = {
 
 
 def scan_memory_content(content: str) -> Optional[str]:
-    """Scan memory content for threats. Returns error string if blocked, None if safe."""
+    """Scan memory content for threats. Returns error string if blocked, None if safe.
+
+    Called by ``SQLiteMemoryStore.store()`` when ``trusted=False`` (the default).
+    The ``trusted=True`` parameter bypasses this scan — it should ONLY be set for
+    content originating from the agent's own internal processes (e.g., Shield
+    essence extraction, Ripple propagation). Never set ``trusted=True`` for
+    user-supplied or externally-sourced content, as memories are injected into
+    the system prompt and are a high-value injection surface.
+    """
     # Check invisible unicode
     for char in _INVISIBLE_CHARS:
         if char in content:

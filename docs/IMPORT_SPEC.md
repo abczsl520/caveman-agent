@@ -298,7 +298,62 @@ Run without --dry-run to execute.
 ### 不做的事
 
 - 不导入 OpenClaw 的 SQLite 向量库（格式不同，重新 embedding 更好）
-- 不导入 OpenClaw 的 session 数据（太大，且是运行时数据）
+- ~~不导入 OpenClaw 的 session 数据（太大，且是运行时数据）~~ → 已支持！见下方 Session 知识提取
 - 不导入 Claude Code 的 JSONL 对话历史（太大，价值密度低）
 - 不自动激活导入的 cron jobs（只保存为参考）
 - 不修改任何源文件
+
+### Session 知识提取（openclaw-sessions）
+
+从 OpenClaw 的 session JSONL 对话中提取高价值知识。**用户自主决定是否启用。**
+
+#### 数据源
+```
+~/.openclaw/agents/main/sessions/*.jsonl    → 主 agent 对话（124 个 session，97.5MB）
+~/.openclaw/agents/claude/sessions/*.jsonl  → Claude 子 agent（可选）
+~/.openclaw/agents/claude-code/sessions/*.jsonl → Claude Code 子 agent（可选）
+```
+
+#### 三层提取管线
+1. **解析层**（session_parser.py）— 将 JSONL 解析为结构化 ConversationTurn
+2. **过滤层**（session_extractor.py）— 对每个 turn 打分，过滤噪音，聚类相关 turn
+3. **提取层**（session_extractor.py）— 规则提取 或 LLM 增强提取
+
+#### 知识评分信号
+- 正向：根因分析、架构讨论、研究分析、解决方案、教训总结、决策、代码块、结构化列表
+- 负向：简单确认（ok/好的）、heartbeat、filler text、错误噪音
+- 阈值：score ≥ 2.0 才提取
+
+#### 知识分类 → 记忆类型映射
+- research/architecture/decision/reference → SEMANTIC
+- diagnosis/status → EPISODIC
+- solution/lesson → PROCEDURAL
+
+#### CLI 接口
+```bash
+# 预览（dry-run）
+caveman import --from openclaw-sessions --dry-run
+
+# 执行导入（规则提取）
+caveman import --from openclaw-sessions
+
+# LLM 增强提取（更高质量，消耗 token）
+caveman import --from openclaw-sessions --use-llm
+
+# 只导入特定日期之后的 session
+caveman import --from openclaw-sessions --since 2026-04-01
+
+# 只导入特定 session
+caveman import --from openclaw-sessions --session <session-id>
+
+# 包含子 agent 的 session
+caveman import --from openclaw-sessions --include-sub-agents
+
+# 调整评分阈值（更严格）
+caveman import --from openclaw-sessions --min-score 3.0
+```
+
+#### 安全
+- 默认不导入含密钥的内容（复用 security/scanner.py）
+- 每条记忆带完整溯源 metadata（session_id, date, category, score）
+- 基于 content hash 幂等去重

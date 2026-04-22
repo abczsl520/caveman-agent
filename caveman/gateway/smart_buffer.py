@@ -38,6 +38,13 @@ class _SmartBuffer:
     )
 
     def __init__(self, router: GatewayRouter, gw: str, ch: str, interim_enabled: bool = True):
+        # Platform-aware char limit
+        try:
+            from caveman.gateway.display_config import get_display_config
+            display = get_display_config(gw)
+            self.CHAR_LIMIT = min(display.max_message_length - 200, 1800) if display.max_message_length > 0 else 1800
+        except Exception:
+            pass  # Keep default
         self._router = router
         self._gw = gw
         self._ch = ch
@@ -62,10 +69,10 @@ class _SmartBuffer:
         try:
             loop = asyncio.get_running_loop()
             self._timer = loop.call_later(
-                self.SILENCE_TIMEOUT, lambda: asyncio.ensure_future(self.flush())
+                self.SILENCE_TIMEOUT, lambda: loop.create_task(self.flush())
             )
-        except RuntimeError:
-            pass
+        except RuntimeError as exc:
+            logger.debug("_reset_timer: suppressed %s", exc)
 
     def _strip_think_blocks(self, text: str) -> str:
         """Remove <think>...</think> blocks (Hermes-style)."""

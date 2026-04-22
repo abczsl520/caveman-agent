@@ -13,6 +13,9 @@ logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
+import re as _re_utils
+_CJK_RE = _re_utils.compile(r'[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]')
+
 
 # ── Token estimation (CJK-aware, single source of truth) ──
 
@@ -28,25 +31,63 @@ def estimate_tokens(text: str) -> int:
     """
     if not text:
         return 0
-    cjk_count = sum(1 for c in text if '\u4e00' <= c <= '\u9fff'
-                    or '\u3040' <= c <= '\u30ff'
-                    or '\uac00' <= c <= '\ud7af')
+    cjk_count = len(_CJK_RE.findall(text))
     non_cjk_len = len(text) - cjk_count
     return cjk_count + (non_cjk_len // 4) + 3
 
 
+# Average chars per token by model family (moved from gateway.agent_memory_depth)
+_MODEL_CHARS_PER_TOKEN = {
+    "claude": 3.5,
+    "gpt": 4.0,
+    "gemini": 3.8,
+    "deepseek": 3.2,
+    "default": 3.7,
+}
+
+
+def estimate_tokens_for_model(text: str, model: str = "") -> int:
+    """Estimate token count for text based on model-specific chars-per-token ratios.
+
+    Unlike estimate_tokens() (CJK-aware heuristic), this uses model-family
+    ratios for budget planning.
+    """
+    if not text:
+        return 0
+    family = "default"
+    model_lower = model.lower()
+    for prefix in _MODEL_CHARS_PER_TOKEN:
+        if prefix in model_lower:
+            family = prefix
+            break
+    chars_per_token = _MODEL_CHARS_PER_TOKEN[family]
+    return int(len(text) / chars_per_token)
+
+
 # ── Math ──
 
-def cosine_similarity(a: list[float], b: list[float]) -> float:
-    """Compute cosine similarity between two vectors."""
-    if len(a) != len(b) or not a:
-        return 0.0
-    dot = sum(x * y for x, y in zip(a, b))
-    norm_a = math.sqrt(sum(x * x for x in a))
-    norm_b = math.sqrt(sum(x * x for x in b))
-    if norm_a == 0 or norm_b == 0:
-        return 0.0
-    return dot / (norm_a * norm_b)
+try:
+    import numpy as _np
+    def cosine_similarity(a: list[float], b: list[float]) -> float:
+        """Compute cosine similarity between two vectors (numpy fast path)."""
+        if len(a) != len(b) or not a:
+            return 0.0
+        va, vb = _np.asarray(a, dtype=_np.float32), _np.asarray(b, dtype=_np.float32)
+        na, nb = _np.linalg.norm(va), _np.linalg.norm(vb)
+        if na == 0 or nb == 0:
+            return 0.0
+        return float(_np.dot(va, vb) / (na * nb))
+except ImportError:
+    def cosine_similarity(a: list[float], b: list[float]) -> float:
+        """Compute cosine similarity between two vectors (pure Python fallback)."""
+        if len(a) != len(b) or not a:
+            return 0.0
+        dot = sum(x * y for x, y in zip(a, b))
+        norm_a = math.sqrt(sum(x * x for x in a))
+        norm_b = math.sqrt(sum(x * x for x in b))
+        if norm_a == 0 or norm_b == 0:
+            return 0.0
+        return dot / (norm_a * norm_b)
 
 
 # ── Retry ──
@@ -61,7 +102,10 @@ async def retry_async(
     on_retry: Callable[[int, Exception], Any] | None = None,
     **kwargs,
 ) -> T:
-    """Retry an async function with exponential backoff.
+    """Retry an async function with jittered exponential backoff.
+
+    Delegates to ``providers.retry.jittered_backoff`` for decorrelated delays,
+    keeping the simple call-site signature for non-provider code.
 
     Args:
         fn: Async function to call
@@ -77,6 +121,8 @@ async def retry_async(
     Raises:
         Last exception if all retries exhausted
     """
+    from caveman.providers.retry import jittered_backoff
+
     if max_retries < 1:
         raise ValueError(f"max_retries must be >= 1, got {max_retries}")
     last_exc: Exception | None = None
@@ -91,7 +137,9 @@ async def retry_async(
             if attempt == max_retries - 1:
                 raise  # Last attempt, propagate
 
-            delay = min(base_delay * (2 ** attempt), max_delay)
+            delay = jittered_backoff(
+                attempt, base_delay=base_delay, max_delay=max_delay,
+            )
             if on_retry:
                 on_retry(attempt, e)
             else:
@@ -148,7 +196,7 @@ def parse_json_from_llm(text: str, expect: str = "object") -> Any:
     try:
         return json.loads(cleaned)
     except (json.JSONDecodeError, ValueError):
-        pass
+        pass  # intentional: ValueError suppressed
 
     # Step 3: Find the outermost JSON structure
     open_char = "{" if expect == "object" else "["
@@ -193,35 +241,38 @@ def parse_json_from_llm(text: str, expect: str = "object") -> Any:
 def split_message(text: str, max_length: int = 1900) -> list[str]:
     """Split text into chunks respecting max_length.
 
-    Tries to split at newlines for readability.
-    Used by Discord (1900), Telegram (4000), etc.
+    Delegates to gateway.message_splitting (canonical implementation) which has:
+    - Fence-parity counting (handles nested/multiple code fences correctly)
+    - Language-tag preservation across chunks (```python -> close -> reopen)
+    - Paragraph / line / sentence break-point hierarchy
+    - Post-processing to auto-balance unclosed fences
+
+    This thin wrapper keeps the utils.split_message API stable so all
+    gateway modules (discord_gw, telegram_gw, slack_gw, outbound) benefit
+    from a single source of truth.
     """
     if max_length < 1:
         raise ValueError(f"max_length must be >= 1, got {max_length}")
-    if len(text) <= max_length:
-        return [text]
-
-    chunks: list[str] = []
-    while text:
-        if len(text) <= max_length:
-            chunks.append(text)
-            break
-
-        # Try to split at newline
-        split_at = text.rfind("\n", 0, max_length)
-        if split_at < max_length // 2:
-            # No good newline found — split at max_length
-            split_at = max_length
-
-        chunks.append(text[:split_at])
-        text = text[split_at:].lstrip("\n")
-
-    return chunks
+    from caveman.gateway.message_splitting import split_message as _canonical
+    return _canonical(text, max_length=max_length)
 
 
 # ── Success detection (shared by phases.py + reflect.py) ──
 
 import re as _re
+
+__all__ = [
+    "T",
+    "estimate_tokens",
+    "estimate_tokens_for_model",
+    "retry_async",
+    "strip_code_fences",
+    "parse_json_from_llm",
+    "split_message",
+    "detect_success",
+    "detect_outcome",
+]
+
 
 _SUCCESS_PATTERNS = [
     r"(?:✅|done|completed|finished|success|passed|fixed|resolved|created|built)",

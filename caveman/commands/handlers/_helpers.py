@@ -1,11 +1,29 @@
 """Shared utilities for command handlers. Eliminates repeated patterns."""
 from __future__ import annotations
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 import json
 import sqlite3
 from pathlib import Path
 
 from caveman.paths import CAVEMAN_HOME
+
+__all__ = [
+    "read_json",
+    "count_files",
+    "list_files",
+    "memory_count",
+    "memory_search_fts",
+    "memory_stats",
+    "load_config_safe",
+    "memory_recent",
+    "memory_top_retrieved",
+    "memory_high_trust",
+]
+
 
 
 def read_json(filename: str) -> dict | list | None:
@@ -15,7 +33,8 @@ def read_json(filename: str) -> dict | list | None:
         return None
     try:
         return json.loads(path.read_text())
-    except Exception:
+    except Exception as e:
+        logger.debug("suppressed: %s", e)
         return None
 
 
@@ -58,7 +77,8 @@ def memory_search_fts(query: str, limit: int = 5) -> list[str]:
         ).fetchall()
         conn.close()
         return [r[0] for r in rows]
-    except Exception:
+    except Exception as e:
+        logger.debug("suppressed: %s", e)
         return []
 
 
@@ -87,7 +107,8 @@ def load_config_safe() -> dict:
     try:
         from caveman.config.loader import load_config
         return load_config()
-    except Exception:
+    except Exception as e:
+        logger.debug("suppressed: %s", e)
         return {}
 
 
@@ -104,7 +125,8 @@ def memory_recent(limit: int = 5) -> list[tuple[str, str, float]]:
         ).fetchall()
         conn.close()
         return [(r[0], r[1], r[2]) for r in rows]
-    except Exception:
+    except Exception as e:
+        logger.debug("suppressed: %s", e)
         return []
 
 
@@ -121,7 +143,8 @@ def memory_top_retrieved(limit: int = 5) -> list[tuple[str, int, float]]:
         ).fetchall()
         conn.close()
         return [(r[0], r[1], r[2]) for r in rows]
-    except Exception:
+    except Exception as e:
+        logger.debug("suppressed: %s", e)
         return []
 
 
@@ -139,5 +162,6 @@ def memory_high_trust(limit: int = 5) -> list[tuple[str, float, str]]:
         ).fetchall()
         conn.close()
         return [(r[0], r[1], r[2]) for r in rows]
-    except Exception:
+    except Exception as e:
+        logger.debug("suppressed: %s", e)
         return []

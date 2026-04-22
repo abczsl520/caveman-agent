@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +23,8 @@ class BackgroundTaskMixin:
 
     def _safe_bg(self, coro) -> None:
         """Launch a background coroutine with tracking and error logging."""
-        task = asyncio.ensure_future(coro)
+        loop = asyncio.get_running_loop()
+        task = loop.create_task(coro)
         self._bg_tasks.add(task)
 
         def _on_done(t: asyncio.Task) -> None:

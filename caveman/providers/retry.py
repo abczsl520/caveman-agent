@@ -9,20 +9,25 @@ import asyncio
 import logging
 import random
 import time
-import threading
+import itertools
 from typing import Any, Awaitable, Callable, Optional, TypeVar
 
 from caveman.providers.error_classifier import (
     ClassifiedError,
-    FailoverReason,
     classify_error,
 )
+
+__all__ = [
+    "T",
+    "jittered_backoff",
+    "retry_with_backoff",
+]
+
 
 logger = logging.getLogger(__name__)
 T = TypeVar("T")
 
-_jitter_counter = 0
-_jitter_lock = threading.Lock()
+_jitter_counter = itertools.count()
 
 
 def jittered_backoff(
@@ -36,10 +41,7 @@ def jittered_backoff(
 
     Decorrelates concurrent retries to prevent thundering herd.
     """
-    global _jitter_counter
-    with _jitter_lock:
-        _jitter_counter += 1
-        tick = _jitter_counter
+    tick = next(_jitter_counter)
 
     exponent = max(0, attempt - 1)
     if exponent >= 63 or base_delay <= 0:

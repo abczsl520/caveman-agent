@@ -29,10 +29,10 @@ class TelegramGateway(Gateway):
     def name(self) -> str:
         return "telegram"
 
-    def on_task(self, handler: Callable[[str, dict], Awaitable[str]]):
+    def on_task(self, handler: Callable[[str, dict], Awaitable[str]]) -> None:
         self._task_handler = handler
 
-    async def start(self):
+    async def start(self) -> None:
         try:
             from telegram import Update
             from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, filters, ContextTypes
@@ -41,10 +41,10 @@ class TelegramGateway(Gateway):
 
         app = ApplicationBuilder().token(self.token).build()
 
-        async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await update.message.reply_text("🦴 Caveman ready! Send me a task.")
 
-        async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             if not update.message or not update.message.text:
                 return
 
@@ -94,8 +94,14 @@ class TelegramGateway(Gateway):
         await app.updater.start_polling()
         self._running = True
         logger.info("Telegram gateway started")
+        try:
+            from caveman.gateway.status import write_runtime_state
+            write_runtime_state(state="running", platform="telegram",
+                                platform_state="connected")
+        except Exception as exc:
+            logger.debug("unknown: suppressed %s", exc)
 
-    async def stop(self):
+    async def stop(self) -> None:
         self._running = False
         if self._app:
             await self._app.updater.stop()

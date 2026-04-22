@@ -47,7 +47,7 @@ class CommandCompleter:
 
         return []
 
-    def readline_completer(self, text: str, state: int):
+    def readline_completer(self, text: str, state: int) -> None:
         """readline-compatible completer function."""
         if state == 0:
             self._matches = self.complete(text)

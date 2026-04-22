@@ -15,12 +15,10 @@ except ImportError:
 
 from .types import Skill, SkillTrigger, SkillStep, QualityGate
 
-
 def _validate_skill_name(name: str) -> None:
     """Reject skill names that could escape the skills directory."""
     if not name or ".." in name or "/" in name or "\\" in name or "\x00" in name:
         raise ValueError(f"Invalid skill name: {name!r}")
-
 
 class SkillManager:
     """Manages agent skills with matching, auto-creation, and evolution."""
@@ -30,7 +28,13 @@ class SkillManager:
         self.skills_dir = Path(skills_dir).expanduser() if skills_dir else SKILLS_DIR
         self.skills_dir.mkdir(parents=True, exist_ok=True)
         self._skills: dict[str, Skill] = {}
-        self._loaded = False  # Cache: only load from disk once
+        self._loaded = False
+
+        # RL Router — Thompson Sampling skill selection (PRD §5.2 Ring 4)
+        from caveman.skills.rl_router import SkillRLRouter
+        self._rl_router = SkillRLRouter(
+            state_path=self.skills_dir / ".rl_router_state.json"
+        )
 
     def load_all(self) -> None:
         """Load all YAML skill files from disk (cached after first load)."""
@@ -70,14 +74,18 @@ class SkillManager:
         _validate_skill_name(name)
         path = self.skills_dir / f"{name}.yaml"
         if path.exists():
-            path.unlink()
+            path.unlink(missing_ok=True)
         return self._skills.pop(name, None) is not None
 
-    def match(self, task: str) -> list[Skill]:
-        """Find skills matching a task. Returns sorted by relevance.
+    def sync_status(self) -> dict:
+        """Check skill sync status."""
+        from caveman.tools.builtin.skills_sync import scan_local_skills, load_sync_state
+        return {"local_count": len(scan_local_skills(self.skills_dir)),
+                "last_sync": load_sync_state().last_sync,
+                "manifests": scan_local_skills(self.skills_dir)}
 
-        Supports cross-language matching: '上线' matches trigger_pattern '部署'.
-        """
+    def match(self, task: str) -> list[Skill]:
+        """Find skills matching a task (cross-language aware)."""
         from caveman.memory.retrieval import expand_query_cross_lang
         expanded_task = expand_query_cross_lang(task)
         matches: list[tuple[float, Skill]] = []
@@ -100,7 +108,6 @@ class SkillManager:
                         if pattern.lower() in expanded_task.lower():
                             score = max(score, 0.7)
 
-            # Keyword matching from description
             if skill.trigger in (SkillTrigger.AUTO, SkillTrigger.PATTERN):
                 desc_words = skill.description.lower().split()
                 task_lower = expanded_task.lower()
@@ -109,24 +116,38 @@ class SkillManager:
                     kw_score = hits / len(desc_words) * 0.6
                     score = max(score, kw_score)
 
-            # Boost by success rate
-            if skill.success_rate > 0:
+            if skill.success_rate > 0:  # boost by success rate
                 score *= (1.0 + skill.success_rate * 0.3)
 
             if score > 0.1:
                 matches.append((score, skill))
 
         matches.sort(key=lambda x: x[0], reverse=True)
-        return [s for _, s in matches]
+        keyword_ranked = [s for _, s in matches]
+
+        # RL Router reranking — Thompson Sampling over keyword candidates
+        if len(keyword_ranked) > 1 and self._rl_router:
+            candidate_names = [s.name for s in keyword_ranked]
+            rl_pick = self._rl_router.select(
+                task, candidate_names, explore_rate=0.1,
+            )
+            if rl_pick and rl_pick != candidate_names[0]:
+                # Promote RL pick to front, keep rest in keyword order
+                reranked = []
+                for s in keyword_ranked:
+                    if s.name == rl_pick:
+                        reranked.insert(0, s)
+                    else:
+                        reranked.append(s)
+                logger.debug("RL Router promoted '%s' over '%s'", rl_pick, candidate_names[0])
+                return reranked
+
+        return keyword_ranked
 
     async def auto_create(
         self, trajectory: list[dict], task: str = "", llm_fn=None
     ) -> Optional[Skill]:
-        """Analyze trajectory for repeatable patterns and create skill.
-
-        With LLM: extracts intent, generalizes args, writes description.
-        Without LLM: uses heuristic tool-frequency analysis.
-        """
+        """Analyze trajectory for repeatable patterns and create skill."""
         if len(trajectory) < 4:
             return None
 
@@ -182,12 +203,8 @@ class SkillManager:
         return skill
 
     async def _auto_create_with_llm(
-        self,
-        trajectory: list[dict],
-        task: str,
-        repeated: dict[str, int],
-        tool_args: dict[str, list[dict]],
-        llm_fn,
+        self, trajectory: list[dict], task: str,
+        repeated: dict[str, int], tool_args: dict[str, list[dict]], llm_fn,
     ) -> Optional[Skill]:
         """LLM-powered skill creation from trajectory analysis."""
         # Build trajectory summary
@@ -201,10 +218,7 @@ class SkillManager:
         tools_text = ", ".join(f"{n}({c}x)" for n, c in repeated.items())
 
         prompt = f"""Analyze this agent trajectory and create a reusable skill.
-
-Task: {task}
-Repeated tools: {tools_text}
-
+Task: {task}  |  Repeated tools: {tools_text}
 Trajectory (first 15 turns):
 {traj_summary}
 
@@ -251,12 +265,7 @@ Create a skill definition as JSON:
         return None
 
     def record_outcome(self, skill_name: str, success: bool) -> None:
-        """Record success/failure for skill evolution.
-
-        When a skill accumulates enough failures (≥3 consecutive or
-        success_rate < 40%), it's flagged for evolution. The actual
-        evolution happens in evolve() with LLM assistance.
-        """
+        """Record outcome, feed RL Router, flag for evolution if rate < 40%."""
         skill = self._skills.get(skill_name)
         if not skill:
             return
@@ -264,30 +273,24 @@ Create a skill definition as JSON:
             skill.success_count += 1
         else:
             skill.fail_count += 1
+
+        # Feed outcome to RL Router for Thompson Sampling update
+        if self._rl_router:
+            self._rl_router.update(skill_name, success)
         # Flag for evolution if quality is degrading
         if skill.total_uses >= 3 and skill.success_rate < 0.4:
             skill.metadata = skill.metadata or {}
             skill.metadata["needs_evolution"] = True
-            skill.metadata["evolution_reason"] = (
-                f"Success rate {skill.success_rate:.0%} below 40% "
-                f"after {skill.total_uses} uses"
-            )
-            logger.info(
-                "Skill '%s' flagged for evolution: %s",
-                skill_name, skill.metadata["evolution_reason"],
-            )
+            reason = f"Success rate {skill.success_rate:.0%} < 40% after {skill.total_uses} uses"
+            skill.metadata["evolution_reason"] = reason
+            logger.info("Skill '%s' flagged for evolution: %s", skill_name, reason)
         self.save(skill)
 
     async def evolve(
         self, skill_name: str, feedback: str = "",
         trajectory: list[dict] | None = None, llm_fn=None,
     ) -> Optional[Skill]:
-        """Evolve a skill based on feedback and recent trajectory.
-
-        PRD §5.2 Ring 3: Skills don't just get created — they improve.
-        With LLM: analyzes failures, rewrites steps/constraints.
-        Without LLM: bumps version, clears evolution flag.
-        """
+        """Evolve skill via LLM feedback analysis (PRD §5.2 Ring 3)."""
         skill = self._skills.get(skill_name)
         if not skill:
             return None
@@ -332,7 +335,6 @@ Create a skill definition as JSON:
             )
 
         prompt = f"""This skill needs improvement. Analyze and suggest changes.
-
 Skill: {skill.name} (v{skill.version})
 Description: {skill.description}
 Stats: {stats}

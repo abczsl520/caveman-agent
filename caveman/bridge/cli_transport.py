@@ -9,7 +9,6 @@ import asyncio
 import json
 import logging
 import shutil
-from typing import Any
 
 logger = logging.getLogger(__name__)
 
