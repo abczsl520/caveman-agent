@@ -19,6 +19,13 @@ _WORKSPACE_FILES = (
     "HEARTBEAT.md", "TOOLS.md",
 )
 
+# Workspace files that should ALSO be parsed into Memory Store (PRD §8.8.1).
+# These files serve dual purpose: prompt injection + vector search.
+_WORKSPACE_ALSO_MEMORY = {"MEMORY.md"}
+
+# Workspace files that should trigger cron registration (PRD §8.8.1).
+_WORKSPACE_ALSO_CRON = {"HEARTBEAT.md"}
+
 # Subdirectory → memory type mapping
 _DIR_TYPE_MAP: dict[str, MemoryType] = {
     "projects": MemoryType.SEMANTIC,
@@ -72,9 +79,30 @@ class OpenClawImporter(BaseImporter):
             if fp.is_file():
                 content = self._read_safe(fp)
                 if content:
+                    # All workspace files get copied to ~/.caveman/workspace/
                     manifest.items.append(ImportItem(
                         source_path=fp, target_type="workspace", content=content,
                     ))
+                    # PRD §8.8.1: MEMORY.md also gets parsed into Memory Store
+                    # for vector search (dual purpose: prompt injection + recall)
+                    if name in _WORKSPACE_ALSO_MEMORY:
+                        for section in split_markdown_sections(content):
+                            mem_type = infer_type(section, fp)
+                            secret_warn = self._scan_secrets(section)
+                            item = ImportItem(
+                                source_path=fp, target_type="memory",
+                                memory_type=mem_type, content=section,
+                            )
+                            if secret_warn:
+                                item.skip_reason = secret_warn
+                                item.content = ""
+                            manifest.items.append(item)
+                    # PRD §8.8.1: HEARTBEAT.md also registers as cron
+                    if name in _WORKSPACE_ALSO_CRON:
+                        manifest.items.append(ImportItem(
+                            source_path=fp, target_type="cron_register",
+                            content=content,
+                        ))
 
     def _scan_agents(self, agents_dir: Path, manifest: ImportManifest) -> None:
         if not agents_dir.is_dir():
@@ -172,7 +200,7 @@ class OpenClawImporter(BaseImporter):
     async def _handle_item(
         self, item: ImportItem, result: "ImportResult", memory_manager: Any,
     ) -> None:
-        """Handle workspace, skill, config, and cron imports."""
+        """Handle workspace, skill, config, cron, and cron_register imports."""
         from .config_merger import ConfigMerger
 
         if item.target_type == "workspace":
@@ -187,6 +215,8 @@ class OpenClawImporter(BaseImporter):
             result.details.append("Merged OpenClaw config")
         elif item.target_type == "cron":
             self._copy_cron(item, result)
+        elif item.target_type == "cron_register":
+            self._register_heartbeat_cron(item, result)
         else:
             result.imported += 1
 
@@ -239,6 +269,36 @@ class OpenClawImporter(BaseImporter):
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(item.content, encoding="utf-8")
         result.imported += 1
+
+    def _register_heartbeat_cron(self, item: ImportItem, result: ImportResult) -> None:
+        """PRD §8.8.1: HEARTBEAT.md → register as cron task.
+
+        Parses the heartbeat file for interval hints and creates a cron job
+        definition. The actual cron scheduling happens at runtime, not import time.
+        """
+        import json
+        import re
+
+        target = self.caveman_home / "cron" / "heartbeat-cron.json"
+        # Extract interval from content (e.g., "every 5 minutes", "*/5 * * * *")
+        interval = "*/5 * * * *"  # Default: every 5 minutes
+        cron_match = re.search(r'(\*/?\d+\s+[\*\d/]+\s+[\*\d/]+\s+[\*\d/]+\s+[\*\d/]+)', item.content)
+        if cron_match:
+            interval = cron_match.group(1)
+
+        cron_def = {
+            "name": "heartbeat",
+            "schedule": interval,
+            "command": "heartbeat",
+            "source": "imported-from-openclaw",
+            "description": "Periodic health check imported from HEARTBEAT.md",
+        }
+
+        if not self.dry_run:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(json.dumps(cron_def, indent=2, ensure_ascii=False), encoding="utf-8")
+        result.imported += 1
+        result.details.append("Registered HEARTBEAT.md as cron task")
 
     def _read_safe(self, path: Path) -> str:
         """Read file safely, return empty string on failure."""
