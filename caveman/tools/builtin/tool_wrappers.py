@@ -118,8 +118,10 @@ async def analyze_image_tool(path: str, prompt: str = "Describe this image in de
         return _error("path is required")
     try:
         from caveman.tools.builtin.media_understanding import analyze_image
-        result = await analyze_image(path, prompt=prompt)
-        return _success({"description": result})
+        result = analyze_image(path, question=prompt)
+        if result.error:
+            return _error(result.error)
+        return _success({"description": result.description or result.text_content})
     except Exception as e:
         logger.error("analyze_image failed: %s", e)
         return _error(f"Image analysis failed: {e}")
