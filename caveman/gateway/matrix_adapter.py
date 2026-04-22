@@ -142,10 +142,27 @@ class MatrixAdapter(BasePlatformAdapter):
             user_name=room.user_name(event.sender) if hasattr(room, "user_name") else event.sender,
         )
 
+        # Matrix: mention via display name or user_id in body
+        is_mention = bool(self._user_id and self._user_id in (event.body or ""))
+        # Check formatted_body for HTML mention too
+        fmt_body = getattr(event, "formatted_body", "") or ""
+        if self._user_id and self._user_id in fmt_body:
+            is_mention = True
+        is_reply_to_bot = False
+        relates = getattr(event, "source", {}).get("content", {}).get("m.relates_to", {})
+        in_reply_to = relates.get("m.in_reply_to", {}).get("event_id")
+        if in_reply_to:
+            # We can't easily check who sent the parent without fetching it
+            # Set based on whether the reply fallback contains our user_id
+            if self._user_id and self._user_id in (event.body or ""):
+                is_reply_to_bot = True
+
         msg_event = MessageEvent(
             text=event.body,
             source=source,
             raw_message=event,
             message_id=event.event_id,
+            is_mention=is_mention,
+            is_reply_to_bot=is_reply_to_bot,
         )
         await self.handle_message(msg_event)

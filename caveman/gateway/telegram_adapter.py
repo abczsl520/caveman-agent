@@ -413,13 +413,27 @@ class TelegramAdapter(BasePlatformAdapter):
             thread_id=str(message.message_thread_id) if message.message_thread_id else None,
         )
 
+        # Interaction flags
+        is_mention = False
+        if self._bot and message.entities:
+            for ent in message.entities:
+                if ent.type == "mention" and self._bot.username:
+                    mentioned = (message.text or "")[ent.offset:ent.offset + ent.length]
+                    if mentioned.lower() == f"@{self._bot.username.lower()}":
+                        is_mention = True
+                        break
+        is_reply_to_bot = False
+        if message.reply_to_message and self._bot:
+            reply_author = message.reply_to_message.from_user
+            if reply_author and reply_author.id == self._bot.id:
+                is_reply_to_bot = True
+
         # Reply context
         reply_to_text = None
         reply_to_id = None
         if message.reply_to_message:
             reply_to_id = str(message.reply_to_message.message_id)
             reply_to_text = (message.reply_to_message.text or "")[:500]
-
         event = MessageEvent(
             text=text,
             message_type=msg_type,
@@ -430,7 +444,7 @@ class TelegramAdapter(BasePlatformAdapter):
             media_types=media_types,
             reply_to_message_id=reply_to_id,
             reply_to_text=reply_to_text,
+            is_mention=is_mention,
+            is_reply_to_bot=is_reply_to_bot,
         )
-
         await self.handle_message(event)
-

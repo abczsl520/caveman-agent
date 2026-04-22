@@ -276,4 +276,6 @@ class WhatsAppAdapter(BasePlatformAdapter):
             media_urls=media_urls,
             media_types=media_types,
             reply_to_message_id=reply_to_id,
+            is_mention=False,
+            is_reply_to_bot=bool(reply_to_id),
         )

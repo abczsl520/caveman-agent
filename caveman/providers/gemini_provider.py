@@ -234,6 +234,20 @@ def _convert_messages(messages: list[dict]) -> list[dict]:
                             parts.append({
                                 "inlineData": {"mimeType": mime, "data": b64}
                             })
+                        elif url.startswith("http"):
+                            # URL mode: download and inline as base64
+                            try:
+                                import urllib.request, base64
+                                with urllib.request.urlopen(url, timeout=15) as resp:
+                                    img_data = resp.read()
+                                    ct = resp.headers.get("Content-Type", "image/jpeg")
+                                    b64 = base64.b64encode(img_data).decode()
+                                    parts.append({
+                                        "inlineData": {"mimeType": ct, "data": b64}
+                                    })
+                            except Exception as _e:
+                                logger.warning("Gemini image download failed: %s", _e)
+                                parts.append({"text": f"[Image: {url}]"})
 
         # Handle tool results
         if role == "tool":

@@ -1,5 +1,6 @@
 """Test vision/multimodal content pipeline."""
-from caveman.agent.loop_engines import build_user_content
+from unittest.mock import patch, MagicMock
+from caveman.agent.loop_engines import build_user_content, _download_image_as_data_uri
 
 
 def test_build_user_content_no_attachments():
@@ -13,17 +14,30 @@ def test_build_user_content_non_image():
     assert build_user_content("check this", atts) == "check this"
 
 
-def test_build_user_content_with_image():
+@patch("caveman.agent.loop_engines._download_image_as_data_uri")
+def test_build_user_content_with_image_downloaded(mock_dl):
+    mock_dl.return_value = "data:image/png;base64,abc123"
     atts = [{"url": "https://cdn.discord.com/img.png", "content_type": "image/png"}]
     result = build_user_content("what is this?", atts)
     assert isinstance(result, list)
     assert len(result) == 2
     assert result[0] == {"type": "text", "text": "what is this?"}
     assert result[1]["type"] == "image_url"
+    assert result[1]["image_url"]["url"] == "data:image/png;base64,abc123"
+
+
+@patch("caveman.agent.loop_engines._download_image_as_data_uri")
+def test_build_user_content_download_fails_fallback_url(mock_dl):
+    mock_dl.return_value = None  # download failed
+    atts = [{"url": "https://cdn.discord.com/img.png", "content_type": "image/png"}]
+    result = build_user_content("what is this?", atts)
+    assert isinstance(result, list)
     assert result[1]["image_url"]["url"] == "https://cdn.discord.com/img.png"
 
 
-def test_build_user_content_mixed():
+@patch("caveman.agent.loop_engines._download_image_as_data_uri")
+def test_build_user_content_mixed(mock_dl):
+    mock_dl.return_value = "data:image/jpeg;base64,xyz"
     atts = [
         {"url": "https://cdn.discord.com/img.png", "content_type": "image/png"},
         {"url": "https://cdn.discord.com/file.txt", "content_type": "text/plain"},

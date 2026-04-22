@@ -232,6 +232,16 @@ class SignalAdapter(BasePlatformAdapter):
         reply_to_id = str(quote.get("id", "")) if quote else None
         reply_to_text = quote.get("text", "") if quote else None
 
+        # Signal: mention detection via mentions list or text pattern
+        is_mention = False
+        mentions = data_msg.get("mentions", [])
+        if mentions and self._phone:
+            is_mention = any(m.get("uuid") == self._phone or m.get("number") == self._phone for m in mentions)
+        is_reply_to_bot = False
+        if quote and self._phone:
+            quote_author = quote.get("author", "")
+            is_reply_to_bot = quote_author == self._phone
+
         return MessageEvent(
             text=text or "",
             message_type=msg_type,
@@ -242,4 +252,6 @@ class SignalAdapter(BasePlatformAdapter):
             media_types=media_types,
             reply_to_message_id=reply_to_id,
             reply_to_text=reply_to_text,
+            is_mention=is_mention,
+            is_reply_to_bot=is_reply_to_bot,
         )
