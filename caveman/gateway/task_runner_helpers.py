@@ -82,6 +82,13 @@ async def _handle_tool_call(event, ctx: _TaskContext, buf: _SmartBuffer) -> bool
         tool_args = str(event.data.get("input", event.data.get("arguments", "")))
     ctx.tool_call_count += 1
 
+    # Hard cap: too many tool calls in one task → abort
+    _MAX_TOOL_CALLS = 80
+    if ctx.tool_call_count >= _MAX_TOOL_CALLS:
+        ctx.shutdown_flag = True
+        await ctx.send(f"⏸️ 单次任务已执行 {ctx.tool_call_count} 个工具调用，达到安全上限。进度已保存，发消息可继续。")
+        return True
+
     # Stuck-loop detection
     stuck = ctx.check_stuck_loop(tool_name, tool_args)
     if stuck:
