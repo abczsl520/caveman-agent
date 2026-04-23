@@ -126,7 +126,6 @@ class AgentLoop(BackgroundTaskMixin):
             get_task=lambda: self._nudge_task_ref, memory_manager=self.memory_manager)
     def set_lint(self, engine) -> None: self._lint = engine; engine and setattr(engine, "_bus", self.bus)
     def set_ripple(self, engine) -> None: self._ripple = engine; engine and setattr(engine, "_bus", self.bus)
-    # Public accessors for gateway (avoids accessing private attrs across modules)
     @property
     def shield(self) -> Any: return self._shield
     @property
@@ -136,11 +135,17 @@ class AgentLoop(BackgroundTaskMixin):
     @property
     def system_prompt_len(self) -> int: return len(self._system_prompt_cache or "")
     async def close(self) -> None:
-        """Clean up resources (provider connections, background tasks)."""
         await self.drain_background()
         if hasattr(self.provider, 'close'): await self.provider.close()
     def invalidate_system_prompt(self) -> None:
-        self._system_prompt_cache = None
+        """Invalidate + eagerly rebuild prompt cache (prevents 0-char prompt on mid-turn config reload)."""
+        from caveman.agent.prompt import build_system_prompt
+        self._system_prompt_cache = build_system_prompt(
+            tool_schemas=self.tool_registry.get_schemas(),
+            surface=self.surface,
+            conversation_state=self._conversation_state,
+        )
+        logger.info("System prompt invalidated and rebuilt (%d chars)", len(self._system_prompt_cache))
     def switch_model(self, new_provider) -> None:
         old = getattr(self.provider, 'model', '?')
         self.provider = new_provider
@@ -168,7 +173,6 @@ class AgentLoop(BackgroundTaskMixin):
             "tool_call_count": self._tool_call_count,
         }
     def snapshot(self) -> dict:
-        """Capture all restorable state. Runner calls this before persisting."""
         import hashlib
         prompt = self._system_prompt_cache or ""
         return {
@@ -189,14 +193,12 @@ class AgentLoop(BackgroundTaskMixin):
             turn_count=self._turn_count, tool_call_count=self._tool_call_count,
             has_progress_calls=self._tool_call_count > 0)
     def restore(self, state: dict, context=None) -> None:
-        """Restore state from snapshot. Runner calls this after loading transcript."""
         self._turn_number = state.get("turn_number", 0)
         self._turn_count = state.get("turn_count", 0)
         self._tool_call_count = state.get("tool_call_count", 0)
         self.surface = state.get("surface", getattr(self, "surface", "cli"))
         if context is not None:
             self._persistent_context = context
-        # Prefer persisted prompt for cache stability (Hermes pattern)
         persisted = state.get("system_prompt", "")
         if persisted and len(persisted) > 100:
             self._system_prompt_cache = persisted
@@ -267,7 +269,6 @@ class AgentLoop(BackgroundTaskMixin):
                     "utilization": utilization, "total_tokens": context.total_tokens,
                     "max_tokens": context.max_tokens,
                 })
-            # --- Preemptive compaction (3-tier) + fallback threshold compression ---
             from caveman.agent.loop_engines import run_preemptive_compaction
             context = await run_preemptive_compaction(
                 context, compressor, self._shield, self.bus, self.metrics,
@@ -312,7 +313,6 @@ class AgentLoop(BackgroundTaskMixin):
                     elif etype == "done":
                         stop = ev.get("stop_reason", "end_turn")
                         if stop == "max_tokens" and text_parts:
-                            # Continuation: add partial response, ask to continue
                             context.add_message("assistant", "".join(text_parts))
                             context.add_message("user", "你的回复被截断了，请继续。")
                             text_parts.clear(); tool_calls.clear()
