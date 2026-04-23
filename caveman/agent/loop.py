@@ -159,7 +159,6 @@ class AgentLoop(BackgroundTaskMixin):
         self._conversation_state = None
         self.metrics = type(self.metrics)()
         self.budget.reset()
-        logger.info("Session state reset")
     def get_activity_summary(self) -> dict:
         import time as _t
         elapsed = _t.time() - self._last_activity_ts if self._last_activity_ts else 0
@@ -218,14 +217,12 @@ class AgentLoop(BackgroundTaskMixin):
         from caveman.agent.loop_engines import record_turn_metrics
         record_turn_metrics(self, turn_start, recalled_ids, matched_skills, result)
     async def run(self, task: str, system_prompt: str | None = None) -> str:
-        """Execute task — delegates to run_stream()."""
         result = ""
         async for ev in self.run_stream(task, system_prompt):
             if ev.type == "done": result = str(ev.data) if ev.data else ""
             elif ev.type == "error": raise RuntimeError(str(ev.data))
         return result
     async def run_stream(self, task: str, system_prompt: str | None = None, attachments: list[dict[str, str]] | None = None) -> AsyncIterator[StreamEvent]:
-        """Streaming execution — the SINGLE implementation. run() delegates here."""
         _turn_start = _time.monotonic()
         self._nudge_task_ref = task
         self._turn_number += 1
@@ -292,16 +289,19 @@ class AgentLoop(BackgroundTaskMixin):
                     )
                 tool_defs = self.tool_registry.get_schemas() if self.tool_registry else []
                 _last_token_ts = _time.monotonic()
-                async for ev in self.provider.safe_complete(
+                _llm_stream = self.provider.safe_complete(
                     messages=messages, system=_effective_system, tools=tool_defs or None, stream=True,
-                ):
-                    now = _time.monotonic()
-                    if now - _last_token_ts > DEFAULT_LLM_IDLE_TIMEOUT:
+                ).__aiter__()
+                while True:
+                    try:
+                        ev = await asyncio.wait_for(_llm_stream.__anext__(), timeout=DEFAULT_LLM_IDLE_TIMEOUT)
+                    except StopAsyncIteration:
+                        break
+                    except asyncio.TimeoutError:
                         logger.warning("LLM idle timeout: %ds without token", DEFAULT_LLM_IDLE_TIMEOUT)
                         yield StreamEvent(type="token", data=f"\n\n⚠️ LLM 无响应超时 ({DEFAULT_LLM_IDLE_TIMEOUT}s)")
                         stop = "idle_timeout"
                         break
-                    _last_token_ts = now
                     etype = ev.get("type")
                     if etype == "delta":
                         text_parts.append(ev["text"])

@@ -21,9 +21,9 @@ logger = logging.getLogger("caveman.gateway")
 
 # Defaults (overridable via gateway config)
 _DEFAULT_PROGRESS_INTERVAL = 60.0   # 1 min between progress indicators
-_DEFAULT_IDLE_WARNING = 180.0       # 3 min idle → warning
-_DEFAULT_IDLE_SHUTDOWN = 300.0      # 5 min idle → graceful shutdown
-_DEFAULT_ABSOLUTE_MAX = 1800.0      # 30 min absolute safety net
+_DEFAULT_IDLE_WARNING = 60.0        # 1 min idle → warning
+_DEFAULT_IDLE_SHUTDOWN = 120.0      # 2 min idle → graceful shutdown
+_DEFAULT_ABSOLUTE_MAX = 600.0       # 10 min absolute safety net
 _STUCK_LOOP_THRESHOLD = 5           # Same tool+args repeated N times → abort
 _PATTERN_LOOP_WINDOW = 20           # Window for pattern-based loop detection
 _PATTERN_LOOP_REPEATS = 5           # Pattern must repeat N times to trigger
