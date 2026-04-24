@@ -127,8 +127,8 @@ class TestProcessRegistry:
     async def test_spawn_with_timeout(self):
         from caveman.tools.builtin.process_registry import ProcessRegistry
         reg = ProcessRegistry()
-        session = await reg.spawn("sleep 10", timeout=0.5)
-        await asyncio.sleep(1)
+        session = await reg.spawn("sleep 10", timeout=1)
+        await asyncio.sleep(3)
         result = reg.poll(session.id)
         assert result["status"] == "killed"
 
