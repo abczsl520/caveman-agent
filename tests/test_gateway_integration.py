@@ -163,22 +163,26 @@ class TestArchitecturalInvariants:
                 f"{path.name} has {len(bare_matches)} bare .complete() calls — use .safe_complete()"
 
     def test_snapshot_has_all_restorable_fields(self):
-        """snapshot() must capture every field that restore() sets."""
-        import ast, re
-        with open("caveman/agent/loop.py") as f:
-            src = f.read()
+        """snapshot() must capture every field that LoopState defines.
 
-        # Extract fields set in restore()
-        restore_match = re.search(r'def restore\(self.*?\n(.*?)(?=\n    def |\nclass )', src, re.DOTALL)
-        assert restore_match, "restore() not found"
-        restore_fields = set(re.findall(r'self\.(_\w+)\s*=', restore_match.group(1)))
-        # Remove _persistent_context and _system_prompt_cache (rebuilt, not from snapshot)
-        restore_fields -= {"_persistent_context", "_system_prompt_cache"}
+        LoopState is the single source of truth — adding a field there
+        automatically propagates to snapshot/restore/reset. This test
+        ensures LoopState fields are all present in snapshot output.
+        """
+        from caveman.agent.loop import AgentLoop, LoopState
+        from caveman.agent.iteration_budget import IterationBudget
+        from dataclasses import fields as dc_fields
 
-        # Extract fields captured in snapshot()
-        snap_match = re.search(r'def snapshot\(self.*?\n(.*?)(?=\n    def |\nclass )', src, re.DOTALL)
-        assert snap_match, "snapshot() not found"
-        snap_fields = set(re.findall(r'self\.(_\w+)', snap_match.group(1)))
+        loop = AgentLoop.__new__(AgentLoop)
+        loop.budget = IterationBudget(50)
+        loop._system_prompt_cache = "x" * 200
 
-        missing = restore_fields - snap_fields
-        assert not missing, f"restore() sets {missing} but snapshot() doesn't capture them"
+        snap = loop.snapshot()
+        state_fields = {f.name for f in dc_fields(LoopState)}
+        missing = state_fields - set(snap.keys())
+        assert not missing, f"LoopState has {missing} but snapshot() doesn't include them"
+
+        # Roundtrip: from_snapshot must accept all snapshot keys
+        restored = LoopState.from_snapshot(snap)
+        for f in dc_fields(LoopState):
+            assert getattr(restored, f.name) == snap[f.name], f"Field {f.name} lost in roundtrip"

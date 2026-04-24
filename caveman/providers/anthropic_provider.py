@@ -146,7 +146,26 @@ class AnthropicProvider(LLMProvider):
             thinking=self.thinking,
             tool_choice=kwargs.get("tool_choice"),
             context_length=self.context_length,
+            base_url=self.base_url,
         )
+
+    @staticmethod
+    def _estimate_input_tokens(
+        messages: list[dict], system: str | None, tools: list[dict] | None,
+    ) -> int:
+        """Rough estimate of input tokens for injection detection."""
+        total_chars = len(system or "")
+        for msg in messages:
+            content = msg.get("content", "")
+            if isinstance(content, str):
+                total_chars += len(content)
+            elif isinstance(content, list):
+                for part in content:
+                    if isinstance(part, dict):
+                        total_chars += len(str(part.get("text", "")))
+        if tools:
+            total_chars += len(str(tools))
+        return total_chars // 4  # ~4 chars per token
 
     async def complete(
         self,
@@ -167,6 +186,8 @@ class AnthropicProvider(LLMProvider):
         """
         client = self._get_client()
         params = self._build_params(messages, system, tools, **kwargs)
+        # Estimate expected input tokens for proxy injection detection
+        self._expected_input_tokens = self._estimate_input_tokens(messages, system, tools)
         max_retries = 3
 
         for attempt in range(max_retries + 1):
@@ -270,9 +291,7 @@ class AnthropicProvider(LLMProvider):
                     if hasattr(msg.usage, "cache_read_input_tokens"):
                         usage["cache_read"] = msg.usage.cache_read_input_tokens
 
-                    self._record_usage(usage)
-
-                    # Capture rate limits from stream's response
+                    self._record_usage(usage, getattr(self, "_expected_input_tokens", 0))
                     raw_resp = getattr(stream, "response", None)
                     if raw_resp and hasattr(raw_resp, "headers"):
                         state = parse_rate_limit_headers(
@@ -311,19 +330,33 @@ class AnthropicProvider(LLMProvider):
             "input_tokens": response.usage.input_tokens,
             "output_tokens": response.usage.output_tokens,
         }
-        self._record_usage(usage)
+        self._record_usage(usage, getattr(self, "_expected_input_tokens", 0))
         yield {
             "type": "done",
             "stop_reason": normalize_stop_reason(response.stop_reason),
             "usage": usage,
         }
 
-    def _record_usage(self, usage: dict) -> None:
-        """Track cumulative token usage."""
+    def _record_usage(self, usage: dict, expected_input_tokens: int = 0) -> None:
+        """Track cumulative token usage and detect proxy prompt injection."""
         self._last_usage = usage
         self._total_input_tokens += usage.get("input_tokens", 0)
         self._total_output_tokens += usage.get("output_tokens", 0)
         self._call_count += 1
+
+        # Detect proxy system prompt injection:
+        # If actual input_tokens far exceeds what we sent, the proxy is injecting content.
+        actual = usage.get("input_tokens", 0)
+        if expected_input_tokens > 0 and actual > expected_input_tokens * 1.5 + 500:
+            injection_tokens = actual - expected_input_tokens
+            logger.warning(
+                "PROXY PROMPT INJECTION DETECTED: expected ~%d input tokens, "
+                "got %d (+%d injected). API proxy (%s) is injecting a system "
+                "prompt that may override identity. Remove base_url from config "
+                "to use Anthropic directly.",
+                expected_input_tokens, actual, injection_tokens,
+                self.base_url or "direct",
+            )
 
     def _capture_rate_limits(self, response: Any) -> None:
         """Extract rate limit headers from an API response."""

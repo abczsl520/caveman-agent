@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio, logging, os, time as _time
 from collections.abc import AsyncIterator
 logger = logging.getLogger(__name__)
+
+from caveman.agent.loop_state import LoopState
 from caveman.agent.stream import StreamEvent
 from caveman.agent.context import AgentContext
 from caveman.agent.bg_tasks import BackgroundTaskMixin
@@ -51,7 +53,7 @@ class AgentLoop(BackgroundTaskMixin):
             self._fallback_chain = _FallbackChain(cfg) if cfg.provider else None
         except Exception as exc:
             logger.debug("__init__: suppressed %s", exc)
-        self.surface = surface
+        self._state = LoopState(surface=surface)
         if provider is None:
             from caveman.providers.anthropic_provider import AnthropicProvider
             provider = AnthropicProvider(api_key=os.environ.get("ANTHROPIC_API_KEY", ""), model=self.model)
@@ -89,6 +91,9 @@ class AgentLoop(BackgroundTaskMixin):
         for _c in [self.trajectory_recorder, self.permission_manager]:
             if hasattr(_c, '_bus') and _c._bus is None:
                 _c._bus = self.bus
+        # Wire bus into memory_manager for MEMORY_STORE events (flywheel Chain 4)
+        if hasattr(self.memory_manager, '_bus') and self.memory_manager._bus is None:
+            self.memory_manager._bus = self.bus
         self.engine_flags = engine_flags or EngineFlags()
         self._llm_fn = llm_fn
         _em = EngineManager(
@@ -104,12 +109,9 @@ class AgentLoop(BackgroundTaskMixin):
         self._ripple = _es.ripple  # was None — now wired!
         self._outcome = _es.outcome
         self._skill_executor = SkillExecutor(tool_dispatch_fn=self._dispatch_skill_tool)
-        self._turn_count = 0
-        self._tool_call_count = 0
         self._nudge_task_ref = ""
         self._persistent_context: AgentContext | None = None
         self._system_prompt_cache: str | None = None
-        self._turn_number = 0
         self._bg_tasks: set[asyncio.Task] = set()
         self._last_activity_ts = 0.0
         self._last_activity_desc = ""
@@ -126,6 +128,25 @@ class AgentLoop(BackgroundTaskMixin):
             get_task=lambda: self._nudge_task_ref, memory_manager=self.memory_manager)
     def set_lint(self, engine) -> None: self._lint = engine; engine and setattr(engine, "_bus", self.bus)
     def set_ripple(self, engine) -> None: self._ripple = engine; engine and setattr(engine, "_bus", self.bus)
+
+    # --- State proxy: delegate LoopState fields transparently ---
+    _STATE_FIELDS = {"surface", "_turn_number", "_turn_count", "_tool_call_count", "_iteration_count"}
+    _STATE_MAP = {"surface": "surface", "_turn_number": "turn_number", "_turn_count": "turn_count",
+                  "_tool_call_count": "tool_call_count", "_iteration_count": "iteration_count"}
+    def __getattr__(self, name):
+        if name in AgentLoop._STATE_MAP:
+            if "_state" not in self.__dict__:
+                self.__dict__["_state"] = LoopState()
+            return getattr(self._state, AgentLoop._STATE_MAP[name])
+        raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
+    def __setattr__(self, name, value):
+        if name in AgentLoop._STATE_MAP:
+            if "_state" not in self.__dict__:
+                self.__dict__["_state"] = LoopState()
+            setattr(self._state, AgentLoop._STATE_MAP[name], value)
+        else:
+            super().__setattr__(name, value)
+
     @property
     def shield(self) -> Any: return self._shield
     @property
@@ -152,11 +173,9 @@ class AgentLoop(BackgroundTaskMixin):
         self._system_prompt_cache = None
         logger.info("Model switched: %s → %s", old, getattr(new_provider, 'model', '?'))
     def reset_session(self) -> None:
+        self._state = LoopState(surface=self.surface)
         self._persistent_context = None
         self._system_prompt_cache = None
-        self._turn_number = 0
-        self._tool_call_count = 0
-        self._conversation_state = None
         self.metrics = type(self.metrics)()
         self.budget.reset()
     def get_activity_summary(self) -> dict:
@@ -173,29 +192,27 @@ class AgentLoop(BackgroundTaskMixin):
         }
     def snapshot(self) -> dict:
         import hashlib
+        if "_state" not in self.__dict__:
+            self.__dict__["_state"] = LoopState()
         prompt = self._system_prompt_cache or ""
-        return {
-            "turn_number": self._turn_number,
-            "turn_count": self._turn_count,
-            "tool_call_count": self._tool_call_count,
-            "surface": self.surface,
+        state = self._state.snapshot()
+        state.update({
             "system_prompt_len": len(prompt),
             "system_prompt_hash": hashlib.sha256(prompt.encode()).hexdigest()[:16],
-            "system_prompt": prompt,  # Persisted for cache stability (Hermes pattern)
+            "system_prompt": prompt,
             "budget_used": self.budget.used,
             "budget_max": self.budget.max_total,
-        }
+        })
+        return state
     @property
     def _conversation_state(self):
         from caveman.agent.conversation_lifecycle import ConversationState
         return ConversationState(
             turn_count=self._turn_count, tool_call_count=self._tool_call_count,
-            has_progress_calls=self._tool_call_count > 0)
+            has_progress_calls=self._tool_call_count > 0,
+            iteration_count=self._iteration_count)
     def restore(self, state: dict, context=None) -> None:
-        self._turn_number = state.get("turn_number", 0)
-        self._turn_count = state.get("turn_count", 0)
-        self._tool_call_count = state.get("tool_call_count", 0)
-        self.surface = state.get("surface", getattr(self, "surface", "cli"))
+        self._state = LoopState.from_snapshot(state)
         if context is not None:
             self._persistent_context = context
         persisted = state.get("system_prompt", "")
@@ -250,6 +267,7 @@ class AgentLoop(BackgroundTaskMixin):
         final = ""
         compressor = CompressionPipeline(provider=self.provider)
         iteration = 0
+        self._iteration_count = 0
         while self.budget.consume():
             await self.bus.emit(EventType.ITERATION_START, {"iteration": iteration}, source="loop")
             yield StreamEvent(type="iteration_start", data={"iteration": iteration, "max": self.max_iterations, "remaining": self.budget.remaining})
@@ -287,6 +305,8 @@ class AgentLoop(BackgroundTaskMixin):
                         CACHE_BOUNDARY +
                         f"## Conversation Phase\n{_phase_rules}"
                     )
+                    logger.debug("Phase rules injected (surface=%s, complexity=%s): %s",
+                                 self.surface, self._conversation_state.complexity.value, _phase_rules[:80])
                 tool_defs = self.tool_registry.get_schemas() if self.tool_registry else []
                 _last_token_ts = _time.monotonic()
                 _llm_stream = self.provider.safe_complete(
@@ -307,6 +327,10 @@ class AgentLoop(BackgroundTaskMixin):
                         text_parts.append(ev["text"])
                         await self.bus.emit(EventType.LLM_STREAM_DELTA, {"text": ev["text"]})
                         yield StreamEvent(type="token", data=ev["text"])
+                    elif etype == "thinking":
+                        # Emit thinking event so task_runner touch_activity()
+                        # fires during long reasoning — prevents idle misfire
+                        yield StreamEvent(type="thinking", data=ev.get("text", ""))
                     elif etype == "tool_call":
                         tool_calls.append(ev)
                         yield StreamEvent(type="tool_call", data=ev)
@@ -340,6 +364,15 @@ class AgentLoop(BackgroundTaskMixin):
             if text: final = text
             record_assistant_turn(context, text, tool_calls)
             if text: await self.trajectory_recorder.record_turn("gpt", text)
+            # Pre-check: if LLM emitted closing marker, discard tool_calls
+            from caveman.agent.output_validator import CLOSING_LINE
+            if text and CLOSING_LINE in text and tool_calls:
+                logger.info(
+                    "Closing marker in text with %d tool_calls — "
+                    "discarding tool_calls before execution",
+                    len(tool_calls),
+                )
+                tool_calls = []  # discard; don't execute
             if tool_calls:
                 _tool_start = _time.monotonic()
                 tool_names = [tc.get("name", "?") for tc in tool_calls]
@@ -357,10 +390,11 @@ class AgentLoop(BackgroundTaskMixin):
                     self._safe_bg(self._bg_skill_nudge())
                 for tc in tool_calls:
                     yield StreamEvent(type="tool_result", data={"name": tc.get("name", "?")})
-            should_break = await self._check_termination(stop, tool_calls, task)
+            should_break = await self._check_termination(stop, tool_calls, task, text=text)
             await self.bus.emit(EventType.ITERATION_END, {"iteration": iteration, "stop": stop, "tool_calls": len(tool_calls), "text_len": len(text)}, source="loop")
             if should_break: break
             iteration += 1
+            self._iteration_count = iteration
         else:
             show_error(f"Max iterations ({self.max_iterations}) reached — budget exhausted")
         result = await phase_finalize(
@@ -381,6 +415,12 @@ class AgentLoop(BackgroundTaskMixin):
             "recalled_ids": _recalled_ids, "matched_skills": matched_skills,
         }, source="loop")
         self._record_turn_metrics(_turn_start, _recalled_ids, matched_skills, result)
+        # Enforce closing format if lifecycle rules expect it
+        from caveman.agent.output_validator import enforce_closing_format
+        _surface = getattr(getattr(self, 'session', None), 'surface', 'cli')
+        # Always enforce — all complexity levels use closing marker now
+        _should_close = self._tool_call_count >= 1
+        result = enforce_closing_format(result, _should_close, surface=_surface)
         yield StreamEvent(type="done", data=result)
     async def _dispatch_skill_tool(self, name: str, args: dict) -> str:
         r = await self.tool_registry.dispatch(name, args)
@@ -393,8 +433,8 @@ class AgentLoop(BackgroundTaskMixin):
                     "skills": [s.name for s in skills], "offered": True}, source="skill")
         except Exception as exc:
             logger.debug("_offer_matching_skill: suppressed %s", exc)
-    async def _check_termination(self, stop: str, tool_calls: list, task: str) -> bool:
-        from caveman.agent.loop_engines import check_termination; return await check_termination(stop, tool_calls, task)
+    async def _check_termination(self, stop: str, tool_calls: list, task: str, text: str = "") -> bool:
+        from caveman.agent.loop_engines import check_termination; return await check_termination(stop, tool_calls, task, text=text)
     async def _update_shield(self, context, task: str) -> None:
         from caveman.agent.loop_engines import update_shield
         await update_shield(self, context, task)

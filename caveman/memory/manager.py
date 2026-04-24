@@ -35,6 +35,7 @@ class MemoryManager:
         retrieval_log=None,
         ripple_engine=None,
         backend: "MemoryBackend | None" = None,
+        bus=None,
     ):
         from caveman.paths import MEMORY_DIR
         self.base_dir = Path(base_dir).expanduser() if base_dir else MEMORY_DIR
@@ -44,6 +45,7 @@ class MemoryManager:
         self._lock = asyncio.Lock()
         self._recall_cache = RecallCache()
         self._ripple = ripple_engine
+        self._bus = bus
 
         self._backend = backend
         self._use_backend = backend is not None
@@ -96,6 +98,18 @@ class MemoryManager:
                     await self._ripple.propagate(entry)
                 except Exception as e:
                     logger.warning("Ripple propagation failed for %s: %s", mid, e)
+            # Emit MEMORY_STORE event for flywheel Chain 4 (Lint) and metrics
+            if self._bus:
+                try:
+                    from caveman.events import EventType
+                    await self._bus.emit(EventType.MEMORY_STORE, {
+                        "memory_id": mid, "content": content,
+                        "type": memory_type.value,
+                        "source": (metadata or {}).get("source", ""),
+                        "metadata": metadata or {},
+                    }, source="memory")
+                except Exception as e:
+                    logger.debug("MEMORY_STORE emit failed: %s", e)
             return mid
         return await self._store_json(content, memory_type, metadata, trusted=trusted)
 

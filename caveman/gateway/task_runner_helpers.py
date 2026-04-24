@@ -111,28 +111,40 @@ async def _handle_tool_call(event, ctx: _TaskContext, buf: _SmartBuffer) -> bool
             return False  # let agent continue
 
     async def _heartbeat(name: str):
-        await asyncio.sleep(15.0)
+        """Periodic heartbeat during tool execution.
+
+        Loops every 15s to:
+        1. touch_activity() - prevent idle_shutdown from misfiring
+        2. Send/edit a status message so the user sees progress
+
+        Before this fix, _heartbeat ran only ONCE (sleep 15s, send, exit).
+        Long tools like coding_agent (15min) would trigger idle_shutdown
+        (5min) because touch_activity was never called during execution.
+        """
         from caveman.tools.display import tool_display
-        # Track tool call counts for compact display
-        ctx._hb_counts[name] = ctx._hb_counts.get(name, 0) + 1
-        # Build compact status line with emojis: "⏳ 🧠 Recall ×3, 💻 Shell ×2"
-        parts = []
-        for k, v in ctx._hb_counts.items():
-            emoji, label = tool_display(k)
-            parts.append(f"{emoji}{label} ×{v}" if v > 1 else f"{emoji}{label}")
-        iter_info = f" [{ctx.iteration}/{ctx.max_iterations}]" if ctx.max_iterations else ""
-        text = f"⏳{iter_info} {', '.join(parts)}..."
-        try:
-            if ctx._hb_msg_id:
-                # Edit existing heartbeat message
-                await ctx.router.edit(ctx.gw_name, ctx.channel_id, ctx._hb_msg_id, text)
-            else:
-                # Send new heartbeat message, save ID for future edits
-                result = await ctx.router.send(ctx.gw_name, ctx.channel_id, text)
-                if isinstance(result, dict) and result.get("message_id"):
-                    ctx._hb_msg_id = result["message_id"]
-        except Exception as e:
-            logger.debug("Heartbeat send/edit failed: %s", e)
+        while True:
+            await asyncio.sleep(15.0)
+            # Critical: keep idle detector alive during long tool execution
+            ctx.touch_activity()
+            ctx._hb_counts[name] = ctx._hb_counts.get(name, 0) + 1
+            parts = []
+            for k, v in ctx._hb_counts.items():
+                emoji, label = tool_display(k)
+                parts.append(f"{emoji}{label} ×{v}" if v > 1 else f"{emoji}{label}")
+            iter_info = f" [{ctx.iteration}/{ctx.max_iterations}]" if ctx.max_iterations else ""
+            elapsed = int(asyncio.get_running_loop().time() - ctx.task_start_time)
+            mins, secs = divmod(elapsed, 60)
+            time_str = f"{mins}m{secs:02d}s" if mins else f"{secs}s"
+            text = f"⏳{iter_info} {', '.join(parts)} ({time_str})..."
+            try:
+                if ctx._hb_msg_id:
+                    await ctx.router.edit(ctx.gw_name, ctx.channel_id, ctx._hb_msg_id, text)
+                else:
+                    result = await ctx.router.send(ctx.gw_name, ctx.channel_id, text)
+                    if isinstance(result, dict) and result.get("message_id"):
+                        ctx._hb_msg_id = result["message_id"]
+            except Exception as e:
+                logger.debug("Heartbeat send/edit failed: %s", e)
 
     ctx.tool_heartbeat = ctx.spawn_task(_heartbeat(tool_name), name=f"heartbeat:{tool_name}")
     return False

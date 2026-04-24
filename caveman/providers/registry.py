@@ -161,9 +161,10 @@ def _create_provider(
     """Instantiate a provider from its spec."""
     section = providers_cfg.get(spec.config_section or spec.name, {})
     api_key = section.get("api_key") or os.environ.get(spec.env_key, "") if spec.env_key else ""
-    base_url = None
-    if spec.env_base_url:
-        base_url = section.get("base_url") or os.environ.get(spec.env_base_url)
+    # base_url: config section takes priority, then env var fallback
+    base_url = section.get("base_url")
+    if not base_url and spec.env_base_url:
+        base_url = os.environ.get(spec.env_base_url)
 
     # Validate API key for providers that need one
     if spec.env_key and not api_key and spec.name != "ollama":

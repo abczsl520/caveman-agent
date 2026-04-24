@@ -213,15 +213,19 @@ class CronStore:
 # --- Scheduler ---
 
 def _next_run_time(schedule: str, after: datetime | None = None) -> datetime | None:
-    """Calculate next run time from cron expression."""
+    """Calculate next run time from cron expression or simple interval."""
+    # Try simple interval first (5m, 1h, 30s)
+    simple = _simple_interval_next(schedule, after)
+    if simple is not None:
+        return simple
     try:
         from croniter import croniter
         base = after or datetime.now(timezone.utc)
         cron = croniter(schedule, base)
         return cron.get_next(datetime)
     except ImportError:
-        logger.warning("croniter not installed — using simple interval fallback")
-        return _simple_interval_next(schedule, after)
+        logger.warning("croniter not installed — no cron expression support")
+        return None
     except Exception as e:
         logger.error("Invalid cron expression '%s': %s", schedule, e)
         return None

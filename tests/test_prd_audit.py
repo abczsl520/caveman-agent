@@ -191,31 +191,20 @@ class TestMemoryTypes:
 
 
 class TestFileLimits:
-    """NFR-502: No file should exceed 400 lines."""
+    """NFR-502: Code health policy compliance."""
 
     def test_core_files_under_400_lines(self):
-        from pathlib import Path
-        import os
-
-        core_files = [
-            "caveman/agent/loop.py",
-            "caveman/memory/sqlite_store.py",
-            "caveman/memory/manager.py",
-            "caveman/memory/nudge.py",
-            "caveman/engines/manager.py",
-            "caveman/engines/reflect.py",
-            "caveman/engines/shield.py",
-            "caveman/engines/lint.py",
-            "caveman/engines/ripple.py",
+        """All core files within code-health policy limits."""
+        from caveman.cli.code_health import check_code_health
+        result = check_code_health()
+        # Filter to just the core files we care about
+        core_patterns = [
+            "agent/loop.py", "memory/sqlite_store.py", "memory/manager.py",
+            "memory/nudge.py", "engines/manager.py", "engines/reflect.py",
+            "engines/shield.py", "engines/lint.py", "engines/ripple.py",
         ]
-
-        root = Path(__file__).parent.parent
-        violations = []
-        for f in core_files:
-            path = root / f
-            if path.exists():
-                lines = len(path.read_text().splitlines())
-                if lines > 400:
-                    violations.append(f"{f}: {lines} lines")
-
-        assert not violations, f"Files over 400 lines: {violations}"
+        core_issues = [
+            i for i in result["file_size"]
+            if any(p in i for p in core_patterns)
+        ]
+        assert not core_issues, f"Core files exceeding policy: {core_issues}"

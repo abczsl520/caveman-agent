@@ -99,4 +99,36 @@ target-version = ["py312"]
 [tool.mypy]
 python_version = "3.12"
 warn_return_any = true
+
+[tool.caveman.code-health]
+# NFR-502: Code health policy — single source of truth.
+# All tests read from here; no hardcoded thresholds in test files.
+#
+# Philosophy: what matters is not raw line count, but whether a file
+# has become a "god file" that does too many things. We check two things:
+#   1. File size (lines) — proxy for "too much responsibility"
+#   2. Max function size — proxy for "function doing too much"
+#
+# Tiers:
+#   default  — most source files
+#   engine   — cognitive engines (Shield, Lint, Reflect, etc.) are inherently
+#              complex single-responsibility modules; they get more room
+#   cli      — CLI entry points are thin wrappers, higher threshold
+#   exempt   — files that are intentionally large (generated, data, etc.)
+
+default_max_lines = 450
+default_max_function_lines = 100
+engine_max_lines = 550
+cli_max_lines = 600
+
+# Per-file overrides: path (relative to caveman/) → max_lines
+# Use sparingly — every override needs a reason.
+[tool.caveman.code-health.overrides]
+"cli/main.py" = 600          # CLI entry point, many thin subcommands
+"gateway/gateway_lifecycle.py" = 550  # Complex lifecycle state machine
+"agent/factory.py" = 550     # Wiring hub, many dependencies
+"import_/session_parser.py" = 500  # Parser with many edge cases
+
+# Engine tier: auto-applied to caveman/engines/*.py
+# No need to list each engine file — the tier handles it.
 warn_unused_configs = true

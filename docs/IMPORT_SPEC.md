@@ -16,7 +16,7 @@ workspace/
 ├── SOUL.md, USER.md, MEMORY.md, AGENTS.md    → 导入为 workspace 文件（复制到 ~/.caveman/workspace/）
 ├── HEARTBEAT.md, TOOLS.md, IDENTITY.md        → 同上
 ├── agents/*.md                                 → 导入为 workspace/agents/
-├── skills/*/SKILL.md                           → 导入为 ~/.caveman/skills/
+├── skills/**/SKILL.md                          → 导入为 ~/.caveman/skills/（rglob 递归）
 ├── scripts/*.sh                                → 导入为 workspace/scripts/（只复制，不执行）
 ├── memory/
 │   ├── YYYY-MM-DD.md (92个日记)               → 导入为 episodic 记忆
@@ -32,6 +32,7 @@ workspace/
 ├── .learnings/ERRORS.md                        → 导入为 episodic 记忆
 └── .agent-state/done/*.json                    → 导入为 episodic 记忆（agent 任务历史）
 
+skills/**/SKILL.md                              → 导入为 ~/.caveman/skills/（root-level 自定义 skills）
 openclaw.json                                   → 提取 providers/models 配置写入 caveman config
 cron/jobs.json                                  → 导入为 ~/.caveman/cron/imported-jobs.json（参考，不自动激活）
 memory/main.sqlite                              → 不导入（向量库格式不同，重新 embedding）
@@ -43,10 +44,13 @@ memories/
 ├── MEMORY.md                                   → 按 § 分割为独立记忆条目
 └── USER.md                                     → 按 § 分割为 working 记忆
 
-skills/*/SKILL.md                               → 导入为 ~/.caveman/skills/
+skills/**/SKILL.md                              → 导入为 ~/.caveman/skills/（rglob 递归扫描嵌套结构）
+skills/**/references/*.md                       → 导入为 procedural 记忆（技能参考文档）
+openclaw-memory/**/*.md                         → 导入为记忆（OpenClaw 跨同步的方法论文件）
 config.yaml                                     → 提取 model/providers 配置
 
 注意：Hermes 记忆用 \n§\n (section sign) 分隔，不是 ## 标题
+注意：Hermes skills 是嵌套目录结构（如 software-development/systematic-debugging/SKILL.md）
 ```
 
 #### Claude Code (~/.claude/)

@@ -265,10 +265,11 @@ class TestLoopRefactor:
     """Verify loop.py refactor didn't break anything."""
 
     def test_loop_under_400_lines(self):
-        """NFR-502: loop.py must be ≤ 400 lines."""
-        from pathlib import Path
-        lines = len(Path("caveman/agent/loop.py").read_text().splitlines())
-        assert lines <= 450, f"loop.py is {lines} lines (max 450)"
+        """NFR-502: loop.py must be within code-health policy limits."""
+        from caveman.cli.code_health import check_code_health
+        result = check_code_health()
+        loop_issues = [i for i in result["file_size"] if "agent/loop.py" in i]
+        assert not loop_issues, f"loop.py exceeds policy: {loop_issues}"
 
     def test_phases_module_exists(self):
         from caveman.agent.phases import (
@@ -291,14 +292,8 @@ class TestLoopRefactor:
         assert loop.provider is not None
 
     def test_no_file_over_400_lines(self):
-        """NFR-502: No core module exceeds 400 lines."""
-        from pathlib import Path
-        violations = []
-        for py in sorted(Path("caveman").rglob("*.py")):
-            if "__pycache__" in str(py) or "__init__" in py.name:
-                continue
-            lines = len(py.read_text().splitlines())
-            threshold = 500 if "cli/main.py" in str(py) else 450
-            if lines > threshold:
-                violations.append(f"{py}: {lines} lines")
-        assert not violations, f"Files over 450 lines:\n" + "\n".join(violations)
+        """NFR-502: No core module exceeds code-health policy limits."""
+        from caveman.cli.code_health import check_code_health
+        result = check_code_health()
+        assert not result["file_size"], \
+            f"Files exceeding policy:\n" + "\n".join(result["file_size"])

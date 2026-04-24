@@ -45,8 +45,8 @@ def _validate_name(name: str) -> str | None:
         "name": {"type": "string", "description": "Skill name (alphanumeric, hyphens)"},
         "description": {"type": "string", "description": "What this skill does"},
         "trigger": {"type": "string", "description": "When to use this skill"},
-        "trigger_patterns": {"type": "array", "description": "Regex patterns that trigger this skill"},
-        "steps": {"type": "array", "description": "List of step descriptions"},
+        "trigger_patterns": {"type": "array", "items": {"type": "string"}, "description": "Regex patterns that trigger this skill"},
+        "steps": {"type": "array", "items": {"type": "string"}, "description": "List of step descriptions"},
     },
     required=["name", "description", "trigger", "steps"],
 )
@@ -88,8 +88,8 @@ async def skill_create(
         "name": {"type": "string", "description": "Skill name"},
         "description": {"type": "string", "description": "Updated description"},
         "trigger": {"type": "string", "description": "Updated trigger"},
-        "trigger_patterns": {"type": "array", "description": "Updated trigger patterns"},
-        "steps": {"type": "array", "description": "Updated steps"},
+        "trigger_patterns": {"type": "array", "items": {"type": "string"}, "description": "Updated trigger patterns"},
+        "steps": {"type": "array", "items": {"type": "string"}, "description": "Updated steps"},
     },
     required=["name"],
 )

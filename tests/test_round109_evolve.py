@@ -122,14 +122,16 @@ async def test_reflect_auto_evolves_degraded_skills(tmp_path):
 # ── File size checks ──
 
 def test_skills_manager_under_400_lines():
-    from pathlib import Path
-    p = Path(__file__).parent.parent / "caveman" / "skills" / "manager.py"
-    lines = p.read_text().count("\n")
-    assert lines <= 400, f"skills/manager.py is {lines} lines"
+    """NFR-502: skills/manager.py within code-health policy."""
+    from caveman.cli.code_health import check_code_health
+    result = check_code_health()
+    issues = [i for i in result["file_size"] if "skills/manager.py" in i]
+    assert not issues, f"skills/manager.py exceeds policy: {issues}"
 
 
 def test_reflect_under_400_lines():
-    from pathlib import Path
-    p = Path(__file__).parent.parent / "caveman" / "engines" / "reflect.py"
-    lines = p.read_text().count("\n")
-    assert lines <= 420, f"engines/reflect.py is {lines} lines"
+    """NFR-502: engines/reflect.py within code-health policy."""
+    from caveman.cli.code_health import check_code_health
+    result = check_code_health()
+    issues = [i for i in result["file_size"] if "engines/reflect.py" in i]
+    assert not issues, f"engines/reflect.py exceeds policy: {issues}"

@@ -165,9 +165,10 @@ class GeminiProvider(LLMProvider):
     async def _stream(self, params: dict) -> AsyncIterator[dict]:
         """Stream via Gemini streamGenerateContent."""
         client = self._get_client()
-        url = f"{self._base_url}/models/{self.model}:streamGenerateContent?alt=sse&key={self.api_key}"
+        url = f"{self._base_url}/models/{self.model}:streamGenerateContent?alt=sse"
+        headers = {"x-goog-api-key": self.api_key}
 
-        async with client.stream("POST", url, json=params) as resp:
+        async with client.stream("POST", url, json=params, headers=headers) as resp:
             resp.raise_for_status()
             async for line in resp.aiter_lines():
                 if not line.startswith("data: "):
@@ -179,6 +180,12 @@ class GeminiProvider(LLMProvider):
                     data = json.loads(data_str)
                     events = _parse_response(data)
                     for event in events:
+                        # Record usage from the final chunk
+                        if event.get("type") == "done":
+                            usage = event.get("usage", {})
+                            self._call_count += 1
+                            self._total_input_tokens += usage.get("input_tokens", 0)
+                            self._total_output_tokens += usage.get("output_tokens", 0)
                         yield event
                 except json.JSONDecodeError:
                     continue
@@ -186,8 +193,9 @@ class GeminiProvider(LLMProvider):
     async def _non_stream(self, params: dict) -> AsyncIterator[dict]:
         """Non-streaming: single API call."""
         client = self._get_client()
-        url = f"{self._base_url}/models/{self.model}:generateContent?key={self.api_key}"
-        resp = await client.post(url, json=params)
+        url = f"{self._base_url}/models/{self.model}:generateContent"
+        headers = {"x-goog-api-key": self.api_key}
+        resp = await client.post(url, json=params, headers=headers)
         resp.raise_for_status()
         data = resp.json()
 
@@ -334,14 +342,3 @@ def _parse_response(data: dict) -> list[dict]:
 
     return events
 
-
-def _normalize_finish_reason(reason: str) -> str:
-    """Normalize Gemini finish reasons to our standard format."""
-    mapping = {
-        "STOP": "end_turn",
-        "MAX_TOKENS": "max_tokens",
-        "SAFETY": "safety",
-        "RECITATION": "recitation",
-        "OTHER": "end_turn",
-    }
-    return mapping.get(reason, reason.lower())
