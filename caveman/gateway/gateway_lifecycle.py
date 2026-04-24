@@ -126,16 +126,48 @@ async def run_gateway_forever(config_path: str | None = None, max_restarts: int 
     write_pid_file()
     write_runtime_state(state="starting")
 
+    # Register our PID with bash tool's self-kill protection so the
+    # agent cannot kill its own gateway via `kill <PID>`.
+    try:
+        from caveman.tools.builtin.bash import register_gateway_pid
+        register_gateway_pid()
+        logger.info("Self-kill protection registered for PID %d", os.getpid())
+    except Exception as e:
+        logger.error("Failed to register self-kill protection: %s", e)
+
     # Install SIGUSR1 handler for graceful restart
     import signal as _signal
 
+    _sigusr1_force = False
+
     def _sigusr1_handler():
+        nonlocal _sigusr1_force
         global _restart_requested
         if _restart_requested:
-            logger.warning("Restart already requested, ignoring duplicate SIGUSR1")
+            logger.warning("Second SIGUSR1 — force restart (skip drain)")
+            _sigusr1_force = True
             return
         _restart_requested = True
         logger.info("SIGUSR1 received — initiating graceful restart")
+
+    def _sigusr2_handler():
+        """Hot-reload changed modules without restarting gateway."""
+        import importlib
+        # Reload all loaded caveman modules (dynamic discovery)
+        _hot_reload_targets = sorted(
+            name for name in sys.modules
+            if name.startswith('caveman.') and not name.startswith('caveman.gateway.gateway_lifecycle')
+        )
+        reloaded = []
+        for mod_name in _hot_reload_targets:
+            mod = sys.modules.get(mod_name)
+            if mod:
+                try:
+                    importlib.reload(mod)
+                    reloaded.append(mod_name)
+                except Exception as e:
+                    logger.error("Hot-reload failed for %s: %s", mod_name, e)
+        logger.info("SIGUSR2 hot-reload: %s", reloaded or "no modules loaded yet")
 
     loop = asyncio.get_running_loop()
     if hasattr(_signal, "SIGUSR1"):
@@ -144,6 +176,12 @@ async def run_gateway_forever(config_path: str | None = None, max_restarts: int 
             logger.info("SIGUSR1 handler installed for graceful restart")
         except NotImplementedError as exc:
             logger.debug("_sigusr1_handler: suppressed %s", exc)
+    if hasattr(_signal, "SIGUSR2"):
+        try:
+            loop.add_signal_handler(_signal.SIGUSR2, _sigusr2_handler)
+            logger.info("SIGUSR2 handler installed for hot-reload")
+        except NotImplementedError as exc:
+            logger.debug("_sigusr2_handler: suppressed %s", exc)
 
     def _shutdown_handler():
         global _gateway_stopping
@@ -205,15 +243,20 @@ async def run_gateway_forever(config_path: str | None = None, max_restarts: int 
 
                 while not gateway_task.done():
                     if _restart_requested:
-                        logger.info("Graceful restart: draining active sessions...")
-                        write_runtime_state(state="draining", restart_requested=True)
+                        if _sigusr1_force:
+                            logger.info("Force restart: skipping drain")
+                            write_runtime_state(state="force_restart", restart_requested=True)
+                            active, timed_out = 0, False
+                        else:
+                            logger.info("Graceful restart: draining active sessions...")
+                            write_runtime_state(state="draining", restart_requested=True)
 
-                        srv = _get_server()
-                        active, timed_out = await drain_active_sessions(
-                            srv.sessions, srv.session_locks, DEFAULT_DRAIN_TIMEOUT,
-                        )
-                        if timed_out:
-                            logger.warning("Drain timed out with active sessions")
+                            srv = _get_server()
+                            active, timed_out = await drain_active_sessions(
+                                srv.sessions, srv.session_locks, DEFAULT_DRAIN_TIMEOUT,
+                            )
+                            if timed_out:
+                                logger.warning("Drain timed out with active sessions")
 
                         write_restart_sentinel(kind="restart", reason="SIGUSR1 graceful restart")
 

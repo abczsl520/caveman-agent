@@ -115,8 +115,22 @@ def record_turn_metrics(loop, turn_start, recalled_ids, matched_skills, result) 
         loop.metrics.increment("task_successes")
 
 
-async def check_termination(stop: str, tool_calls: list, task: str) -> bool:
-    """Check if the loop should terminate after this iteration."""
+async def check_termination(stop: str, tool_calls: list, task: str, text: str = "") -> bool:
+    """Check if the loop should terminate after this iteration.
+
+    Key invariant: if the LLM emitted a closing marker, the conversation
+    is DONE — even if tool_calls were also emitted. Those tool_calls are
+    stale (LLM hallucinated actions after signing off).
+    """
+    from caveman.agent.output_validator import CLOSING_LINE
+    if text and CLOSING_LINE in text:
+        if tool_calls:
+            logger.info(
+                "Closing marker found with %d tool_calls — "
+                "discarding stale tool_calls, terminating",
+                len(tool_calls),
+            )
+        return True
     if tool_calls:
         return False
     if stop == "end_turn":

@@ -28,8 +28,6 @@ _STUCK_LOOP_THRESHOLD = 5           # Same tool+args repeated N times → abort
 _PATTERN_LOOP_WINDOW = 20           # Window for pattern-based loop detection
 _PATTERN_LOOP_REPEATS = 5           # Pattern must repeat N times to trigger
 
-_ENDINGS = ("✅", "完成", "Done", "done.", "以上", "结束", "？", "?", "吗？", "吗?")
-
 def _resolve_timeouts(config: dict[str, Any] | None) -> dict[str, float]:
     """Read user-configurable timeouts from gateway config."""
     defaults = {
@@ -92,12 +90,20 @@ class _TaskContext:
         self.last_event_time = asyncio.get_running_loop().time()
         self.idle_warned = False
 
+    # Tools that legitimately need repeated identical calls (polling patterns)
+    _POLLING_TOOLS = frozenset({"process_output", "process_list", "acp_status"})
+
     def check_stuck_loop(self, tool_name: str, tool_args: str) -> str | None:
         """Detect stuck loops. Returns description if stuck, None if OK.
 
         Two detection modes:
         1. Exact repeat: same tool+args N times in a row
         2. Pattern loop: a sequence of 2-4 calls repeating N times (e.g. read→edit→read→edit→read→edit)
+
+        Polling tools (process_output, acp_status) are exempt from exact-repeat
+        detection since they legitimately need repeated identical calls to check
+        on background processes. They still count for pattern-loop detection
+        (e.g. process_output→file_read→process_output→file_read is suspicious).
         """
         sig = f"{tool_name}:{hash(tool_args)}"
         self.recent_tool_calls.append(sig)
@@ -106,10 +112,11 @@ class _TaskContext:
             self.recent_tool_calls.pop(0)
         calls = self.recent_tool_calls
 
-        # Mode 1: exact repeat
-        if len(calls) >= _STUCK_LOOP_THRESHOLD:
-            if len(set(calls[-_STUCK_LOOP_THRESHOLD:])) == 1:
-                return f"exact_repeat:{tool_name}"
+        # Mode 1: exact repeat (skip for polling tools)
+        if tool_name not in self._POLLING_TOOLS:
+            if len(calls) >= _STUCK_LOOP_THRESHOLD:
+                if len(set(calls[-_STUCK_LOOP_THRESHOLD:])) == 1:
+                    return f"exact_repeat:{tool_name}"
 
         # Mode 2: pattern loop (detect repeating subsequences of length 2-4)
         if len(calls) >= 6:
@@ -240,6 +247,12 @@ async def run_single_task(
             elif event.type == "done":
                 final_text = str(event.data) if event.data else ""
                 await buf.flush()
+                # If enforce_closing_format appended a closing marker that
+                # wasn't in the streamed text, send it now.
+                from caveman.agent.behavior_rules import get_rule
+                _marker = get_rule("CLOSING_FORMAT") or ""
+                if _marker and _marker in final_text and _marker not in (buf._sent_text or ""):
+                    await ctx.send(_marker)
 
         buf.cancel()
         ctx.cancel_all()
@@ -259,9 +272,6 @@ async def run_single_task(
         # Send completion marker if needed
         progress_count = source_channel.get("_progress_sent", 0)
         if buf.sent_any or progress_count > 0:
-            last_sent = (buf._sent_text or "").strip()
-            if last_sent and not any(last_sent.rstrip().endswith(e) for e in _ENDINGS):
-                await ctx.send("✅")
             return final_text or ""
         return final_text or "Done."
 

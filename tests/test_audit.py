@@ -27,9 +27,11 @@ def test_no_bare_except():
 
 
 def test_no_god_files():
-    files = _find_python_files()
-    issues = check_file_size(files, max_lines=450)
-    assert issues == [], f"Files over 450 lines:\n" + "\n".join(issues)
+    """NFR-502: No god files — reads policy from pyproject.toml."""
+    from caveman.cli.code_health import check_code_health
+    result = check_code_health()
+    assert not result["file_size"], \
+        f"Files exceeding policy:\n" + "\n".join(result["file_size"])
 
 
 def test_all_modules_importable():

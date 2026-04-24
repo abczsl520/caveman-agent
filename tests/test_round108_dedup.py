@@ -185,14 +185,17 @@ async def test_dedup_empty_candidates(nudge_with_memory):
     assert result == []
 
 
-# ── Loop slimming verification ──
+# —— Loop slimming verification ——
 
-def test_loop_under_400_lines():
-    """NFR-502: loop.py must be under 400 lines."""
-    from pathlib import Path
-    loop_path = Path(__file__).parent.parent / "caveman" / "agent" / "loop.py"
-    lines = loop_path.read_text().count("\n")
-    assert lines <= 400, f"loop.py is {lines} lines, must be ≤400"
+def test_loop_state_extracted():
+    """LoopState is the single source of truth for serializable session state."""
+    from caveman.agent.loop_state import LoopState
+    from dataclasses import fields
+    state = LoopState()
+    snap = state.snapshot()
+    restored = LoopState.from_snapshot(snap)
+    for f in fields(LoopState):
+        assert getattr(restored, f.name) == getattr(state, f.name)
 
 
 def test_bg_tasks_module_exists():

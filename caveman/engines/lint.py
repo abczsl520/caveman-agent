@@ -124,6 +124,26 @@ class LintEngine:
         self._full_scan_interval = 10  # Full scan every N incremental scans
         self._scan_count = 0
 
+    async def lint_single(self, entry: MemoryEntry) -> LintReport:
+        """Fast single-memory lint for event_chain MEMORY_STORE hook."""
+        import time
+        start = time.monotonic()
+        report = LintReport(scanned=1)
+        self._check_stale_paths([entry], report)
+        self._check_aged([entry], report)
+        if len(entry.content.strip()) < 15:
+            report.issues.append(LintIssue(
+                issue_type=IssueType.LOW_CONFIDENCE, severity=IssueSeverity.WARN,
+                memory_id=entry.id,
+                message=f"Memory too short ({len(entry.content)} chars)",
+                suggestion="Merge with related memory or remove",
+            ))
+        report.scan_time_ms = (time.monotonic() - start) * 1000
+        if report.issues:
+            await self._apply_trust_penalties(report)
+            logger.info("lint_single: %d issues for %s", len(report.issues), entry.id[:8])
+        return report
+
     async def scan(self) -> LintReport:
         """Run lint scan — incremental by default, full every N scans.
 
@@ -198,10 +218,8 @@ class LintEngine:
         """Demote trust_score for memories with warn/error issues.
 
         Uses mark_helpful(False) on the SQLite backend, which applies
-        the standard trust decay (-0.10 per call). This means:
-        - WARN issues: one demotion per scan
-        - ERROR issues: one demotion per scan
-        Repeated scans compound the penalty until the memory is fixed.
+        the standard trust decay (-0.10 per call). Repeated scans
+        compound the penalty until the memory is fixed.
         """
         backend = getattr(self.memory, '_backend', None)
         if not backend or not hasattr(backend, 'mark_helpful'):
@@ -223,9 +241,8 @@ class LintEngine:
     async def _decay_inactive(self) -> None:
         """Apply trust decay to memories not accessed in 30+ days.
 
-        Cognitive science: unused memories fade. This ensures active memories
-        naturally float to the top while dormant ones sink.
-        Decay: -0.02 per scan cycle for memories idle > 30 days.
+        Cognitive science: unused memories fade. Active memories float to top.
+        Decay: -0.02 per scan cycle for idle > 30 days.
         User-type memories are exempt (preferences don't expire).
         """
         backend = getattr(self.memory, '_backend', None)
@@ -252,9 +269,8 @@ class LintEngine:
     async def _gc_dead_memories(self) -> None:
         """Delete memories whose trust has decayed to zero.
 
-        Trust=0 means the memory has been repeatedly flagged by Lint and/or
-        marked unhelpful by the confidence feedback loop. Keeping it wastes
-        storage, pollutes FTS5 index, and competes with real knowledge.
+        Trust=0 means repeatedly flagged by Lint and/or marked unhelpful.
+        Keeping them wastes storage and pollutes FTS5 index.
         """
         backend = getattr(self.memory, '_backend', None)
         if not backend:

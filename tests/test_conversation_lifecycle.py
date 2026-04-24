@@ -47,20 +47,20 @@ class TestPhaseRules:
         assert "start of the conversation" in rules.lower()
         assert "✅" in rules  # mentioned as "do NOT use"
 
-    def test_discord_working_simple(self):
-        """Medium complexity working phase — no closing instructions."""
+    def test_discord_working_medium(self):
+        """Medium complexity working phase — has conditional closing."""
         state = ConversationState(turn_count=3, tool_call_count=10, iteration_count=2)
         rules = get_phase_rules("discord", state)
-        assert "middle" in rules.lower()
-        assert "not done yet" in rules.lower()
-        assert "本轮已结束" not in rules
+        assert "complex" in rules.lower()
+        assert "✅---本轮已完成---✅" in rules
+        assert "FINAL response" in rules
 
     def test_discord_working_complex(self):
         """Complex working phase — conditional closing instructions."""
         state = ConversationState(turn_count=8, tool_call_count=30, iteration_count=5)
         rules = get_phase_rules("discord", state)
         assert "complex" in rules.lower()
-        assert "本轮已结束" in rules
+        assert "✅---本轮已完成---✅" in rules
         assert "FINAL response" in rules
 
     def test_discord_working_complex_conditional(self):
@@ -70,10 +70,16 @@ class TestPhaseRules:
         assert "MORE tool calls" in rules
         assert "FINAL response" in rules
 
-    def test_cli_returns_empty(self):
+    def test_cli_simple_returns_empty(self):
         state = ConversationState(turn_count=1)
         rules = get_phase_rules("cli", state)
         assert rules == ""
+
+    def test_cli_complex_has_closing(self):
+        """CLI complex conversations also get closing format."""
+        state = ConversationState(turn_count=6, tool_call_count=25, iteration_count=5)
+        rules = get_phase_rules("cli", state)
+        assert "✅---本轮已完成---✅" in rules
 
     def test_unknown_surface_returns_empty(self):
         state = ConversationState(turn_count=1)
@@ -129,12 +135,41 @@ class TestPromptBuilderIntegration:
         rules_simple = get_phase_rules("discord", simple)
         assert "start of the conversation" in rules_simple.lower()
 
-        # Medium conversation — working (no closing hint)
+        # Medium conversation — now also has conditional closing
         medium = ConversationState(turn_count=3, tool_call_count=10, iteration_count=2)
         rules_medium = get_phase_rules("discord", medium)
-        assert "本轮已结束" not in rules_medium
+        assert "✅---本轮已完成---✅" in rules_medium
 
         # Complex conversation — working_complex (conditional closing hint)
         complex_ = ConversationState(turn_count=8, tool_call_count=30, iteration_count=5)
         rules_complex = get_phase_rules("discord", complex_)
-        assert "本轮已结束" in rules_complex
+        assert "✅---本轮已完成---✅" in rules_complex
+
+
+class TestAgentLoopIntegration:
+    """Verify AgentLoop correctly tracks conversation state."""
+
+    def test_reset_session_no_crash(self):
+        """reset_session must not crash (was broken by property shadowing)."""
+        from unittest.mock import MagicMock
+        from caveman.agent.loop import AgentLoop
+
+        provider = MagicMock()
+        provider.model = "test"
+        loop = AgentLoop(model="test", provider=provider)
+        loop.reset_session()  # Should not raise AttributeError
+        state = loop._conversation_state
+        assert state.turn_count == 0
+        assert state.tool_call_count == 0
+        assert state.iteration_count == 0
+
+    def test_iteration_count_tracked(self):
+        """_iteration_count should be passed to ConversationState."""
+        from unittest.mock import MagicMock
+        from caveman.agent.loop import AgentLoop
+
+        provider = MagicMock()
+        provider.model = "test"
+        loop = AgentLoop(model="test", provider=provider)
+        loop._iteration_count = 7
+        assert loop._conversation_state.iteration_count == 7

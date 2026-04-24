@@ -23,6 +23,7 @@ __all__ = [
     "MAX_OUTPUT_CHARS",
     "TRUNCATION_KEEP",
     "bash_exec",
+    "register_gateway_pid",
 ]
 
 
@@ -51,6 +52,23 @@ DANGEROUS_PATTERNS = [
 # Patterns that could kill the gateway process or its ancestors.
 # The agent should use /restart (which goes through graceful restart),
 # not bash kill commands.
+
+# Gateway PID — set at gateway startup so bash subprocesses know
+# which PID to protect even when start_new_session=True severs
+# the parent chain.  Populated by register_gateway_pid().
+_GATEWAY_PID: int | None = None
+
+
+def register_gateway_pid(pid: int | None = None) -> None:
+    """Record the gateway's own PID for self-kill protection.
+
+    Called once during gateway startup.  If *pid* is None, uses os.getpid().
+    """
+    global _GATEWAY_PID
+    _GATEWAY_PID = pid or os.getpid()
+    import logging as _log
+    _log.getLogger(__name__).info("Self-kill protection: gateway PID %d registered", _GATEWAY_PID)
+
 
 # Layer 1: Direct kill commands
 _KILL_COMMANDS = re.compile(
@@ -111,6 +129,16 @@ _PKILL_PATTERN = re.compile(
 )
 
 
+def _detect_gateway_pid() -> int | None:
+    """Fallback: detect gateway PID from PID file."""
+    try:
+        from caveman.gateway.status import get_running_pid
+        return get_running_pid()
+    except Exception:  # intentional — status module may not be available
+        pass
+    return None
+
+
 def _get_process_tree_pids() -> set[int]:
     """Get PIDs of the current process and all ancestors up to init.
 
@@ -133,6 +161,15 @@ def _get_process_tree_pids() -> set[int]:
     except Exception:
         # At minimum, protect our own PID
         pids.add(os.getpid())
+    # Always include the gateway PID — bash runs in a new session
+    # (start_new_session=True) so the parent walk may not reach it.
+    if _GATEWAY_PID is not None:
+        pids.add(_GATEWAY_PID)
+    else:
+        # Fallback: read PID file or detect via pgrep
+        gw_pid = _detect_gateway_pid()
+        if gw_pid:
+            pids.add(gw_pid)
     return pids
 
 
@@ -257,14 +294,14 @@ def _truncate_output(text: str) -> str:
     description="Execute a bash command. Returns stdout, stderr, return code.",
     params={
         "command": {"type": "string", "description": "Bash command to execute"},
-        "timeout": {"type": "integer", "description": "Timeout in seconds (default 30, max 300)"},
+        "timeout": {"type": "integer", "description": "Timeout in seconds (default 120, max 600)"},
         "cwd": {"type": "string", "description": "Working directory"},
     },
     required=["command"],
 )
 async def bash_exec(
     command: str,
-    timeout: int = 30,
+    timeout: int = 120,
     cwd: str | None = None,
 ) -> dict[str, Any]:
     """Execute bash command with safety checks and output management."""
@@ -313,7 +350,7 @@ async def bash_exec(
         }
 
     # Clamp timeout
-    timeout = max(1, min(timeout, 300))
+    timeout = max(1, min(timeout, 600))
 
     # Resolve working directory
     work_dir = cwd or os.getcwd()

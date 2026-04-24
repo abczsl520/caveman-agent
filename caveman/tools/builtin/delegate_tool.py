@@ -181,7 +181,7 @@ async def delegate_task(
     name="delegate_parallel",
     description="Delegate multiple tasks in parallel to sub-agents",
     params={
-        "tasks": {"type": "array", "description": "List of {prompt, model} objects"},
+        "tasks": {"type": "array", "items": {"type": "object", "properties": {"prompt": {"type": "string"}, "model": {"type": "string"}}, "required": ["prompt"]}, "description": "List of {prompt, model} objects"},
         "timeout": {"type": "integer", "description": "Timeout per task in seconds"},
     },
     required=["tasks"],

@@ -73,19 +73,31 @@ def check_swallowed_exceptions(files: list[Path]) -> list[str]:
 
 
 def check_file_size(files: list[Path], max_lines: int = 400) -> list[str]:
-    """Find files exceeding NFR-502 line limit.
+    """Find files exceeding line limit. Reads policy from pyproject.toml.
 
-    CLI entry points (cli/main.py) get a higher threshold (500)
-    since they're thin wrappers, not core logic.
+    Falls back to max_lines param if pyproject.toml unavailable.
     """
-    CLI_THRESHOLD = 500
-    issues = []
-    for f in files:
-        count = len(f.read_text(encoding="utf-8").splitlines())
-        threshold = CLI_THRESHOLD if "cli/main.py" in str(f) else max_lines
-        if count > threshold:
-            issues.append(f"{f.relative_to(CAVEMAN_DIR)}: {count} lines (max {threshold})")
-    return issues
+    try:
+        from caveman.cli.code_health import _load_policy, _get_threshold, _ROOT
+        policy = _load_policy()
+        issues = []
+        for f in files:
+            count = len(f.read_text(encoding="utf-8").splitlines())
+            rel = str(f.relative_to(_ROOT)) if str(f).startswith(str(_ROOT)) else str(f)
+            threshold = _get_threshold(rel, policy)
+            if count > threshold:
+                issues.append(f"{f.relative_to(CAVEMAN_DIR)}: {count} lines (max {threshold})")
+        return issues
+    except Exception:
+        # Fallback: original behavior
+        CLI_THRESHOLD = 500
+        issues = []
+        for f in files:
+            count = len(f.read_text(encoding="utf-8").splitlines())
+            threshold = CLI_THRESHOLD if "cli/main.py" in str(f) else max_lines
+            if count > threshold:
+                issues.append(f"{f.relative_to(CAVEMAN_DIR)}: {count} lines (max {threshold})")
+        return issues
 
 
 def run_audit() -> str:

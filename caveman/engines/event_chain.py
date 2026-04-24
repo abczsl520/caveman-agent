@@ -22,6 +22,7 @@ Without it, each engine runs independently (the flywheel is broken).
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from typing import Any, TYPE_CHECKING
 
 from caveman.events import EventBus, EventType, Event
@@ -131,20 +132,38 @@ def wire_inner_flywheel(
         bus.on(EventType.TOOL_ERROR, _on_tool_error_nudge)
         handlers.append((EventType.TOOL_ERROR, _on_tool_error_nudge))
 
-    # Chain 4: MEMORY_STORE → Lint incremental check (if from nudge)
+    # Chain 4: MEMORY_STORE → Lint single-entry check (if from nudge)
     # PRD §5.3: Nudge → Ripple → Lint feedback loop
-    # When new memories are stored, Lint can do a quick validation
+    # When nudge stores a new memory, lint it immediately to catch low-quality entries.
     if engines.lint:
         lint_ref = engines.lint
 
         async def _on_memory_store_lint(event: Event) -> None:
-            """New memory stored → Lint can validate it."""
+            """New nudge memory stored → lint it immediately."""
             source = event.data.get("source", "")
             if source != "nudge":
                 return  # Only lint nudge-extracted memories
-            # Don't run full scan, just note that new memories exist
-            # The actual scan happens on session end or periodically
-            logger.debug("Inner flywheel: new nudge memory → Lint will check on next scan")
+            memory_id = event.data.get("memory_id", "")
+            content = event.data.get("content", "")
+            mem_type = event.data.get("type", "semantic")
+            if not memory_id or not content:
+                return
+            try:
+                from caveman.memory.types import MemoryEntry, MemoryType
+                entry = MemoryEntry(
+                    id=memory_id, content=content,
+                    memory_type=MemoryType(mem_type) if isinstance(mem_type, str) else mem_type,
+                    created_at=datetime.now(),
+                    metadata=event.data.get("metadata", {}),
+                )
+                report = await lint_ref.lint_single(entry)
+                if report.issues:
+                    logger.info(
+                        "Inner flywheel: Nudge → Lint caught %d issues in new memory %s",
+                        len(report.issues), memory_id[:8],
+                    )
+            except Exception as e:
+                logger.debug("MEMORY_STORE→Lint chain failed: %s", e)
 
         bus.on(EventType.MEMORY_STORE, _on_memory_store_lint)
         handlers.append((EventType.MEMORY_STORE, _on_memory_store_lint))
@@ -224,6 +243,8 @@ def wire_inner_flywheel(
     # Run decay every N tasks to prevent stale memories from polluting retrieval.
     _decay_task_count = [0]
     _DECAY_INTERVAL = 10  # run decay every 10 tasks
+    # Reuse single instance to preserve internal state across invocations
+    _decay_instance = [None]
 
     async def _on_loop_end_decay(event: Event) -> None:
         """Periodically run memory decay after N tasks."""
@@ -233,8 +254,9 @@ def wire_inner_flywheel(
         _decay_task_count[0] = 0
         try:
             from caveman.memory.decay import MemoryDecay
-            decay = MemoryDecay()
-            result = decay.run()
+            if _decay_instance[0] is None:
+                _decay_instance[0] = MemoryDecay()
+            result = _decay_instance[0].run()
             if result.memories_decayed > 0 or result.memories_pruned > 0:
                 logger.info(
                     "Memory decay: %d decayed, %d pruned",

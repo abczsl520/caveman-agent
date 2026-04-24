@@ -92,6 +92,10 @@ class FallbackChain:
                 key = entry.api_key or os.environ.get("OPENAI_API_KEY", "")
                 base = entry.base_url or None
             return OpenAIProvider(api_key=key, model=entry.model, base_url=base)
+        elif entry.provider == "gemini":
+            from caveman.providers.gemini_provider import GeminiProvider
+            key = entry.api_key or os.environ.get("GEMINI_API_KEY", "")
+            return GeminiProvider(model=entry.model, api_key=key, base_url=entry.base_url or None)
         elif entry.provider == "ollama":
             from caveman.providers.ollama_provider import OllamaProvider
             base = entry.base_url or "http://localhost:11434"

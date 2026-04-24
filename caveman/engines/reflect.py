@@ -63,6 +63,20 @@ _ANTI_PATTERN_SIGNALS = [
     (r"(?:workaround|hack|temporary fix)", "workaround"),
 ]
 
+# Causal chain patterns — extract "X because Y" relationships
+_CAUSAL_PATTERNS = [
+    re.compile(r"(?:because|since|due to|caused by)\s+(.{10,120})", re.I),
+    re.compile(r"(?:root cause|the issue|the problem)\s+(?:was|is)\s+(.{10,120})", re.I),
+    re.compile(r"(?:fixed by|solved by|resolved by)\s+(.{10,120})", re.I),
+    re.compile(r"(.{10,80})\s+(?:→|->|leads to|results in)\s+(.{10,80})", re.I),
+]
+
+# Error recovery patterns — detect successful debugging sequences
+_RECOVERY_PATTERNS = [
+    re.compile(r"(?:error|exception|failed|crash).{0,200}(?:fix|solve|resolve|work)", re.I | re.S),
+    re.compile(r"(?:tried|attempt).{0,100}(?:instead|alternative|different)", re.I | re.S),
+]
+
 
 class ReflectEngine:
     """Post-task reflection — extract patterns and evolve skills."""
@@ -174,6 +188,21 @@ class ReflectEngine:
             if match:
                 anti.append(f"{label}: {match.group(0)[:80]}")
 
+        # Extract causal chains — "X because Y" relationships (PRD §5.3 knowledge depth)
+        causal_chains = []
+        for pattern in _CAUSAL_PATTERNS:
+            for match in pattern.finditer(combined):
+                chain = match.group(0).strip()[:150]
+                if chain and chain not in causal_chains:
+                    causal_chains.append(chain)
+
+        # Detect error recovery patterns — successful debugging is high-value knowledge
+        recovery_detected = False
+        for pattern in _RECOVERY_PATTERNS:
+            if pattern.search(combined):
+                recovery_detected = True
+                break
+
         # Extract lessons
         lessons = []
         if outcome == "success" and effective:
@@ -184,6 +213,11 @@ class ReflectEngine:
             lessons.append(
                 f"Avoid: {', '.join(a.split(':')[0] for a in anti[:3])}"
             )
+        # Causal lessons are higher value than pattern lessons
+        for chain in causal_chains[:3]:
+            lessons.append(f"Root cause insight: {chain}")
+        if recovery_detected and outcome == "success":
+            lessons.append("Successfully recovered from errors — this debugging sequence is reusable")
 
         # Suggest skill updates
         skill_updates = []
@@ -205,7 +239,12 @@ class ReflectEngine:
                 ],
             })
 
+        # Confidence: base on outcome + evidence quality
         confidence = 0.7 if outcome == "success" else 0.4
+        if causal_chains:
+            confidence = min(1.0, confidence + 0.1)  # Causal insight = higher quality
+        if recovery_detected:
+            confidence = min(1.0, confidence + 0.05)
 
         return Reflection(
             task=task,
@@ -287,16 +326,7 @@ Rules:
         return detect_outcome(text)
 
     def _extract_tool_calls(self, trajectory: list[dict]) -> list[str]:
-        """Extract ordered list of tool names from function_call turns.
-
-        Parses ShareGPT-format trajectory where tool invocations appear as
-        turns with from='function_call' and value containing JSON with a
-        'name' field. Falls back to scanning 'tool_calls' lists in
-        assistant turns (OpenAI format).
-
-        Returns:
-            Ordered list of tool names as they were called.
-        """
+        """Extract ordered list of tool names from function_call turns."""
         tools: list[str] = []
         for turn in trajectory:
             role = turn.get("from", turn.get("role", ""))
@@ -371,7 +401,6 @@ Rules:
     ) -> None:
         """Auto-evolve skills flagged for evolution after failure.
 
-        PRD §5.2 Ring 3: Skills don't just get created — they improve.
         When a task fails and matched skills have needs_evolution=True,
         trigger LLM-powered evolution with the failure trajectory as context.
         """

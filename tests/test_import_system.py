@@ -285,6 +285,36 @@ class TestOpenClawImporter:
         backup = cws / "SOUL.imported-from-openclaw.md"
         assert backup.exists()
 
+    def test_scan_root_level_skills(self, tmp_path):
+        """OpenClaw stores user-created skills at ~/.openclaw/skills/ (separate from workspace/skills/).
+        The importer must scan both locations."""
+        from caveman.import_.openclaw import OpenClawImporter
+        root = tmp_path / "openclaw"
+
+        # workspace/skills (already tested implicitly)
+        ws_skill = root / "workspace" / "skills" / "taobao-native"
+        ws_skill.mkdir(parents=True)
+        (ws_skill / "SKILL.md").write_text("---\nname: taobao-native\n---\n# Taobao Native", encoding="utf-8")
+
+        # Root-level skills (the bug: these were not scanned)
+        root_skill = root / "skills" / "bug-audit"
+        root_skill.mkdir(parents=True)
+        (root_skill / "SKILL.md").write_text("---\nname: bug-audit\n---\n# Bug Audit\nDissect then verify.", encoding="utf-8")
+
+        root_skill2 = root / "skills" / "codex-review"
+        root_skill2.mkdir(parents=True)
+        (root_skill2 / "SKILL.md").write_text("---\nname: codex-review\n---\n# Codex Review\nThree-tier defense.", encoding="utf-8")
+
+        imp = OpenClawImporter(caveman_home=tmp_path)
+        imp.root = root
+        manifest = imp.scan()
+        skill_items = [i for i in manifest.items if i.target_type == "skill"]
+        assert len(skill_items) == 3  # 1 workspace + 2 root-level
+        contents = " ".join(i.content for i in skill_items)
+        assert "Taobao Native" in contents
+        assert "Bug Audit" in contents
+        assert "Codex Review" in contents
+
 
 # ---------------------------------------------------------------------------
 # Hermes importer
@@ -328,6 +358,102 @@ class TestHermesImporter:
         mem_items = [i for i in manifest.items if i.target_type == "memory"]
         assert len(mem_items) == 1
         assert mem_items[0].memory_type == MemoryType.WORKING
+
+    def test_scan_nested_skills(self, tmp_path):
+        """Hermes skills can be nested (e.g. software-development/systematic-debugging/).
+        The importer must use rglob to find all SKILL.md files at any depth."""
+        from caveman.import_.hermes import HermesImporter
+        root = tmp_path / "hermes"
+        skills = root / "skills"
+
+        # One-level skill
+        s1 = skills / "game-quality-gates"
+        s1.mkdir(parents=True)
+        (s1 / "SKILL.md").write_text("---\nname: game-quality-gates\n---\n# Game Quality Gates\nFull lifecycle.", encoding="utf-8")
+
+        # Two-level nested skills
+        s2 = skills / "software-development" / "systematic-debugging"
+        s2.mkdir(parents=True)
+        (s2 / "SKILL.md").write_text("---\nname: systematic-debugging\n---\n# Systematic Debugging\nFind root cause first.", encoding="utf-8")
+
+        s3 = skills / "software-development" / "test-driven-development"
+        s3.mkdir(parents=True)
+        (s3 / "SKILL.md").write_text("---\nname: test-driven-development\n---\n# TDD\nWrite the test first.", encoding="utf-8")
+
+        imp = HermesImporter(caveman_home=tmp_path)
+        imp.root = root
+        manifest = imp.scan()
+        skill_items = [i for i in manifest.items if i.target_type == "skill"]
+        assert len(skill_items) == 3
+        # Verify all three are found
+        contents = {i.content for i in skill_items}
+        assert any("Game Quality Gates" in c for c in contents)
+        assert any("Systematic Debugging" in c for c in contents)
+        assert any("TDD" in c for c in contents)
+
+    def test_scan_skill_references(self, tmp_path):
+        """Skill references (references/*.md) should be imported as procedural memory."""
+        from caveman.import_.hermes import HermesImporter
+        root = tmp_path / "hermes"
+        skill = root / "skills" / "research" / "polymarket"
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text("---\nname: polymarket\n---\n# Polymarket", encoding="utf-8")
+        refs = skill / "references"
+        refs.mkdir()
+        (refs / "api-endpoints.md").write_text("# API Endpoints\nGET /markets returns all active markets.", encoding="utf-8")
+
+        imp = HermesImporter(caveman_home=tmp_path)
+        imp.root = root
+        manifest = imp.scan()
+        ref_items = [i for i in manifest.items if i.target_type == "skill_reference"]
+        assert len(ref_items) == 1
+        assert ref_items[0].memory_type == MemoryType.PROCEDURAL
+        assert "GET /markets" in ref_items[0].content
+
+    def test_nested_skill_target_path(self, tmp_path):
+        """Nested skills should preserve directory structure in target path."""
+        from caveman.import_.hermes import HermesImporter, _skill_relative_path
+        root = tmp_path / "hermes"
+        skills_dir = root / "skills"
+
+        # One-level
+        s1 = skills_dir / "dogfood" / "SKILL.md"
+        s1.parent.mkdir(parents=True)
+        s1.write_text("test", encoding="utf-8")
+
+        # Two-level
+        s2 = skills_dir / "creative" / "ascii-art" / "SKILL.md"
+        s2.parent.mkdir(parents=True)
+        s2.write_text("test", encoding="utf-8")
+
+        assert _skill_relative_path(skills_dir, s1) == "dogfood"
+        assert _skill_relative_path(skills_dir, s2) == "creative/ascii-art"
+
+    def test_scan_openclaw_synced_memory(self, tmp_path):
+        """If Hermes has openclaw-memory/ from cross-sync, it should be scanned."""
+        from caveman.import_.hermes import HermesImporter
+        root = tmp_path / "hermes"
+        oc = root / "openclaw-memory"
+        oc.mkdir(parents=True)
+        (oc / "validated-approaches.md").write_text(
+            "## Approach 1\nUse SQLite FTS5 for full-text search with hybrid retrieval.",
+            encoding="utf-8",
+        )
+        lessons = oc / "memory" / "lessons"
+        lessons.mkdir(parents=True)
+        (lessons / "game-state.md").write_text(
+            "## Game State Management\nSeparate logic from rendering. Always use state machines.",
+            encoding="utf-8",
+        )
+
+        imp = HermesImporter(caveman_home=tmp_path)
+        imp.root = root
+        manifest = imp.scan()
+        mem_items = [i for i in manifest.items if i.target_type == "memory"]
+        assert len(mem_items) >= 2
+        contents = " ".join(i.content for i in mem_items)
+        assert "SQLite FTS5" in contents
+        assert "state machines" in contents
 
 
 # ---------------------------------------------------------------------------
@@ -450,8 +576,8 @@ class TestOpenClawMemoryMdDualImport:
         ws.mkdir(parents=True)
         (ws / "MEMORY.md").write_text(
             "## P0 — 核心记忆\n\n### 服务器\n"
-            "- **阿里云** `39.99.235.193` Windows（业务主力）\n"
-            "- **新服务器** `8.138.104.108` Ubuntu\n\n"
+            "- **阿里云** `198.51.100.10` Windows（业务主力）\n"
+            "- **新服务器** `198.51.100.20` Ubuntu\n\n"
             "## P1 — 按需查\n\n"
             "高频入口已在 AGENTS.md 触发器表。其余知识通过 memory_search 语义检索自动发现。",
             encoding="utf-8",
@@ -472,7 +598,7 @@ class TestOpenClawMemoryMdDualImport:
         assert len(mem_items) >= 2
         # Memory items should contain the actual content
         all_content = " ".join(i.content for i in mem_items)
-        assert "39.99.235.193" in all_content
+        assert "198.51.100.10" in all_content
         assert "AGENTS.md" in all_content
 
     def test_soul_md_does_not_produce_memory_items(self, tmp_path):
@@ -629,7 +755,7 @@ class TestWorkspaceMemorySync:
         ws = tmp_path / "workspace"
         ws.mkdir()
         (ws / "MEMORY.md").write_text(
-            "## Servers\n- Aliyun `39.99.235.193` Windows\n\n"
+            "## Servers\n- Aliyun `198.51.100.10` Windows\n\n"
             "## Rules\nAlways pull before editing code on remote servers.",
             encoding="utf-8",
         )

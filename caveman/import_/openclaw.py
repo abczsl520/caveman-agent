@@ -53,7 +53,7 @@ class OpenClawImporter(BaseImporter):
         return self.root.is_dir()
 
     def scan(self) -> ImportManifest:
-        """Scan all OpenClaw data: workspace files, memory tree, agents, learnings."""
+        """Scan all OpenClaw data: workspace files, memory tree, agents, learnings, skills."""
         manifest = ImportManifest(source="openclaw")
         if not self.detect():
             return manifest
@@ -65,6 +65,10 @@ class OpenClawImporter(BaseImporter):
             self._scan_skills(ws / "skills", manifest)
             self._scan_scripts(ws / "scripts", manifest)
             self._scan_memory_tree(ws / "memory", manifest)
+
+        # Root-level skills (separate from workspace/skills)
+        # OpenClaw stores user-created skills at ~/.openclaw/skills/
+        self._scan_skills(self.root / "skills", manifest)
 
         self._scan_learnings(self.root / "workspace" / ".learnings", manifest)
         self._scan_agent_state(self.root / "workspace" / ".agent-state" / "done", manifest)
@@ -117,7 +121,8 @@ class OpenClawImporter(BaseImporter):
     def _scan_skills(self, skills_dir: Path, manifest: ImportManifest) -> None:
         if not skills_dir.is_dir():
             return
-        for skill_md in sorted(skills_dir.glob("*/SKILL.md")):
+        # rglob to catch nested skill structures
+        for skill_md in sorted(skills_dir.rglob("SKILL.md")):
             content = self._read_safe(skill_md)
             if content:
                 manifest.items.append(ImportItem(
@@ -255,8 +260,17 @@ class OpenClawImporter(BaseImporter):
         result.imported += 1
 
     def _copy_skill(self, item: ImportItem, result: ImportResult) -> None:
-        skill_name = item.source_path.parent.name
-        target = self.caveman_home / "skills" / skill_name / "SKILL.md"
+        # Determine which skills_dir this came from to compute relative path
+        ws_skills = self.root / "workspace" / "skills"
+        root_skills = self.root / "skills"
+        try:
+            rel = item.source_path.parent.relative_to(ws_skills)
+        except ValueError:
+            try:
+                rel = item.source_path.parent.relative_to(root_skills)
+            except ValueError:
+                rel = Path(item.source_path.parent.name)
+        target = self.caveman_home / "skills" / rel / "SKILL.md"
         if not self.dry_run:
             target.parent.mkdir(parents=True, exist_ok=True)
             if not target.exists():

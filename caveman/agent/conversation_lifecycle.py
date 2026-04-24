@@ -21,6 +21,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
+from caveman.agent.behavior_rules import get_rule as _get_rule
+
+_CLOSING_MARKER = _get_rule("CLOSING_FORMAT") or "✅---本轮已完成---✅"
+
 __all__ = [
     "ConversationComplexity",
     "ConversationPhase",
@@ -105,8 +109,10 @@ _PHASE_RULES: dict[str, dict[str, str]] = {
             "- Do NOT use ✅ or ❌ as section markers\n"
             "- If you are making MORE tool calls after this response, do NOT add any closing\n"
             "- If this is your FINAL response (no more tool calls needed), end with:\n"
-            "  ✅ --- 本轮已结束 --- ✅\n"
-            "  (brief 2-3 sentence summary before the closing line)"
+            f"  {_CLOSING_MARKER}\n"
+            "  (brief 2-3 sentence summary before the closing line)\n"
+
+            f"- \u26a0\ufe0f HARD RULE: Once you write {_CLOSING_MARKER}, you MUST NOT make any more tool calls. The closing marker is a terminal signal."
         ),
     },
     "telegram": {
@@ -127,13 +133,21 @@ _PHASE_RULES: dict[str, dict[str, str]] = {
             "Complex multi-turn task in progress.\n"
             f"- Section markers: {_SECTION_MARKERS}\n"
             "- No ✅/❌ as markers\n"
-            "- If this is your FINAL response: end with ✅ --- 本轮已结束 --- ✅"
+            f"- If this is your FINAL response: end with {_CLOSING_MARKER}\n"
+
+            f"- \u26a0\ufe0f HARD RULE: Once you write {_CLOSING_MARKER}, you MUST NOT make any more tool calls. The closing marker is a terminal signal."
         ),
     },
     "cli": {
         "opening": "",
         "working": "",
-        "working_complex": "",
+        "working_complex": (
+            "If this is your FINAL response (no more tool calls needed), end with:\n"
+            f"  {_CLOSING_MARKER}\n"
+            "  (brief 2-3 sentence summary before the closing line)\n"
+
+            f"- \u26a0\ufe0f HARD RULE: Once you write {_CLOSING_MARKER}, you MUST NOT make any more tool calls. The closing marker is a terminal signal."
+        ),
     },
 }
 
@@ -150,8 +164,8 @@ def get_phase_rules(surface: str, state: ConversationState) -> str:
 
     phase = state.phase
     if phase == ConversationPhase.WORKING:
-        # Complex conversations get conditional closing instructions
-        if state.complexity == ConversationComplexity.COMPLEX:
+        # Medium+ conversations get conditional closing instructions
+        if state.complexity in (ConversationComplexity.MEDIUM, ConversationComplexity.COMPLEX):
             return rules.get("working_complex", rules.get("working", ""))
     return rules.get(phase.value, "")
 

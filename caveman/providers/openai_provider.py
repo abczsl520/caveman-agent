@@ -15,6 +15,9 @@ from caveman.timeouts import HTTP_LLM
 
 logger = logging.getLogger(__name__)
 
+# Models that use max_completion_tokens instead of max_tokens
+_NEW_TOKEN_PARAM_MODELS = {"o1", "o1-mini", "o1-preview", "o3", "o3-mini", "o4-mini"}
+
 
 def _repair_json(raw: str) -> dict:
     """Attempt to repair malformed JSON from tool call arguments.
@@ -115,6 +118,17 @@ class OpenAIProvider(LLMProvider):
     async def __aexit__(self, *exc):
         await self.close()
 
+    def _record_usage(self, usage: dict) -> None:
+        """Track cumulative token usage."""
+        self._total_input_tokens += usage.get("input_tokens", 0)
+        self._total_output_tokens += usage.get("output_tokens", 0)
+        self._call_count += 1
+
+    def _uses_new_token_param(self) -> bool:
+        """Check if model uses max_completion_tokens instead of max_tokens."""
+        model_lower = self.model.lower()
+        return any(model_lower.startswith(m) for m in _NEW_TOKEN_PARAM_MODELS)
+
     def _build_params(
         self,
         messages: list[dict],
@@ -146,12 +160,22 @@ class OpenAIProvider(LLMProvider):
         params: dict[str, Any] = {
             "model": self.model,
             "messages": api_messages,
-            "max_tokens": self.max_tokens,
             "stream": stream,
         }
+        # o1/o3/o4 models use max_completion_tokens; others use max_tokens
+        if self._uses_new_token_param():
+            params["max_completion_tokens"] = self.max_tokens
+        else:
+            params["max_tokens"] = self.max_tokens
+
         if openai_tools:
             params["tools"] = openai_tools
             params["tool_choice"] = "auto"
+
+        # Request usage in streaming mode
+        if stream:
+            params["stream_options"] = {"include_usage": True}
+
         return params
 
     async def complete(
@@ -217,7 +241,8 @@ class OpenAIProvider(LLMProvider):
 
     async def _stream(self, client, params) -> AsyncIterator[dict]:
         tc_buf: dict[int, dict] = {}
-        async with client.chat.completions.create(**params) as stream:
+        stream = await client.chat.completions.create(**params)
+        try:
             # Capture rate limit headers from the HTTP response
             raw_response = getattr(stream, 'response', None)
             if raw_response:
@@ -225,6 +250,13 @@ class OpenAIProvider(LLMProvider):
             async for chunk in stream:
                 choice = chunk.choices[0] if chunk.choices else None
                 if not choice:
+                    # Final chunk with usage only (no choices) when stream_options is set
+                    if chunk.usage:
+                        usage = {
+                            "input_tokens": chunk.usage.prompt_tokens or 0,
+                            "output_tokens": chunk.usage.completion_tokens or 0,
+                        }
+                        self._record_usage(usage)
                     continue
                 delta = choice.delta
                 if delta.content:
@@ -248,11 +280,25 @@ class OpenAIProvider(LLMProvider):
                         except json.JSONDecodeError:
                             inp = _repair_json(tc["arguments"])
                         yield {"type": "tool_call", "id": tc["id"], "name": tc["name"], "input": inp}
-                    yield {"type": "done", "stop_reason": normalize_stop_reason(choice.finish_reason), "usage": {}}
+                    # Usage may come in this chunk or a separate final chunk
+                    usage = {}
+                    chunk_usage = getattr(chunk, "usage", None)
+                    if chunk_usage:
+                        usage = {
+                            "input_tokens": getattr(chunk_usage, "prompt_tokens", 0) or 0,
+                            "output_tokens": getattr(chunk_usage, "completion_tokens", 0) or 0,
+                        }
+                        self._record_usage(usage)
+                    yield {"type": "done", "stop_reason": normalize_stop_reason(choice.finish_reason), "usage": usage}
+        finally:
+            # Ensure stream is closed even on generator exit / exception
+            if hasattr(stream, 'close'):
+                await stream.close()
 
     async def _non_stream(self, client, params) -> AsyncIterator[dict]:
         """Non-streaming: single API call."""
         p = {**params, "stream": False}
+        p.pop("stream_options", None)  # not valid for non-stream
         resp = await client.chat.completions.create(**p)
 
         choice = resp.choices[0]
@@ -265,11 +311,13 @@ class OpenAIProvider(LLMProvider):
                 except json.JSONDecodeError:
                     inp = _repair_json(tc.function.arguments)
                 yield {"type": "tool_call", "id": tc.id, "name": tc.function.name, "input": inp}
+        usage = {
+            "input_tokens": resp.usage.prompt_tokens if resp.usage else 0,
+            "output_tokens": resp.usage.completion_tokens if resp.usage else 0,
+        }
+        self._record_usage(usage)
         yield {
             "type": "done",
             "stop_reason": normalize_stop_reason(choice.finish_reason),
-            "usage": {
-                "input_tokens": resp.usage.prompt_tokens if resp.usage else 0,
-                "output_tokens": resp.usage.completion_tokens if resp.usage else 0,
-            },
+            "usage": usage,
         }
