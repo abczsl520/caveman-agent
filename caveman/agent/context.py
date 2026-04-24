@@ -82,8 +82,19 @@ class AgentContext:
         self.messages.clear()
 
     def to_api_format(self) -> list[dict]:
-        """Convert to LLM API message format (includes ephemeral messages)."""
-        return [{"role": m.role, "content": m.content} for m in self.messages]
+        """Convert to OpenAI-standard API message format.
+
+        Internal storage uses Anthropic-style content blocks (tool_use,
+        tool_result).  This method normalizes to OpenAI format so every
+        provider receives a consistent input:
+
+        - assistant + tool_use blocks → {"content": text, "tool_calls": [...]}
+        - user + tool_result blocks  → [{"role": "tool", "tool_call_id": ...}]
+        - plain text messages         → pass-through
+        """
+        from caveman.providers.openai_messages import convert_to_openai_messages
+        raw = [{"role": m.role, "content": m.content} for m in self.messages]
+        return convert_to_openai_messages(raw)
 
     def persistable_messages(self) -> list[Message]:
         """Return only non-ephemeral messages (for transcript persistence)."""
