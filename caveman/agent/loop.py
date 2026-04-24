@@ -415,11 +415,12 @@ class AgentLoop(BackgroundTaskMixin):
             "recalled_ids": _recalled_ids, "matched_skills": matched_skills,
         }, source="loop")
         self._record_turn_metrics(_turn_start, _recalled_ids, matched_skills, result)
-        # Enforce closing format if lifecycle rules expect it
-        from caveman.agent.output_validator import enforce_closing_format
+        # Enforce closing format only when lifecycle policy says this turn needs
+        # a structural completion signal. Simple replies and open questions stay natural.
+        from caveman.agent.output_validator import enforce_closing_format, should_use_closing_marker
         _surface = getattr(getattr(self, 'session', None), 'surface', 'cli')
-        # Always enforce — all complexity levels use closing marker now
-        _should_close = self._tool_call_count >= 1
+        _state = self._conversation_state
+        _should_close = should_use_closing_marker(state=_state, final_text=result, surface=_surface)
         result = enforce_closing_format(result, _should_close, surface=_surface)
         yield StreamEvent(type="done", data=result)
     async def _dispatch_skill_tool(self, name: str, args: dict) -> str:

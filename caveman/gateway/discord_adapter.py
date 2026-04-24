@@ -274,7 +274,9 @@ class DiscordAdapter(BasePlatformAdapter):
 
         # Skip non-user messages: thread creation notices, pins, joins, etc.
         # Only process DEFAULT (normal) and REPLY message types.
-        if message.type not in (discord.MessageType.default, discord.MessageType.reply):
+        if discord and message.type not in (
+            discord.MessageType.default, discord.MessageType.reply,
+        ):
             return
 
         # Skip thread-starter messages that appear in the parent channel.
@@ -282,8 +284,8 @@ class DiscordAdapter(BasePlatformAdapter):
         # .thread reference to the original message and fires on_message
         # in the parent channel.  Processing it would cause the bot to
         # reply in both the channel AND the thread.
-        if getattr(message, "thread", None) and not isinstance(
-            message.channel, discord.Thread
+        if getattr(message, "thread", None) and not (
+            discord and isinstance(message.channel, discord.Thread)
         ):
             return
 
@@ -334,8 +336,8 @@ class DiscordAdapter(BasePlatformAdapter):
             return False
         is_mention = self._client.user in message.mentions
         is_prefix = content.startswith(self._prefix)
-        is_dm = isinstance(message.channel, discord.DMChannel)
-        is_thread = isinstance(message.channel, discord.Thread)
+        is_dm = isinstance(message.channel, discord.DMChannel) if discord else False
+        is_thread = isinstance(message.channel, discord.Thread) if discord else False
 
         if self._trigger == "all":
             return True
@@ -354,8 +356,8 @@ class DiscordAdapter(BasePlatformAdapter):
             task = task[len(self._prefix):].strip()
 
         # Determine chat type
-        is_dm = isinstance(message.channel, discord.DMChannel)
-        is_thread = isinstance(message.channel, discord.Thread)
+        is_dm = isinstance(message.channel, discord.DMChannel) if discord else False
+        is_thread = isinstance(message.channel, discord.Thread) if discord else False
         chat_type = "dm" if is_dm else ("thread" if is_thread else "channel")
 
         # Build source
