@@ -251,7 +251,12 @@ def should_preemptively_compact(context: "AgentContext") -> PreemptiveResult:
 
 
 def apply_tool_result_truncation(context: "AgentContext") -> int:
-    """Truncate oversized tool results in-place. Returns count truncated."""
+    """Truncate oversized tool results in-place. Returns count truncated.
+
+    Handles both formats:
+    - OpenAI: role='tool', content=string
+    - Internal: role='user', content=[{type: 'tool_result', content: string}]
+    """
     max_chars = calculate_max_tool_result_chars(context.max_tokens)
     truncated = 0
 
@@ -259,19 +264,36 @@ def apply_tool_result_truncation(context: "AgentContext") -> int:
         role = getattr(msg, 'role', msg.get('role', '')) if isinstance(msg, dict) else getattr(msg, 'role', '')
         content = getattr(msg, 'content', msg.get('content', '')) if isinstance(msg, dict) else getattr(msg, 'content', '')
 
+        # OpenAI format: role=tool, content=string
         if role == 'tool' and isinstance(content, str) and len(content) > max_chars:
             new_content = truncate_tool_result_text(content, max_chars)
             if isinstance(msg, dict):
                 msg['content'] = new_content
             else:
                 msg.content = new_content
-            # Recalculate tokens
             new_tokens = estimate_str_tokens(new_content)
             if isinstance(msg, dict):
                 msg['tokens'] = new_tokens
             elif hasattr(msg, 'tokens'):
                 msg.tokens = new_tokens
             truncated += 1
+
+        # Internal format: role=user, content=[{type: tool_result, content: str}]
+        elif isinstance(content, list):
+            changed = False
+            for block in content:
+                if not isinstance(block, dict) or block.get("type") != "tool_result":
+                    continue
+                tc = block.get("content", "")
+                if isinstance(tc, str) and len(tc) > max_chars:
+                    block["content"] = truncate_tool_result_text(tc, max_chars)
+                    changed = True
+                    truncated += 1
+            if changed and hasattr(msg, 'tokens'):
+                msg.tokens = sum(
+                    estimate_str_tokens(str(b.get("content", "")))
+                    for b in content if isinstance(b, dict)
+                ) + 10
 
     return truncated
 

@@ -108,13 +108,23 @@ class DiscordAdapter(BasePlatformAdapter):
 
         channel = self._client.get_channel(int(chat_id))
         if not channel:
-            return SendResult(success=False, error=f"Channel {chat_id} not found")
+            # Cache miss — common for newly created threads.  Fall back to
+            # an API call so we don't silently drop the reply.
+            try:
+                channel = await self._client.fetch_channel(int(chat_id))
+            except Exception:
+                return SendResult(success=False, error=f"Channel {chat_id} not found")
 
         try:
-            # Handle thread routing
+            # Handle thread routing via metadata override
             thread_id = (metadata or {}).get("thread_id")
             if thread_id:
                 thread = self._client.get_channel(int(thread_id))
+                if not thread:
+                    try:
+                        thread = await self._client.fetch_channel(int(thread_id))
+                    except Exception:
+                        logger.debug("send: thread %s not fetchable", thread_id)
                 if thread:
                     channel = thread
 
@@ -261,6 +271,22 @@ class DiscordAdapter(BasePlatformAdapter):
         """Handle incoming Discord message → normalize → dispatch."""
         if message.author.bot:
             return
+
+        # Skip non-user messages: thread creation notices, pins, joins, etc.
+        # Only process DEFAULT (normal) and REPLY message types.
+        if message.type not in (discord.MessageType.default, discord.MessageType.reply):
+            return
+
+        # Skip thread-starter messages that appear in the parent channel.
+        # When a user creates a thread from a message, Discord attaches a
+        # .thread reference to the original message and fires on_message
+        # in the parent channel.  Processing it would cause the bot to
+        # reply in both the channel AND the thread.
+        if getattr(message, "thread", None) and not isinstance(
+            message.channel, discord.Thread
+        ):
+            return
+
         content = message.content.strip()
         has_attachments = bool(message.attachments)
         if not content and not has_attachments:

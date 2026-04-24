@@ -121,17 +121,39 @@ class CompressionPipeline:
         return result
 
     def _layer_normal(self, messages: list[dict]) -> list[dict]:
-        """Layer 2: Truncate tool results + remove old low-value messages."""
+        """Layer 2: Truncate tool results + remove old low-value messages.
+
+        Handles both OpenAI format (role=tool) and internal format
+        (role=user with tool_result content blocks).
+        """
         result = []
         for i, msg in enumerate(messages):
             content = msg.get("content", "")
 
-            # Truncate long tool results
+            # Truncate long tool results — OpenAI format
             if msg.get("role") == "tool" and isinstance(content, str) and len(content) > self.max_tool_result_len:
                 head = content[:self.max_tool_result_len // 2]
                 tail = content[-self.max_tool_result_len // 4:]
                 truncated = f"{head}\n\n... [{len(content) - len(head) - len(tail)} chars truncated] ...\n\n{tail}"
                 result.append({**msg, "content": truncated})
+                continue
+
+            # Truncate long tool results — internal format (tool_result blocks)
+            if isinstance(content, list) and any(
+                isinstance(b, dict) and b.get("type") == "tool_result" for b in content
+            ):
+                new_blocks = []
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "tool_result":
+                        tc = block.get("content", "")
+                        if isinstance(tc, str) and len(tc) > self.max_tool_result_len:
+                            head = tc[:self.max_tool_result_len // 2]
+                            tail = tc[-self.max_tool_result_len // 4:]
+                            tc = f"{head}\n\n... [{len(tc) - len(head) - len(tail)} chars truncated] ...\n\n{tail}"
+                        new_blocks.append({**block, "content": tc})
+                    else:
+                        new_blocks.append(block)
+                result.append({**msg, "content": new_blocks})
                 continue
 
             # Remove empty assistant messages
