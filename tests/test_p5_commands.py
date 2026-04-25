@@ -183,12 +183,52 @@ class TestAgentRunner:
 
 class TestACPLifecycle:
     @pytest.mark.asyncio
-    async def test_spawn(self):
+    async def test_spawn_with_text_has_result_available(self):
         from caveman.gateway.acp_lifecycle import ACPLifecycleManager
-        spawn_fn = AsyncMock(return_value={"text": "done"})
+        spawn_fn = AsyncMock(return_value={"text": "agent output"})
         mgr = ACPLifecycleManager(spawn_fn=spawn_fn)
         result = await mgr.handle_spawn("claude", "write code")
-        assert "completed" in result
+        session = next(iter(mgr._sessions.values()))
+        assert "result_available" in result
+        assert "completed" not in result.lower()
+        assert session.status == "result_available"
+        assert session.result == "agent output"
+        assert session.completed_at > 0
+
+    @pytest.mark.asyncio
+    async def test_spawn_with_empty_response_is_no_response(self):
+        from caveman.gateway.acp_lifecycle import ACPLifecycleManager
+        spawn_fn = AsyncMock(return_value=None)
+        mgr = ACPLifecycleManager(spawn_fn=spawn_fn)
+        result = await mgr.handle_spawn("claude", "write code")
+        session = next(iter(mgr._sessions.values()))
+        assert "no_response" in result
+        assert "completed" not in result.lower()
+        assert session.status == "no_response"
+        assert session.result == ""
+        assert session.completed_at > 0
+
+    @pytest.mark.asyncio
+    async def test_spawn_preserves_running_state_without_finish_timestamp(self):
+        from caveman.gateway.acp_lifecycle import ACPLifecycleManager
+        spawn_fn = AsyncMock(return_value={"status": "running"})
+        mgr = ACPLifecycleManager(spawn_fn=spawn_fn)
+        result = await mgr.handle_spawn("claude", "long task")
+        session = next(iter(mgr._sessions.values()))
+        assert "running" in result
+        assert session.status == "running"
+        assert session.completed_at == 0
+
+    @pytest.mark.asyncio
+    async def test_spawn_preserves_pending_state_without_finish_timestamp(self):
+        from caveman.gateway.acp_lifecycle import ACPLifecycleManager
+        spawn_fn = AsyncMock(return_value={"status": "pending"})
+        mgr = ACPLifecycleManager(spawn_fn=spawn_fn)
+        result = await mgr.handle_spawn("claude", "queued task")
+        session = next(iter(mgr._sessions.values()))
+        assert "pending" in result
+        assert session.status == "pending"
+        assert session.completed_at == 0
 
     @pytest.mark.asyncio
     async def test_spawn_limit(self):

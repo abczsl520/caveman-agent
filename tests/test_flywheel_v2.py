@@ -7,9 +7,12 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 from caveman.cli.flywheel import (
+    _evaluate_round_response,
     discover_subsystems,
     FlywheelStats,
+    run_flywheel,
     run_flywheel_parallel,
+    run_flywheel_sync,
 )
 
 
@@ -71,7 +74,75 @@ def test_flywheel_stats_corrupt_json(tmp_path):
     assert fs.summary()["total_rounds"] == 0
 
 
-# ── run_flywheel_parallel ──
+def test_flywheel_defaults_match_long_compounding_agent_budget():
+    """Flywheel should inherit the normal agent budget instead of a tiny safety cap."""
+    assert run_flywheel.__defaults__[3] == 50
+    assert run_flywheel_sync.__defaults__[2] == 50
+
+
+def test_flywheel_round_evaluator_requires_objective_evidence():
+    """Saying fixed/done is not enough for flywheel success."""
+    result = _evaluate_round_response(
+        "I fixed the P0 issue. done.",
+        before_commit="abc123",
+        after_commit="abc123",
+    )
+    assert result["success"] is False
+    assert result["fixed"] == 0
+
+
+def test_flywheel_round_evaluator_no_p0_must_be_explicit():
+    """No P0 mention is unknown, not a clean audit."""
+    result = _evaluate_round_response(
+        "Reviewed the subsystem and it looks fine.",
+        before_commit="abc123",
+        after_commit="abc123",
+    )
+    assert result["success"] is False
+    assert result["p0"] == 0
+    assert result["explicit_no_p0"] is False
+
+
+def test_flywheel_round_evaluator_accepts_explicit_no_p0():
+    result = _evaluate_round_response(
+        "Audit complete: no P0 issues found.",
+        before_commit="abc123",
+        after_commit="abc123",
+    )
+    assert result["success"] is True
+    assert result["explicit_no_p0"] is True
+
+
+def test_flywheel_round_evaluator_accepts_tests_passed():
+    result = _evaluate_round_response(
+        "Found P0 issue, fixed it. 12 passed in 0.4s",
+        before_commit="abc123",
+        after_commit="abc123",
+    )
+    assert result["success"] is True
+    assert result["tests_passed"] is True
+
+
+def test_flywheel_round_evaluator_accepts_commit_change():
+    result = _evaluate_round_response(
+        "Fixed root cause and committed changes.",
+        before_commit="abc123",
+        after_commit="def456",
+    )
+    assert result["success"] is True
+    assert result["fixed"] == 1
+    assert result["commit_changed"] is True
+
+
+def test_flywheel_round_evaluator_failure_overrides_success_words():
+    result = _evaluate_round_response(
+        "Fixed it. FAILED tests/test_x.py::test_y",
+        before_commit="abc123",
+        after_commit="def456",
+    )
+    assert result["success"] is False
+    assert result["failure_detected"] is True
+
 
 @pytest.mark.asyncio
 async def test_run_flywheel_parallel():
@@ -93,7 +164,7 @@ async def test_run_flywheel_parallel():
 @pytest.mark.asyncio
 async def test_run_flywheel_parallel_with_error():
     """Parallel flywheel captures exceptions per-target."""
-    async def mock_flywheel(rounds=1, target=None, max_iterations=15, project_dir=None):
+    async def mock_flywheel(rounds=1, target=None, max_iterations=50, project_dir=None):
         if target == "bad":
             raise RuntimeError("boom")
         return {"rounds_completed": 1, "successful": 1, "results": []}

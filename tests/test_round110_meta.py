@@ -10,30 +10,36 @@ class TestDetectSuccess:
     These tests ensure the new multi-signal detection works correctly.
     """
 
-    def test_obvious_success(self):
-        assert _detect_success("Done! I've created the file successfully.") is True
+    def test_done_claim_alone_is_not_success(self):
+        assert _detect_success("Done! I've created the file successfully.") is False
+
+    def test_objective_tests_passed_is_success(self):
+        assert _detect_success("Verified with pytest: 12 passed in 0.31s") is True
 
     def test_obvious_failure(self):
         assert _detect_success("ERROR: could not connect to database") is False
 
-    def test_fixed_error_is_success(self):
-        """'I fixed the error' should be SUCCESS, not failure."""
+    def test_fixed_error_claim_without_verification_is_not_success(self):
+        """'I fixed the error' is a claim, not objective completion evidence."""
+        assert _detect_success("I fixed the error in line 42.") is False
+
+    def test_fixed_error_with_tests_is_success(self):
         assert _detect_success("I fixed the error in line 42. All tests pass now.") is True
 
-    def test_resolved_error_is_success(self):
-        assert _detect_success("I resolved the error by updating the config.") is True
+    def test_resolved_error_claim_without_verification_is_not_success(self):
+        assert _detect_success("I resolved the error by updating the config.") is False
 
-    def test_found_error_is_success(self):
-        assert _detect_success("I found the error — it was a missing import. Here's the fix.") is True
+    def test_found_error_is_not_success_without_verification(self):
+        assert _detect_success("I found the error — it was a missing import. Here's the fix.") is False
 
     def test_empty_is_failure(self):
         assert _detect_success("") is False
 
-    def test_normal_output_is_success(self):
-        """Agent producing normal output should default to success."""
-        assert _detect_success("Here is the implementation you requested.") is True
+    def test_normal_output_is_not_success_without_verification(self):
+        """Agent producing normal output is not verified task completion."""
+        assert _detect_success("Here is the implementation you requested.") is False
 
-    def test_here_are_results(self):
+    def test_here_are_results_with_tests_passed(self):
         assert _detect_success("Here are the test results: all 15 tests pass.") is True
 
     def test_unable_to_is_failure(self):
@@ -42,21 +48,28 @@ class TestDetectSuccess:
     def test_sorry_cant_is_failure(self):
         assert _detect_success("Sorry, I can't access that file.") is False
 
-    def test_mixed_signals_success_wins(self):
-        """When success signals >= failure signals, success wins."""
+    def test_mixed_signals_failure_wins_without_objective_evidence(self):
+        text = "I fixed the TypeError and created the new module."
+        assert _detect_success(text) is False
+
+    def test_mixed_signals_with_tests_passed_is_success(self):
         text = "I fixed the TypeError and created the new module. All tests pass."
         assert _detect_success(text) is True
 
-    def test_no_signals_defaults_to_success(self):
-        """Neutral output (no strong signals) defaults to success."""
-        assert _detect_success("The function returns a list of integers.") is True
+    def test_no_signals_defaults_to_failure(self):
+        """Neutral output (no strong evidence) must not inflate success."""
+        assert _detect_success("The function returns a list of integers.") is False
 
     def test_traceback_is_failure(self):
         assert _detect_success("Traceback (most recent call last):\n  File...") is False
 
-    def test_completed_with_error_mention(self):
-        """Discussing errors in a success context should be success."""
+    def test_completed_with_error_mention_needs_objective_evidence(self):
+        """Discussing errors plus a done token is still only a claim."""
         text = "I debugged the error and found it was caused by a race condition. Fixed now. ✅"
+        assert _detect_success(text) is False
+
+    def test_completed_with_error_and_tests_is_success(self):
+        text = "I debugged the error and found it was caused by a race condition. 8 passed."
         assert _detect_success(text) is True
 
 
@@ -123,7 +136,12 @@ async def test_lint_full_scan_periodic(tmp_path):
 
 def test_detect_outcome_success():
     from caveman.utils import detect_outcome
-    assert detect_outcome("Done! All tests pass. ✅") == "success"
+    assert detect_outcome("Verified: all tests pass. 15 passed.") == "success"
+
+
+def test_detect_outcome_done_claim_is_partial():
+    from caveman.utils import detect_outcome
+    assert detect_outcome("Done! I created the file. ✅") == "partial"
 
 
 def test_detect_outcome_failure():

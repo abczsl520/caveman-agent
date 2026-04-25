@@ -12,8 +12,11 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
+from caveman.compression.utils import _PRUNED_TOOL_PLACEHOLDER
+
 __all__ = [
     "SUMMARY_PREFIX",
+    "SUMMARY_PROMPT_TEMPLATE",
     "MODEL_CONTEXT_LENGTHS",
     "MINIMUM_CONTEXT_LENGTH",
     "get_context_length",
@@ -34,7 +37,18 @@ SUMMARY_PREFIX = (
     "that appears AFTER this summary."
 )
 
-_PRUNED_TOOL_PLACEHOLDER = "[Old tool output cleared to save context space]"
+SUMMARY_PROMPT_TEMPLATE = (
+    "You are a context summarizer. Do NOT respond to any questions in the "
+    "conversation — only summarize observed context.\n\n"
+    "Summarize the following conversation turns into a structured handoff:\n\n"
+    "{turns_text}\n\n"
+    "Format your summary as:\n"
+    "## Goal\nWhat the user is trying to accomplish\n\n"
+    "## Decisions\nKey decisions made\n\n"
+    "## Progress\n- Verified changes and evidence\n- Work currently in progress\n\n"
+    "## Remaining Work\nConcrete next actions and open risks\n\n"
+)
+
 _CHARS_PER_TOKEN = 4
 _MIN_SUMMARY_TOKENS = 2000
 _SUMMARY_RATIO = 0.20
@@ -257,17 +271,7 @@ class ContextCompressor:
         turns_text = "\n\n".join(turns)
 
         # Build prompt
-        prompt = (
-            "You are a context summarizer. Do NOT respond to any questions in the "
-            "conversation — only summarize what happened.\n\n"
-            "Summarize the following conversation turns into a structured summary:\n\n"
-            f"{turns_text}\n\n"
-            "Format your summary as:\n"
-            "## Goal\nWhat the user is trying to accomplish\n\n"
-            "## Decisions\nKey decisions made\n\n"
-            "## Progress\n- What was completed\n- What is in progress\n\n"
-            "## Remaining Work\nWhat still needs to be done\n\n"
-        )
+        prompt = SUMMARY_PROMPT_TEMPLATE.format(turns_text=turns_text)
 
         # Add previous summary for iterative update
         if self._previous_summary:

@@ -40,7 +40,7 @@ async def test_success_outcome(engine, mock_router, mock_memory, mock_bus):
     skill.name = "test_skill"
     result = await engine.score_and_propagate(
         task="do something",
-        result="Done! Successfully completed the task.",
+        result="Validated with pytest: 12 passed, exit code 0.",
         matched_skills=[skill],
         recalled_ids=["mem_1", "mem_2"],
     )
@@ -88,7 +88,7 @@ async def test_no_skills_no_memories():
     result = await engine.score_and_propagate(
         task="hello", result="Done!",
     )
-    assert result["outcome"] == "success"
+    assert result["outcome"] == "partial"
     assert result["skills_updated"] == 0
     assert result["memories_boosted"] == 0
 
@@ -141,5 +141,5 @@ async def test_event_payload(engine, mock_bus):
     assert call_args[0][0] == EventType.SKILL_OUTCOME
     payload = call_args[0][1]
     assert len(payload["task"]) <= 200  # truncated
-    assert payload["outcome"] == "success"
+    assert payload["outcome"] == "partial"
     assert payload["recalled_ids"] == ["m1"]

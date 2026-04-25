@@ -58,6 +58,7 @@ class MessageType(Enum):
 class ProcessingOutcome(Enum):
     """Result classification for message-processing lifecycle hooks."""
     SUCCESS = "success"
+    NO_RESPONSE = "no_response"
     FAILURE = "failure"
     CANCELLED = "cancelled"
 

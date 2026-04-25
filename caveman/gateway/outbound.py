@@ -8,7 +8,7 @@ Features:
 - Platform-specific formatting (Discord markdown, Telegram HTML)
 - Retry with exponential backoff
 - Format degradation (markdown → plain text on failure)
-- Reaction management (ack → processing → done)
+- Reaction management (ack → processing → outcome)
 - Message editing for streaming updates
 """
 from __future__ import annotations
@@ -65,7 +65,7 @@ class ReactionState:
     message_id: str
     ack_emoji: str = "👀"
     processing_emoji: str = "⏳"
-    done_emoji: str = "✅"
+    success_emoji: str = ""
     error_emoji: str = "❌"
     current: str = ""
 
@@ -191,13 +191,27 @@ class OutboundDelivery:
         await self.add_reaction(state.channel_id, state.message_id, state.processing_emoji)
         state.current = state.processing_emoji
 
-    async def set_done_reaction(self, state: ReactionState, success: bool = True) -> None:
-        """Transition reaction: processing → done/error."""
+    async def set_outcome_reaction(self, state: ReactionState, success: bool = True) -> None:
+        """Clear processing reaction and surface failures.
+
+        A successful handler return only means the message handler stopped; it
+        does not prove the user's real-world task is objectively complete.  To
+        avoid false completion signals, successful outcomes do not add a
+        user-visible reaction by default.  Platforms may opt in by setting
+        ``ReactionState.success_emoji`` explicitly.
+        """
         if state.current:
             await self.remove_reaction(state.channel_id, state.message_id, state.current)
-        emoji = state.done_emoji if success else state.error_emoji
+        emoji = state.success_emoji if success else state.error_emoji
+        if not emoji:
+            state.current = ""
+            return
         await self.add_reaction(state.channel_id, state.message_id, emoji)
         state.current = emoji
+
+    async def set_done_reaction(self, state: ReactionState, success: bool = True) -> None:
+        """Backward-compatible wrapper for outcome reaction handling."""
+        await self.set_outcome_reaction(state, success=success)
 
 
 # ── Chunking ──

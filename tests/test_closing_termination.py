@@ -1,4 +1,4 @@
-"""Test that closing marker terminates loop even with pending tool_calls."""
+"""Test closing marker termination policy."""
 import asyncio
 import pytest
 from caveman.agent.loop_engines import check_termination
@@ -6,15 +6,15 @@ from caveman.agent.loop_engines import check_termination
 CLOSING = "\u2705---\u672c\u8f6e\u5df2\u5b8c\u6210---\u2705"
 
 @pytest.mark.asyncio
-async def test_closing_marker_terminates_with_tool_calls():
-    """If text has closing marker, terminate even if tool_calls present."""
+async def test_closing_marker_does_not_terminate_with_tool_calls():
+    """Executable tool calls take precedence over premature closing text."""
     result = await check_termination(
         stop="tool_use",
         tool_calls=[{"name": "bash", "id": "1", "input": {}}],
         task="test",
         text=f"All done.\n\n{CLOSING}",
     )
-    assert result is True
+    assert result is False
 
 @pytest.mark.asyncio
 async def test_closing_marker_terminates_without_tool_calls():

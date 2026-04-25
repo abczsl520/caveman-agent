@@ -112,9 +112,11 @@ class MessageProcessor:
             response = await handler(event)
 
             if not response:
-                logger.debug("Handler returned empty response for %s",
-                             event.source.chat_id if event.source else "?")
-                await self._emit_hook("on_processing_complete", event, ProcessingOutcome.SUCCESS)
+                logger.debug(
+                    "Handler produced no user-visible response for %s",
+                    event.source.chat_id if event.source else "?",
+                )
+                await self._emit_hook("on_processing_complete", event, ProcessingOutcome.NO_RESPONSE)
                 return
 
             # Extract and deliver response

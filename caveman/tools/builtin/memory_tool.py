@@ -60,17 +60,17 @@ async def memory_store(content: str, memory_type: str = "semantic", _context: di
         mt = MemoryType(memory_type)
     except ValueError:
         return {"error": f"Invalid memory_type: {memory_type}. Use: episodic, semantic, procedural, working"}
-    mid = await mgr.store(content, mt, trusted=True)
-    # User-initiated stores deserve higher initial trust (0.7 vs default 0.5)
-    backend = getattr(mgr, '_backend', None)
-    if backend and mid:
-        try:
-            conn = backend._get_conn()
-            conn.execute(
-                "UPDATE memories SET trust_score = 0.7 WHERE id = ?", (mid,)
-            )
-        except Exception as e:
-            logger.warning("Trust score update failed for %s: %s", mid, e)
+    try:
+        mid = await mgr.store(
+            content,
+            mt,
+            metadata={"source": "user_tool", "trust_score": 0.7},
+            trusted=False,
+        )
+    except ValueError as e:
+        return {"error": str(e)}
+    if not mid:
+        return {"ok": False, "memory_id": "", "rejected": True}
     return {"ok": True, "memory_id": mid}
 
 

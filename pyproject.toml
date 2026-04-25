@@ -38,6 +38,12 @@ mcp = ["mcp>=1.20"]
 discord = ["discord.py>=2.3"]
 telegram = ["python-telegram-bot>=21"]
 embedding = ["fastembed>=0.8", "jieba>=0.42"]
+embedding-train = [
+    "fastembed>=0.8",
+    "jieba>=0.42",
+    "sentence-transformers>=3.0",
+    "torch>=2.2",
+]
 browser = ["playwright>=1.44"]
 crypto = ["cryptography>=42"]
 providers = [
@@ -66,6 +72,8 @@ all = [
     "python-telegram-bot>=21",
     "fastembed>=0.8",
     "jieba>=0.42",
+    "sentence-transformers>=3.0",
+    "torch>=2.2",
     "playwright>=1.44",
     "cryptography>=42",
 ]

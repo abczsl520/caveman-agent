@@ -25,6 +25,7 @@ class MockAdapter(BasePlatformAdapter):
         config = PlatformConfig(enabled=True)
         super().__init__(config, Platform.DISCORD)
         self.sent_messages: list = []
+        self.outcomes: list[ProcessingOutcome] = []
         self.connected = False
         self._fail_send = False
 
@@ -50,6 +51,11 @@ class MockAdapter(BasePlatformAdapter):
             "reply_to": reply_to, "metadata": metadata,
         })
         return SendResult(success=True, message_id=msg_id)
+
+    async def on_processing_complete(
+        self, event: MessageEvent, outcome: ProcessingOutcome,
+    ) -> None:
+        self.outcomes.append(outcome)
 
 
 def _make_event(text="hello", chat_id="123", user_id="u1", platform=Platform.DISCORD) -> MessageEvent:
@@ -194,6 +200,18 @@ class TestHandleMessage:
         await adapter.handle_message(event)
         await asyncio.sleep(0.05)
         assert len(adapter.sent_messages) == 0
+        assert adapter.outcomes == [ProcessingOutcome.NO_RESPONSE]
+
+    @pytest.mark.asyncio
+    async def test_non_empty_response_marks_success(self):
+        adapter = MockAdapter()
+        adapter.set_message_handler(AsyncMock(return_value="visible result"))
+
+        event = _make_event("hi")
+        await adapter.handle_message(event)
+        await asyncio.sleep(0.05)
+        assert len(adapter.sent_messages) == 1
+        assert adapter.outcomes == [ProcessingOutcome.SUCCESS]
 
     @pytest.mark.asyncio
     async def test_command_bypass_during_active_session(self):

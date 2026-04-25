@@ -47,6 +47,14 @@ pip install caveman-agent
 caveman run "What files are in this directory?"
 ```
 
+For embedding fine-tuning dependencies:
+
+```bash
+pip install "caveman-agent[embedding-train]"
+caveman train --target embedding --eval-only
+caveman train --target embedding --auto-select
+```
+
 Or interactive mode:
 
 ```bash
@@ -64,6 +72,7 @@ caveman wiki compile    # Compile knowledge (promote + expire)
 caveman audit           # Static code quality checks
 caveman bench           # Memory performance benchmarks
 caveman self-test       # Full lifecycle verification
+caveman train --target embedding --eval-only  # Retrieval-log benchmark
 ```
 
 ## Cognitive Engines
@@ -179,6 +188,32 @@ Caveman incorporates battle-tested patterns from open-source projects:
 - 6 cognitive engines
 - 170 commits
 - Self-audited through 94 rounds
+
+## Documentation
+
+- Architecture: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+- API reference: [`docs/API_REFERENCE.md`](docs/API_REFERENCE.md)
+- MCP integration: [`docs/MCP.md`](docs/MCP.md)
+- Import spec: [`docs/IMPORT_SPEC.md`](docs/IMPORT_SPEC.md)
+
+## Contributing
+
+Before opening a PR, run the same quality gates as CI:
+
+```bash
+python -m pytest --tb=short -q --cov=caveman --cov-report=term-missing --cov-fail-under=80
+ruff check caveman tests
+mypy caveman --ignore-missing-imports
+python scripts/generate_api_reference.py
+python scripts/install_smoke.py --source . --max-seconds 180
+```
+
+External user trials for the v1.0 gate should be recorded as JSON/JSONL and
+validated with:
+
+```bash
+python scripts/validate_external_trials.py path/to/trials.jsonl
+```
 
 ## License
 

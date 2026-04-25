@@ -31,7 +31,7 @@ class TestPromptContract:
         from caveman.agent.prompt_contract import validate_layer
         from caveman.tools.registry import ToolRegistry
         registry = ToolRegistry()
-        registry.auto_discover()
+        registry._register_builtins()
         for schema in registry.get_schemas():
             desc = schema.get("description", "")
             violations = validate_layer("tools", desc)
@@ -41,11 +41,54 @@ class TestPromptContract:
         """No ✅/❌ in any tool description."""
         from caveman.tools.registry import ToolRegistry
         registry = ToolRegistry()
-        registry.auto_discover()
+        registry._register_builtins()
         for schema in registry.get_schemas():
             desc = schema.get("description", "")
             assert "✅" not in desc, f"Tool '{schema['name']}' has ✅ in description"
             assert "❌" not in desc, f"Tool '{schema['name']}' has ❌ in description"
+
+    def test_tool_schema_has_no_false_terminal_priming_anywhere(self):
+        """Tool names, descriptions, and parameter descriptions must avoid legacy terminal priming."""
+        import json
+        from caveman.tools.registry import ToolRegistry
+        registry = ToolRegistry()
+        registry._register_builtins()
+        forbidden = (
+            "todo_done",
+            "pending/done",
+            "Mark a todo as done",
+            "Done.",
+            "✅---本轮已完成---✅",
+            "✅ DONE",
+            "FINAL response",
+            "terminal completion marker",
+        )
+        for schema in registry.get_schemas():
+            blob = json.dumps(schema, ensure_ascii=False)
+            for term in forbidden:
+                assert term not in blob, f"Tool '{schema['name']}' exposes forbidden term: {term}"
+
+    def test_context_compressor_summary_prompt_has_no_false_terminal_priming(self):
+        """Compaction prompts are model-visible and must not prime false terminal wording."""
+        from caveman.agent.context_compressor import SUMMARY_PROMPT_TEMPLATE
+        from caveman.compression.utils import build_template
+        prompt_texts = [
+            SUMMARY_PROMPT_TEMPLATE,
+            build_template(1200),
+        ]
+        forbidden = (
+            "What was completed",
+            "What still needs to be done",
+            "### Done",
+            "Completed work",
+            "Done.",
+            "done",
+            "✅---本轮已完成---✅",
+            "terminal completion marker",
+        )
+        for prompt_text in prompt_texts:
+            for term in forbidden:
+                assert term not in prompt_text
 
     def test_cross_layer_no_contradictions(self):
         """Full cross-layer validation with all standard layers."""
@@ -65,18 +108,49 @@ class TestPromptContract:
         code_violations = [v for v in violations if v.layer_name != "workspace"]
         assert not code_violations, f"Code layer violations: {[v.detail for v in code_violations]}"
 
-    def test_system_prompt_checkmark_consistency(self):
-        """All ✅ mentions in system prompt must be either prohibitions or closing format."""
+    def test_system_prompt_has_no_false_terminal_priming(self):
+        """Cached system prompt must not contain legacy false-terminal tokens."""
         from caveman.agent.prompt import build_system_prompt
         prompt = build_system_prompt(surface="discord")
-        for i, line in enumerate(prompt.split("\n")):
-            if "✅" in line:
-                # Must be a "do NOT use" rule or the closing format
-                is_prohibition = any(w in line.lower() for w in ["not", "don", "禁", "unless"])
-                is_closing = "本轮已结束" in line
-                is_list_marker = line.strip().startswith("✅")
-                assert is_prohibition or is_closing or is_list_marker, \
-                    f"Line {i} has ambiguous ✅ usage: {line.strip()[:80]}"
+        forbidden = (
+            "Done.",
+            "✅---本轮已完成---✅",
+            "✅ DONE",
+            "FINAL response",
+            "terminal completion marker",
+        )
+        for term in forbidden:
+            assert term not in prompt
+    def test_runtime_stream_protocol_has_no_legacy_terminal_event_values(self):
+        """Agent/gateway/provider runtime stream code must emit neutral result events."""
+        root = Path(__file__).resolve().parents[1]
+        files = [
+            root / "caveman/agent/stream.py",
+            root / "caveman/agent/loop.py",
+            root / "caveman/gateway/task_runner.py",
+            root / "caveman/gateway/agent_runner_depth.py",
+            root / "caveman/providers/llm.py",
+            root / "caveman/providers/anthropic_provider.py",
+            root / "caveman/providers/gemini_provider.py",
+            root / "caveman/providers/ollama_provider.py",
+            root / "caveman/providers/openai_provider.py",
+            root / "caveman/bridge/acp.py",
+        ]
+        forbidden = (
+            'StreamEvent(type="done"',
+            "StreamEvent(type='done'",
+            'event.type == "done"',
+            "event.type == 'done'",
+            'etype == "done"',
+            "etype == 'done'",
+            '"type": "done"',
+            "'type': 'done'",
+            'DONE = "done"',
+        )
+        for path in files:
+            text = path.read_text()
+            for term in forbidden:
+                assert term not in text, f"{path.relative_to(root)} reintroduced {term}"
 
 
 class TestPromptCacheStability:

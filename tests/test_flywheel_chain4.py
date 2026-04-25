@@ -81,9 +81,9 @@ class TestReflectCausalChains:
             {"from": "human", "value": "Deploy the app"},
             {"from": "gpt", "value": "Error: connection refused on port 5432"},
             {"from": "function_call", "value": '{"name": "bash"}'},
-            {"from": "gpt", "value": "Fixed the error by starting PostgreSQL service. Deployment works now."},
+            {"from": "gpt", "value": "Fixed the error by starting PostgreSQL service. Deployment verified with exit code 0."},
         ]
-        reflection = await reflect_engine.reflect("Deploy app", trajectory, "Deployed successfully")
+        reflection = await reflect_engine.reflect("Deploy app", trajectory, "Deployment verification returned exit code 0")
         assert reflection.outcome == "success"
         # Should detect error recovery
         recovery_lessons = [l for l in reflection.lessons if "recover" in l.lower()]

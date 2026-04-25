@@ -6,7 +6,7 @@ import time
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from caveman.gateway.platform_types import MessageEvent, MessageType, SessionSource
+from caveman.gateway.platform_types import MessageEvent, MessageType, ProcessingOutcome, SessionSource
 
 
 # ── Preflight Tests ──
@@ -132,6 +132,34 @@ class TestProcessor:
         assert _is_animation_url("https://example.com/funny.gif")
         assert _is_animation_url("https://media.giphy.com/abc")
         assert not _is_animation_url("https://example.com/photo.jpg")
+
+    @pytest.mark.asyncio
+    async def test_empty_handler_response_is_not_success_outcome(self):
+        from caveman.gateway.processor import MessageProcessor
+
+        adapter = MagicMock()
+        adapter._message_handler = AsyncMock(return_value=None)
+        adapter.send_typing = AsyncMock()
+        adapter.stop_typing = AsyncMock()
+        adapter.send = AsyncMock()
+        outcomes = []
+
+        async def capture_hook(name, *args):
+            if name == "on_processing_complete":
+                outcomes.append(args[1])
+
+        processor = MessageProcessor(adapter)
+        processor._emit_hook = AsyncMock(side_effect=capture_hook)
+        event = MessageEvent(
+            text="hi",
+            source=SessionSource(platform="discord", chat_id="c1", user_id="u1"),
+            message_id="m1",
+        )
+
+        await processor._run(event, "discord:c1")
+
+        assert outcomes == [ProcessingOutcome.NO_RESPONSE]
+        adapter.send.assert_not_called()
 
 
 # ── Execution Engine Tests ──
@@ -352,3 +380,48 @@ class TestOutbound:
         result = await delivery.send_with_retry("ch1", "hello")
         assert result.success
         assert call_count == 3
+
+    @pytest.mark.asyncio
+    async def test_outcome_reaction_success_clears_processing_without_success_marker(self):
+        from caveman.gateway.outbound import OutboundDelivery, ReactionState
+        adapter = MagicMock()
+        adapter.add_reaction = AsyncMock()
+        adapter.remove_reaction = AsyncMock()
+        delivery = OutboundDelivery(adapter)
+        state = ReactionState(channel_id="ch1", message_id="m1", current="⏳")
+
+        await delivery.set_outcome_reaction(state, success=True)
+
+        adapter.remove_reaction.assert_awaited_once_with("ch1", "m1", "⏳")
+        adapter.add_reaction.assert_not_awaited()
+        assert state.current == ""
+
+    @pytest.mark.asyncio
+    async def test_outcome_reaction_failure_adds_error_marker(self):
+        from caveman.gateway.outbound import OutboundDelivery, ReactionState
+        adapter = MagicMock()
+        adapter.add_reaction = AsyncMock()
+        adapter.remove_reaction = AsyncMock()
+        delivery = OutboundDelivery(adapter)
+        state = ReactionState(channel_id="ch1", message_id="m1", current="⏳")
+
+        await delivery.set_outcome_reaction(state, success=False)
+
+        adapter.remove_reaction.assert_awaited_once_with("ch1", "m1", "⏳")
+        adapter.add_reaction.assert_awaited_once_with("ch1", "m1", "❌")
+        assert state.current == "❌"
+
+    @pytest.mark.asyncio
+    async def test_legacy_done_reaction_wrapper_does_not_add_success_marker(self):
+        from caveman.gateway.outbound import OutboundDelivery, ReactionState
+        adapter = MagicMock()
+        adapter.add_reaction = AsyncMock()
+        adapter.remove_reaction = AsyncMock()
+        delivery = OutboundDelivery(adapter)
+        state = ReactionState(channel_id="ch1", message_id="m1", current="⏳")
+
+        await delivery.set_done_reaction(state, success=True)
+
+        adapter.remove_reaction.assert_awaited_once_with("ch1", "m1", "⏳")
+        adapter.add_reaction.assert_not_awaited()
+        assert state.current == ""

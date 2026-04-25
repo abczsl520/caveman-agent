@@ -41,7 +41,7 @@ class ToolProgress:
 @dataclass
 class StreamEvent:
     """An event from the agent stream."""
-    type: str  # text | tool_start | tool_progress | tool_complete | thinking | done | error
+    type: str  # text | tool_start | tool_progress | tool_complete | thinking | result | error
     text: str = ""
     tool_name: str = ""
     tool_id: str = ""
@@ -89,7 +89,7 @@ class StreamingAgentRunner:
             if hasattr(stream, "__aiter__"):
                 async for chunk in stream:
                     if self._cancel_event.is_set():
-                        yield StreamEvent(type="done", text="Cancelled")
+                        yield StreamEvent(type="result", text="Cancelled")
                         return
 
                     event = self._process_chunk(chunk)
@@ -111,11 +111,11 @@ class StreamingAgentRunner:
                 yield StreamEvent(type="text", text=text)
 
         except asyncio.CancelledError:
-            yield StreamEvent(type="done", text="Cancelled")
+            yield StreamEvent(type="result", text="Cancelled")
         except Exception as e:
             yield StreamEvent(type="error", text=str(e))
 
-        yield StreamEvent(type="done")
+        yield StreamEvent(type="result")
 
     def _process_chunk(self, chunk: Any) -> Optional[StreamEvent]:
         """Process a raw chunk from the agent stream."""
@@ -162,7 +162,7 @@ class StreamingAgentRunner:
 
             elif chunk_type == "usage":
                 return StreamEvent(
-                    type="done",
+                    type="result",
                     tokens=chunk.get("total_tokens", 0),
                 )
 

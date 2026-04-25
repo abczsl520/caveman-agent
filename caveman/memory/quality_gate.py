@@ -11,11 +11,17 @@ PRD §6 Iron Law #1: Write quality >> Retrieve sophistication.
 """
 from __future__ import annotations
 
-import re
+import json
 import logging
+import re
+from dataclasses import dataclass
+from typing import Awaitable, Callable
 
 __all__ = [
+    "QualityGateStats",
     "check_quality",
+    "check_quality_async",
+    "get_stats",
     "truncate_if_needed",
     "reset_cache",
 ]
@@ -23,11 +29,46 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
+LLMFn = Callable[[str], Awaitable[str]]
+
 # Minimum content length (characters). Below this, there's no knowledge.
 _MIN_LENGTH = 15
 
 # Maximum content length. Beyond this, it's a raw dump, not extracted knowledge.
 _MAX_LENGTH = 3000
+
+
+@dataclass
+class QualityGateStats:
+    """Quality gate rejection counters for LLM-vs-heuristic comparison."""
+
+    heuristic_checked: int = 0
+    heuristic_rejected: int = 0
+    llm_checked: int = 0
+    llm_rejected: int = 0
+    llm_failed: int = 0
+
+    @property
+    def heuristic_rejection_rate(self) -> float:
+        return self.heuristic_rejected / self.heuristic_checked if self.heuristic_checked else 0.0
+
+    @property
+    def llm_rejection_rate(self) -> float:
+        return self.llm_rejected / self.llm_checked if self.llm_checked else 0.0
+
+    def as_dict(self) -> dict[str, float | int]:
+        return {
+            "heuristic_checked": self.heuristic_checked,
+            "heuristic_rejected": self.heuristic_rejected,
+            "heuristic_rejection_rate": self.heuristic_rejection_rate,
+            "llm_checked": self.llm_checked,
+            "llm_rejected": self.llm_rejected,
+            "llm_rejection_rate": self.llm_rejection_rate,
+            "llm_failed": self.llm_failed,
+        }
+
+
+_stats = QualityGateStats()
 
 # Patterns that indicate zero-information content
 _GARBAGE_PATTERNS = (
@@ -69,12 +110,7 @@ def _fingerprint(content: str) -> str:
     return normalized
 
 
-def check_quality(content: str, trusted: bool = False) -> str | None:
-    """Check if content meets quality threshold for storage.
-
-    Returns None if quality is OK, or a rejection reason string.
-    Trusted content (e.g., user explicit store) bypasses most checks.
-    """
+def _heuristic_rejection(content: str, trusted: bool = False) -> str | None:
     if trusted:
         return None
 
@@ -95,6 +131,67 @@ def check_quality(content: str, trusted: bool = False) -> str | None:
     return None
 
 
+def check_quality(content: str, trusted: bool = False) -> str | None:
+    """Check if content meets heuristic quality threshold for storage.
+
+    Returns None if quality is OK, or a rejection reason string.
+    Trusted content (e.g., user explicit store) bypasses most checks.
+    """
+    rejection = _heuristic_rejection(content, trusted=trusted)
+    _stats.heuristic_checked += 1
+    if rejection:
+        _stats.heuristic_rejected += 1
+    return rejection
+
+
+async def check_quality_async(
+    content: str,
+    *,
+    trusted: bool = False,
+    llm_fn: LLMFn | None = None,
+    use_llm: bool = False,
+) -> str | None:
+    """Quality gate with optional LLM judge mode.
+
+    Hard heuristic rejects still win (security, duplicates, obvious garbage).
+    LLM mode is used only after those hard filters to judge whether content is
+    durable, project/user-specific knowledge worth storing.
+    """
+    heuristic = check_quality(content, trusted=trusted)
+    if heuristic or trusted or not use_llm or llm_fn is None:
+        return heuristic
+
+    _stats.llm_checked += 1
+    prompt = (
+        "You are a memory write quality judge for an AI agent.\n"
+        "Decide if this content is durable, reusable knowledge worth storing in long-term memory.\n"
+        "Reject generic trivia, filler, raw logs, vague summaries, and content with no future utility.\n"
+        "Return ONLY JSON: {\"accept\": boolean, \"reason\": string}.\n\n"
+        f"CONTENT:\n{content[:2500]}\n"
+    )
+    try:
+        raw = await llm_fn(prompt)
+        text = (raw or "").strip()
+        match = re.search(r"\{.*\}", text, re.S)
+        if match:
+            text = match.group(0)
+        data = json.loads(text)
+        if bool(data.get("accept", False)):
+            return None
+        _stats.llm_rejected += 1
+        reason = str(data.get("reason", "llm rejected"))[:160]
+        return f"llm_rejected: {reason}"
+    except Exception as exc:
+        _stats.llm_failed += 1
+        logger.debug("Quality gate LLM judge failed; accepting heuristic-pass content: %s", exc)
+        return None
+
+
+def get_stats() -> QualityGateStats:
+    """Return live quality gate counters."""
+    return _stats
+
+
 def truncate_if_needed(content: str) -> str:
     """Truncate content to max length, preserving sentence boundaries."""
     if len(content) <= _MAX_LENGTH:
@@ -108,5 +205,7 @@ def truncate_if_needed(content: str) -> str:
 
 
 def reset_cache() -> None:
-    """Reset fingerprint cache (for testing)."""
+    """Reset fingerprint cache and stats (for testing)."""
     _fingerprint_cache.clear()
+    global _stats
+    _stats = QualityGateStats()

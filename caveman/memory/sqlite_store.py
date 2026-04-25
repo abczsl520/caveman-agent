@@ -1,8 +1,4 @@
-"""SQLite + FTS5 memory backend — zero-dependency persistent storage.
-
-Features: FTS5 search (10ms at 10K+), ACID, trust scoring, entity extraction,
-hybrid retrieval (FTS5 + Jaccard + vector + trust + temporal decay).
-"""
+"""SQLite + FTS5 memory backend."""
 from __future__ import annotations
 import asyncio
 import json
@@ -17,58 +13,20 @@ from pathlib import Path
 from typing import List, Optional
 
 from .types import MemoryType, MemoryEntry
+from .metadata import validate_metadata
 from .store_helpers import row_to_entry, migrate_schema
 from caveman.utils import cosine_similarity as _cosine_similarity
-
-
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS memories (
-    id TEXT PRIMARY KEY,
-    content TEXT NOT NULL,
-    type TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    metadata_json TEXT DEFAULT '{}',
-    trust_score REAL DEFAULT 0.5,
-    retrieval_count INTEGER DEFAULT 0,
-    helpful_count INTEGER DEFAULT 0,
-    entities_json TEXT DEFAULT '[]'
-);
-
-CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
-    content, content=memories, content_rowid=rowid
-);
-
-CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
-    INSERT INTO memories_fts(rowid, content) VALUES (new.rowid, new.content);
-END;
-
-CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
-    INSERT INTO memories_fts(memories_fts, rowid, content) VALUES('delete', old.rowid, old.content);
-END;
-
-CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
-    INSERT INTO memories_fts(memories_fts, rowid, content) VALUES('delete', old.rowid, old.content);
-    INSERT INTO memories_fts(rowid, content) VALUES (new.rowid, new.content);
-END;
-
-CREATE TABLE IF NOT EXISTS embeddings (
-    memory_id TEXT PRIMARY KEY REFERENCES memories(id) ON DELETE CASCADE,
-    vector_json TEXT NOT NULL
-);
-"""
+from caveman.memory.sqlite_schema import SCHEMA
 
 logger = logging.getLogger(__name__)
 
 
 class SQLiteMemoryStore:
-    """SQLite + FTS5 backed memory store.
-
-    Thread/coroutine safety: all write operations are serialized through
-    an asyncio.Lock to prevent concurrent writes from background engines.
-    """
+    """SQLite + FTS5 backed memory store."""
 
     def __init__(self, db_path: Path | str | None = None, embedding_fn=None,
-                 scorer_config: dict | None = None):
+                 scorer_config: dict | None = None, quality_llm_fn=None,
+                 use_llm_quality_gate: bool = False):
         from caveman.paths import MEMORY_DB_PATH
         self.db_path = Path(db_path).expanduser() if db_path else MEMORY_DB_PATH
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -77,19 +35,21 @@ class SQLiteMemoryStore:
         self._write_lock = asyncio.Lock()
         self._conn_lock = threading.Lock()
         self._scorer_config = scorer_config or {}
+        self._quality_llm_fn = quality_llm_fn
+        self._use_llm_quality_gate = use_llm_quality_gate
 
     def _get_conn(self) -> sqlite3.Connection:
         with self._conn_lock:
             if self._conn is None:
                 self._conn = db_connect(self.db_path)
-                self._conn.executescript(_SCHEMA)
+                self._conn.executescript(SCHEMA)
                 migrate_schema(self._conn)
             return self._conn
 
     async def store(self, content: str, memory_type: MemoryType, metadata: dict | None = None, trusted: bool = False) -> str:
         from caveman.memory.retrieval import extract_entities
         from caveman.memory.security import scan_memory_content
-        from caveman.memory.quality_gate import check_quality, truncate_if_needed
+        from caveman.memory.quality_gate import check_quality_async, truncate_if_needed
 
         if not trusted:
             threat = scan_memory_content(content)
@@ -97,7 +57,12 @@ class SQLiteMemoryStore:
                 raise ValueError(threat)
 
         # Quality gate: reject garbage before it pollutes the flywheel
-        rejection = check_quality(content, trusted=trusted)
+        rejection = await check_quality_async(
+            content,
+            trusted=trusted,
+            llm_fn=self._quality_llm_fn,
+            use_llm=self._use_llm_quality_gate,
+        )
         if rejection:
             logger.debug("Quality gate rejected: %s — %s", content[:60], rejection)
             return ""  # Empty ID signals rejection
@@ -108,7 +73,7 @@ class SQLiteMemoryStore:
             conn = self._get_conn()
             mid = str(uuid.uuid4())
             now = datetime.now().isoformat()
-            meta = metadata or {}
+            meta = validate_metadata(metadata, context="sqlite store")
             trust = meta.get("trust_score", 0.5)
             entities = extract_entities(content)
 
@@ -161,9 +126,9 @@ class SQLiteMemoryStore:
             # Fallback: no FTS/vector match — return recent high-trust memories
             # Better than empty: gives LLM some context to work with
             fallback_rows = conn.execute(
-                "SELECT id, content, type, created_at, metadata_json, trust_score "
+                "SELECT id, content, type, created_at, metadata_json, trust_score, retrieval_count, last_accessed "
                 "FROM memories WHERE trust_score >= 0.5 "
-                "ORDER BY trust_score DESC, created_at DESC LIMIT ?",
+                "ORDER BY trust_score DESC, COALESCE(last_accessed, created_at) DESC LIMIT ?",
                 (top_k,),
             ).fetchall()
             if fallback_rows:
@@ -179,7 +144,7 @@ class SQLiteMemoryStore:
         if related_ids:
             for rid in list(related_ids)[:10]:
                 row = conn.execute(
-                    "SELECT id, content, type, created_at, metadata_json, trust_score "
+                    "SELECT id, content, type, created_at, metadata_json, trust_score, retrieval_count, last_accessed "
                     "FROM memories WHERE id = ?", (rid,)
                 ).fetchone()
                 if row:
@@ -196,20 +161,17 @@ class SQLiteMemoryStore:
             async with self._write_lock:
                 now = datetime.now().isoformat()
                 ph = ",".join("?" * len(returned_ids))
-                # Batch update: retrieval count + micro trust boost
-                # (被检索 = 微弱正信号 — recalled = weak positive signal)
-                # Resurrect: low-trust memories that get recalled deserve a bigger
-                # boost — they were dormant but someone found them useful again.
-                # trust < 0.3 → +0.05 (resurrect), else → +0.01 (micro boost)
+                # Batch update: retrieval count, last_accessed, and small trust boost
                 conn.execute(
                     f"UPDATE memories SET retrieval_count = retrieval_count + 1, "
+                    f"last_accessed = ?, "
                     f"trust_score = MIN(1.0, CASE "
                     f"  WHEN trust_score < 0.3 THEN trust_score + 0.05 "
                     f"  ELSE trust_score + 0.01 "
                     f"END) WHERE id IN ({ph})",
-                    returned_ids,
+                    [now, *returned_ids],
                 )
-                # Batch update last_accessed in metadata (single loop, one commit)
+                # Batch update last_accessed in metadata
                 for mid in returned_ids:
                     row = conn.execute(
                         "SELECT metadata_json FROM memories WHERE id = ?", (mid,)
@@ -233,7 +195,7 @@ class SQLiteMemoryStore:
         fts_query = " OR ".join(f'"{w}"' for w in words[:10])
         try:
             base = ("SELECT m.id, m.content, m.type, m.created_at, m.metadata_json, "
-                    "rank, m.trust_score, m.retrieval_count FROM memories m "
+                    "rank, m.trust_score, m.retrieval_count, m.last_accessed FROM memories m "
                     "JOIN memories_fts ON m.rowid = memories_fts.rowid WHERE memories_fts MATCH ?")
             if memory_type:
                 rows = conn.execute(
@@ -245,7 +207,8 @@ class SQLiteMemoryStore:
         except sqlite3.OperationalError:
             return self._like_search(query, memory_type, top_k)
         return [row_to_entry(row, fts_rank=row[5], trust=row[6],
-                             retrieval_count=row[7] if len(row) > 7 else 0)
+                             retrieval_count=row[7] if len(row) > 7 else 0,
+                             last_accessed=row[8] if len(row) > 8 else None)
                 for row in rows]
 
     def _like_search(self, query: str, memory_type: MemoryType | None, top_k: int) -> List[MemoryEntry]:
@@ -258,7 +221,7 @@ class SQLiteMemoryStore:
             params.append(memory_type.value)
         where = " AND ".join(conditions) if conditions else "1=1"
         rows = conn.execute(
-            f"SELECT id, content, type, created_at, metadata_json, trust_score "
+            f"SELECT id, content, type, created_at, metadata_json, trust_score, retrieval_count, last_accessed "
             f"FROM memories WHERE {where} LIMIT ?",
             params + [top_k],
         ).fetchall()
@@ -276,7 +239,8 @@ class SQLiteMemoryStore:
         candidate_ids = self._fts_candidate_ids(query, cap)
 
         base = ("SELECT m.id, m.content, m.type, m.created_at, m.metadata_json, "
-                "e.vector_json FROM memories m JOIN embeddings e ON m.id = e.memory_id")
+                "m.trust_score, m.retrieval_count, m.last_accessed, e.vector_json "
+                "FROM memories m JOIN embeddings e ON m.id = e.memory_id")
         if candidate_ids:
             ph = ",".join("?" * len(candidate_ids))
             where = f" WHERE e.memory_id IN ({ph})"
@@ -294,8 +258,8 @@ class SQLiteMemoryStore:
             return []
         scored = []
         for row in rows:
-            sim = _cosine_similarity(query_vec, json.loads(row[5]))
-            entry = row_to_entry(row[:5])
+            sim = _cosine_similarity(query_vec, json.loads(row[8]))
+            entry = row_to_entry(row[:8], trust=row[5], retrieval_count=row[6], last_accessed=row[7])
             entry.metadata["_vector_sim"] = sim
             scored.append((sim, entry))
         scored.sort(key=lambda x: x[0], reverse=True)
@@ -318,27 +282,30 @@ class SQLiteMemoryStore:
             logger.debug("suppressed: %s", e)
             return None
 
-    async def mark_helpful(self, memory_id: str, helpful: bool = True) -> None:
+    async def mark_helpful(self, memory_id: str, helpful: bool = True, metadata: dict | None = None) -> None:
         from caveman.memory.retrieval import adjust_trust
         async with self._write_lock:
             conn = self._get_conn()
             row = conn.execute(
-                "SELECT trust_score, helpful_count FROM memories WHERE id = ?", (memory_id,),
+                "SELECT trust_score, helpful_count, metadata_json FROM memories WHERE id = ?", (memory_id,),
             ).fetchone()
             if not row:
                 return
             new_trust = adjust_trust(row[0], helpful)
             delta = 1 if helpful else 0
+            existing_meta = json.loads(row[2]) if row[2] else {}
+            if metadata:
+                existing_meta.update(validate_metadata(metadata, context="mark_helpful"))
             conn.execute(
-                "UPDATE memories SET trust_score = ?, helpful_count = helpful_count + ? WHERE id = ?",
-                (new_trust, delta, memory_id),
+                "UPDATE memories SET trust_score = ?, helpful_count = helpful_count + ?, metadata_json = ? WHERE id = ?",
+                (new_trust, delta, json.dumps(existing_meta, ensure_ascii=False), memory_id),
             )
             conn.commit()
 
     def search_by_entity(self, entity: str, top_k: int = 10) -> List[MemoryEntry]:
         conn = self._get_conn()
         rows = conn.execute(
-            "SELECT id, content, type, created_at, metadata_json FROM memories "
+            "SELECT id, content, type, created_at, metadata_json, trust_score, retrieval_count, last_accessed FROM memories "
             'WHERE entities_json LIKE ? ORDER BY trust_score DESC LIMIT ?',
             (f'%"{entity}"%', top_k),
         ).fetchall()
@@ -353,7 +320,7 @@ class SQLiteMemoryStore:
             if not row:
                 return False
             existing = json.loads(row[0]) if row[0] else {}
-            existing.update(metadata)
+            existing.update(validate_metadata(metadata, context="update_metadata"))
             conn.execute(
                 "UPDATE memories SET metadata_json = ? WHERE id = ?",
                 (json.dumps(existing, ensure_ascii=False), memory_id),
@@ -387,6 +354,22 @@ class SQLiteMemoryStore:
             conn.commit()
             return cursor.rowcount > 0
 
+    async def get_by_id(self, memory_id: str) -> MemoryEntry | None:
+        """Fetch a memory by ID, or None if it does not exist."""
+        row = self._get_conn().execute(
+            "SELECT id, content, type, created_at, metadata_json, trust_score, retrieval_count, last_accessed "
+            "FROM memories WHERE id = ?",
+            (memory_id,),
+        ).fetchone()
+        if not row:
+            return None
+        return row_to_entry(
+            row,
+            trust=row[5],
+            retrieval_count=row[6] if len(row) > 6 else 0,
+            last_accessed=row[7] if len(row) > 7 else None,
+        )
+
     @property
     def total_count(self) -> int:
         return self._get_conn().execute("SELECT COUNT(*) FROM memories").fetchone()[0]
@@ -397,7 +380,7 @@ class SQLiteMemoryStore:
 
     def all_entries(self) -> List[MemoryEntry]:
         rows = self._get_conn().execute(
-            "SELECT id, content, type, created_at, metadata_json, trust_score "
+            "SELECT id, content, type, created_at, metadata_json, trust_score, retrieval_count, last_accessed "
             "FROM memories ORDER BY created_at"
         ).fetchall()
         return [row_to_entry(row) for row in rows]
@@ -413,7 +396,7 @@ class SQLiteMemoryStore:
         conditions = ["LOWER(content) LIKE ?" for _ in words]
         params = [f"%{w}%" for w in words]
         rows = self._get_conn().execute(
-            f"SELECT id, content, type, created_at, metadata_json, trust_score "
+            f"SELECT id, content, type, created_at, metadata_json, trust_score, retrieval_count, last_accessed "
             f"FROM memories WHERE {' AND '.join(conditions)} LIMIT ?",
             params + [limit],
         ).fetchall()
@@ -421,8 +404,8 @@ class SQLiteMemoryStore:
 
     def recent(self, limit: int = 20) -> List[MemoryEntry]:
         rows = self._get_conn().execute(
-            "SELECT id, content, type, created_at, metadata_json, trust_score "
-            "FROM memories ORDER BY created_at DESC LIMIT ?", (limit,),
+            "SELECT id, content, type, created_at, metadata_json, trust_score, retrieval_count, last_accessed "
+            "FROM memories ORDER BY COALESCE(last_accessed, created_at) DESC LIMIT ?", (limit,),
         ).fetchall()
         return [row_to_entry(row) for row in rows]
 

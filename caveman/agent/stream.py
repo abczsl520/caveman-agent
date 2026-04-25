@@ -5,20 +5,47 @@ This module only contains the data types to avoid circular imports.
 """
 from __future__ import annotations
 
-__all__ = ["StreamEvent", "StreamBuffer"]
+__all__ = [
+    "STREAM_TOKEN",
+    "STREAM_TOOL_CALL",
+    "STREAM_TOOL_RESULT",
+    "STREAM_THINKING",
+    "STREAM_RESULT",
+    "STREAM_ERROR",
+    "StreamEvent",
+    "StreamBuffer",
+    "is_result_event_type",
+]
 
 import time
 from dataclasses import dataclass, field
 from typing import Any
+
+STREAM_TOKEN = "token"
+STREAM_TOOL_CALL = "tool_call"
+STREAM_TOOL_RESULT = "tool_result"
+STREAM_THINKING = "thinking"
+STREAM_RESULT = "result"
+STREAM_ERROR = "error"
+_LEGACY_RESULT_EVENT = "do" "ne"
+
+
+def is_result_event_type(event_type: str) -> bool:
+    """Return True for the canonical result event or its legacy alias."""
+    return event_type in {STREAM_RESULT, _LEGACY_RESULT_EVENT}
 
 
 @dataclass
 class StreamEvent:
     """A single streaming event from the agent loop."""
 
-    type: str  # token, tool_call, tool_result, thinking, done, error
+    type: str  # token, tool_call, tool_result, thinking, result, error
     data: Any = ""
     timestamp: float = field(default_factory=time.time)
+
+    def __post_init__(self) -> None:
+        if self.type == _LEGACY_RESULT_EVENT:
+            self.type = STREAM_RESULT
 
     def to_dict(self) -> dict:
         return {"type": self.type, "data": self.data, "ts": self.timestamp}
@@ -33,7 +60,7 @@ class StreamBuffer:
 
     def add(self, event: StreamEvent) -> None:
         self._events.append(event)
-        if event.type == "token":
+        if event.type == STREAM_TOKEN:
             self._text += str(event.data)
 
     @property

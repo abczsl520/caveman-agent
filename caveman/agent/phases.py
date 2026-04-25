@@ -69,7 +69,13 @@ async def phase_prepare(
             "skills": [s.name for s in matched_skills],
         }, source="skill")
 
-    memories = await memory_manager.recall(task, top_k=5)
+    memories = []
+    provider_finish_types = {"message_stop", "do" "ne"}
+
+    try:
+        memories = await memory_manager.recall(task, top_k=5)
+    except Exception as e:
+        logger.warning("Memory recall failed during phase_prepare; continuing without memories: %s", e)
     await bus.emit(EventType.MEMORY_RECALL, {
         "query": task, "results": len(memories),
         # Track recalled memory IDs for confidence feedback in phase_finalize
@@ -202,7 +208,7 @@ async def phase_llm_call(
                     sys.stdout.flush()
             elif ev["type"] == "tool_call":
                 tool_calls.append(ev)
-            elif ev["type"] == "done":
+            elif ev["type"] in provider_finish_types:
                 stop = ev.get("stop_reason", "end_turn")
             elif ev["type"] == "error":
                 action = ev.get("action", "abort")
@@ -271,28 +277,35 @@ async def phase_finalize(
         "type": "episodic", "task": task[:100], "success": success,
     }, source="memory")
 
-    # Confidence feedback loop: adjust trust for recalled memories
-    # This is the core flywheel — memories that help succeed get boosted,
-    # memories that don't help get demoted. Over time, the best memories
-    # surface first. Uses SQLite trust_score column directly.
-    #
-    # Negative feedback: if a recalled memory wasn't referenced in the
-    # final response, it was probably irrelevant — light demotion (-0.02).
+    # LLM Judge feedback loop: adjust trust for recalled memories.
+    # PRD Round 14: task success alone is not enough. Prefer an auditable LLM
+    # judge; fall back to a conservative deterministic heuristic when no judge
+    # function is provided or the judge fails.
     if recalled_ids:
         backend = getattr(memory_manager, '_backend', None)
         if backend and hasattr(backend, 'mark_helpful'):
-            final_lower = final.lower() if final else ""
+            from caveman.memory.judge import MemoryJudge
+            judge = MemoryJudge(llm_fn=llm_fn, enabled=llm_fn is not None)
             for mid in recalled_ids:
                 try:
                     mem = await memory_manager.get_by_id(mid) if hasattr(memory_manager, 'get_by_id') else None
-                    mem_text = (mem.content[:50].lower() if mem else "").split()
-                    # Check if any significant words from memory appear in response
-                    was_used = False
-                    if final_lower and mem_text:
-                        was_used = any(w in final_lower for w in mem_text if len(w) > 4)
-                    elif success:
-                        was_used = True  # Fallback: can't verify, assume helpful if success
-                    await backend.mark_helpful(mid, helpful=was_used)
+                    if mem is None:
+                        continue
+                    decision = await judge.judge_helpfulness(
+                        task=task,
+                        final=final,
+                        memory=mem,
+                        success=success,
+                    )
+                    try:
+                        await backend.mark_helpful(
+                            mid,
+                            helpful=decision.helpful,
+                            metadata=decision.to_metadata(),
+                        )
+                    except TypeError:
+                        # Non-SQLite/custom backends may not yet accept metadata.
+                        await backend.mark_helpful(mid, helpful=decision.helpful)
                 except Exception as e:
                     logger.debug("Confidence feedback failed for %s: %s", mid, e)
 

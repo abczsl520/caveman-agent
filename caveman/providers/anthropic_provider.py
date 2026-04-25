@@ -181,7 +181,7 @@ class AnthropicProvider(LLMProvider):
         - {"type": "delta", "text": "..."}
         - {"type": "thinking", "text": "..."}
         - {"type": "tool_call", "id": "...", "name": "...", "input": {...}}
-        - {"type": "done", "stop_reason": "...", "usage": {...}}
+        - provider-finish event with stop_reason and usage
         - {"type": "error", "error": "...", "action": "..."}
         """
         client = self._get_client()
@@ -301,7 +301,7 @@ class AnthropicProvider(LLMProvider):
                             self._rate_limit_state = state
 
                     yield {
-                        "type": "done",
+                        "type": "message_stop",
                         "stop_reason": normalize_stop_reason(msg.stop_reason),
                         "usage": usage,
                     }
@@ -332,7 +332,7 @@ class AnthropicProvider(LLMProvider):
         }
         self._record_usage(usage, getattr(self, "_expected_input_tokens", 0))
         yield {
-            "type": "done",
+            "type": "message_stop",
             "stop_reason": normalize_stop_reason(response.stop_reason),
             "usage": usage,
         }

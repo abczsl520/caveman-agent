@@ -300,7 +300,9 @@ def train(
     epochs: int = typer.Option(3, "--epochs"),
     format: str = typer.Option("sharegpt", "--format", help="Dataset format: sharegpt, chatml, openai"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Build dataset only, skip training"),
-    stats: bool = typer.Option(False, "--stats", help="Show trajectory stats without building"),
+    eval_only: bool = typer.Option(False, "--eval-only", help="Evaluate embedding retrieval quality without training"),
+    auto_select: bool = typer.Option(False, "--auto-select", help="Select trained embedding only when eval metrics improve"),
+    min_eval_delta: float = typer.Option(0.01, "--min-eval-delta", help="Minimum weighted quality improvement for auto-select"),
 ) -> None:
     """Train embedding model or export data for researchers."""
     from caveman.cli.tui import show_banner
@@ -320,6 +322,8 @@ def train(
         trajectory_dir=trajectory_dir, output_dir=output_dir,
         min_quality=min_quality, epochs=epochs,
         format=format, dry_run=dry_run,
+        eval_only=eval_only, auto_select=auto_select,
+        min_eval_delta=min_eval_delta,
     )
     typer.echo(result)
 

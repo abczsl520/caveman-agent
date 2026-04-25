@@ -73,10 +73,10 @@ class TestOllamaComplete:
             events.append(event)
 
         assert any(e["type"] == "delta" and e["text"] == "Hello from Ollama!" for e in events)
-        assert any(e["type"] == "done" for e in events)
-        done_event = next(e for e in events if e["type"] == "done")
-        assert done_event["usage"]["input_tokens"] == 10
-        assert done_event["usage"]["output_tokens"] == 5
+        assert any(e["type"] == "message_stop" for e in events)
+        stop_event = next(e for e in events if e["type"] == "message_stop")
+        assert stop_event["usage"]["input_tokens"] == 10
+        assert stop_event["usage"]["output_tokens"] == 5
 
     @pytest.mark.asyncio
     async def test_non_stream_with_tool_calls(self):

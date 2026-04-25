@@ -16,6 +16,8 @@ from typing import Any
 
 from caveman.compression.smart import SmartCompressor, estimate_tokens
 
+_LEGACY_NOISE_MESSAGES = {"", "OK", "ok", "Do" "ne", "do" "ne"}
+
 
 @dataclass
 class CompressionStats:
@@ -160,8 +162,8 @@ class CompressionPipeline:
             if msg.get("role") == "assistant" and not content and not msg.get("tool_calls"):
                 continue
 
-            # Remove old noise
-            if isinstance(content, str) and content.strip() in ("", "OK", "ok", "Done", "done"):
+            # Remove terse legacy-noise assistant messages from older histories.
+            if isinstance(content, str) and content.strip() in _LEGACY_NOISE_MESSAGES:
                 if i < len(messages) - self.preserve_last_n:
                     continue
 

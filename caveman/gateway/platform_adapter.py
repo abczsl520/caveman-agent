@@ -1,8 +1,4 @@
-"""Base Platform Adapter — unified abstraction for all messaging platforms.
-
-Subclasses implement connect/disconnect/send. Base handles: typing, retry,
-media extraction, interrupt, session tracking, message splitting.
-"""
+"""Base platform adapter: connect/send abstraction plus typing, retry, media, sessions."""
 from __future__ import annotations
 
 import asyncio
@@ -39,13 +35,7 @@ _VIDEO_EXTS = frozenset({".mp4", ".mov", ".avi", ".mkv", ".webm"})
 _IMAGE_EXTS = frozenset({".jpg", ".jpeg", ".png", ".webp", ".gif"})
 
 class BasePlatformAdapter(ABC):
-    """Base class for all platform adapters.
-
-    Subclasses implement platform-specific logic for connecting, receiving,
-    and sending messages. The base class handles the full message lifecycle:
-    typing indicators, retry logic, media extraction, interrupt support,
-    and session tracking.
-    """
+    """Base class for messaging platform adapters."""
 
     def __init__(self, config: PlatformConfig, platform: Platform):
         self.config = config
@@ -185,7 +175,7 @@ class BasePlatformAdapter(ABC):
     async def on_processing_complete(
         self, event: MessageEvent, outcome: ProcessingOutcome,
     ) -> None:
-        """Called when processing completes (e.g., add ✅/❌ reaction)."""
+        """Called when processing finishes; platforms should avoid success markers."""
 
     # ── Message handling (DO NOT override) ──────────────────────────────────
 
@@ -248,8 +238,11 @@ class BasePlatformAdapter(ABC):
 
             if response:
                 await self._deliver_response(chat_id, response, event.message_id, thread_meta)
+                outcome = ProcessingOutcome.SUCCESS
+            else:
+                logger.debug("[%s] Handler produced no user-visible response for %s", self.name, chat_id)
+                outcome = ProcessingOutcome.NO_RESPONSE
 
-            outcome = ProcessingOutcome.SUCCESS
             await self._run_hook("on_processing_complete", event, outcome)
 
             # Process any pending message queued during our run

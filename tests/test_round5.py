@@ -110,10 +110,22 @@ def test_config_validate_range_error():
     from caveman.config.validator import validate_config
 
     config = {
-        "agent": {"max_iterations": 0},  # Below range [1, 1000]
+        "agent": {"max_iterations": 0},  # Below minimum; no arbitrary upper bound
     }
     warnings = validate_config(config, strict=False)
     assert any("out of range" in w for w in warnings)
+
+
+def test_config_validate_allows_large_long_compounding_iteration_budget():
+    """Long-horizon autonomous work should not be blocked by arbitrary safety caps."""
+    from caveman.config.validator import validate_config
+
+    config = {
+        "agent": {"max_iterations": 10_000},
+        "delegation": {"max_iterations": 5_000},
+    }
+    assert validate_config(config, strict=False) == []
+
 
 
 def test_config_validate_choices_error():

@@ -94,9 +94,21 @@ class TestACPEvents:
         await emitter.on_tool_complete("bash", long_result)
         evt = emitter.events[1]
         assert len(evt.data["result"]) < 6000
+    @pytest.mark.asyncio
+    async def test_emitter_task_result_uses_neutral_event_type(self):
+        emitter = ACPEventEmitter("test-session")
+        await emitter.on_task_result("result")
+        assert emitter.events[-1].event_type == "task_result"
+        assert emitter.events[-1].to_dict()["type"] == "task_result"
+
+    @pytest.mark.asyncio
+    async def test_emitter_legacy_done_method_does_not_emit_done_event(self):
+        emitter = ACPEventEmitter("test-session")
+        await emitter.on_done("result")
+        assert emitter.events[-1].event_type == "task_result"
+        assert emitter.events[-1].to_dict()["type"] != "done"
 
 
-# ── Session Manager Tests ──
 
 class TestACPSessionManager:
     @pytest.mark.asyncio
@@ -243,3 +255,19 @@ class TestACPServer:
     async def test_extract_text_fallback(self):
         msg = {"text": "fallback"}
         assert ACPServer._extract_text(msg) == "fallback"
+
+@pytest.mark.asyncio
+async def test_acp_server_no_response_does_not_emit_task_result():
+    from caveman.acp.server import ACPServer
+
+    async def empty_agent(text: str):
+        return ""
+
+    server = ACPServer(agent_fn=empty_agent)
+    msg = {"role": "user", "parts": [{"type": "text", "text": "silent"}]}
+    result = await server.handle_create_task(msg)
+    assert result["status"] == "no_response"
+    assert result["result"] is None
+    event_types = [evt.to_dict()["type"] for evt in server._tasks[result["id"]].emitter.events]
+    assert "task_result" not in event_types
+    assert "status" in event_types

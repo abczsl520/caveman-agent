@@ -1,10 +1,18 @@
 # Caveman — Product Requirements Document (PRD)
 
-> **Version:** 6.5
-> **Date:** 2026-04-21
+> **Version:** 6.13
+> **Date:** 2026-04-24
 > **Author:** The Caveman Team
-> **Status:** v0.4.1 — 399 files, 72,500+ LOC, 2,929 tests, 417+ commits ✅
+> **Status:** v0.4.1 — 399 files, 75,800+ LOC, 2,929+ tests, 417+ commits ✅
 > **Changelog:**
+> - v6.13 — 继续 PRD×代码内容核验（非文件名判断）：复核 #22/#24/#25/#28-#33 与 v1.0 Gate。确认 #22 只有 `MetadataKeys` 常量、无 `store()` 写入类型校验/WARNING；#24 的 LLM quality_gate 只在 `SQLiteMemoryStore` 底层参数存在，`MemoryManager.with_sqlite`/memory provider/agent factory/config 尚未接线；#25 有事件链与多 session E2E 片段，但没有 PRD 要求的 10-turn Shield→Nudge→Ripple→Lint→Recall 单测；#28/#29 有训练/评估模块但训练依赖未随 embedding extra 产品化、无 LOCOMO≥65%、CLI `--eval-only` 与自动选优；#30-#33 仍缺三平台安装耗时（且包名 `caveman-agent` 与 PRD `pip install caveman` 不一致）、文档站/API reference、CI lint/type/coverage gate、3 个非作者 Day1-7 试用。v1.0 Gate 中“Schema 迁移框架可用”已由 #20 证据满足，清单改为已勾；Executive Summary 的“下一步”改为真实剩余闭环。
+> - v6.12 — 继续 PRD×代码内容核验（非文件名判断）：修正 §7.2 Roadmap 表中过时状态。#21 `last_accessed` 已有独立列、v2 migration、metadata 回填、索引和 recall 排序/写回，标为核心落地；#23 RetrievalLog 已从 JSONL 升级为 SQLite（`retrieval_log.sqlite`），含 query/results/source/adopted_ids/latency_ms/timestamp，并接入 MemoryManager/RecallEngine/doctor，标为落地；#24 quality_gate 已有可选 LLM judge 底层、拒绝率统计和 SQLite store 参数接入，但尚未从 config/factory 暴露产品开关，标为“核心实现已落地，产品接线未完成”。同步 §10.3 训练管道状态，保留 #22/#25/#28/#29/#30-#33 为部分/未完成。
+> - v6.11 — 长期主义/最高复利校正真实 80 工具调用上限：定位并移除 gateway `task_runner_helpers.py` 中隐藏 `_MAX_TOOL_CALLS = 80` hard cap；新增 `gateway.limits.max_tool_calls` 显式可选预算，默认 `null` 表示不按工具调用数任意截断；预算耗尽文案明确“任务未判定完成，可继续/提高预算”，不再伪装成功；保留 idle/absolute timeout、进度心跳、stuck-loop 检测作为防跑飞机制。新增 `tests/test_gateway_tool_budget.py` 覆盖默认 81+ 工具调用不中断、显式预算暂停、null/大预算配置。定向验证：87 passed。
+> - v6.10 — 完成标记/提前 done 根因修复：`output_validator` 不再仅凭复杂度/工具调用数自动追加 `✅---本轮已完成---✅`，只规范化模型明确尝试收尾的格式；`loop.py`/`loop_engines.py` 改为 tool_calls 优先于文本完成标记，防止模型一边说 done 一边吞掉未执行工具；新增/更新 `test_output_validator.py`、`test_closing_termination.py`、`test_e2e_dryrun.py` 回归测试，覆盖“缺少显式收尾不自动补 done”和“完成标记+tool_call 时仍执行工具”。定向验证：75 passed。#24 quality_gate LLM、#25 10-turn E2E 等仍未虚标完成。
+> - v6.9 — 元飞轮返工解决未完成愿景 #26 核心闭环：新增 `caveman/memory/judge.py`，`phase_finalize` 对 recalled memories 改为 LLM Judge 优先判定 helpful/unhelpful，失败或未配置时使用保守启发式兜底；SQLite `mark_helpful()` 写入 judge metadata（mode/confidence/reason）用于审计；补 `MemoryManager.backend` 公共只读访问器和 6 个 memory self-audit 测试，57 个关联测试全绿。PRD 同步标记 #26 为“已实现核心”，但 #24 quality_gate LLM 模式、#25 10-turn E2E 仍未虚标完成。
+> - v6.8 — 元飞轮解决未完成愿景 #20：落地 memory schema 版本化迁移核心能力。新增 `schema_version` 表、numbered migration registry、事务回滚、`caveman migrate --dry-run/--apply`，测试覆盖 dry-run/apply/失败回滚；PRD Roadmap 将 Schema 迁移框架从“未完成”更新为“已实现核心”。
+> - v6.7 — 长期主义/最高复利校正：移除误伤自进化的任意 iteration 安全上限。`agent.max_iterations` / `delegation.max_iterations` 改为只有下限、无拍脑袋上限；flywheel 默认每轮预算从 15 提升到 50，和常规 Agent 一致；PRD 标记“安全上限误判”已处理，保留由用户/配置显式控制预算。
+> - v6.6 — 愿景落地审计（基于 PRD + 代码内容，不只看文件名）：补充 §7.2.1 Roadmap 代码核验状态，标记 Round 13-16 中已完成/部分完成/未完成项；同步 §10.3 训练管道实现状态；修正“下一步”表述，避免把 schema_version/migrate CLI/LLM Judge/外部用户测试等未落地愿景误当完成。
 > - v6.5 — 架构重构 Round（arch/refactor-v1）：统一 message splitting 全链路（4 实现 → 1 canonical + delegates）、file_ops/terminal/web_search v1/v2 合并（first-wins 去重 + 死注册清理）、context_references compat shim、platform_delivery.truncate_message 统一到 message_splitting。25 子系统、399 文件、72.5K LOC、2929 测试、410 commits。零回归。
 > - v6.4 — §8.8.4.1 Session 知识提取（openclaw-sessions）：三层管线从 OpenClaw session JSONL 对话中提取高价值知识（研究/诊断/架构/方案/教训/决策），用户 opt-in，支持规则提取和 LLM 增强。US-601b 新增。实测 124 session → 507 条知识。
 > - v6.3 — 补强 6 大维度：§8.9 数据模型/Schema 定义、§8.10 关键接口契约（27 种事件 payload）、§8.11 可观测性架构（三层）、§8.12 升级迁移策略、Round 13-16 路线图（含 v1.0 发布标准）、User Stories 扩充（US-4xx 错误恢复 + US-5xx 边界场景 + US-6xx 迁移）。所有内容基于实际代码，不拍脑袋。
@@ -31,7 +39,7 @@
 
 **v0.4.0 已验证：** 187 Python 文件 / 28,909 LOC / 1,499 tests / 209 commits。元飞轮 Round 107-130 完成内层飞轮事件链、Confidence 闭环、HybridScorer 集成、跨语言检索、技能进化、Nudge 事件驱动。
 
-**下一步：** Round 13 数据基础设施（Schema 版本化 + 迁移框架 + 检索日志）→ Round 14 LLM judge + 飞轮闭环验证 → Round 15 embedding 训练管道 → Round 16 v1.0 发布准备。
+**下一步：** 不是再从 Round 13 重跑一遍，而是收敛剩余闭环：#22 metadata 写入校验/WARNING、#24 quality_gate LLM 产品接线、#25 10-turn 飞轮全链路验收、#28/#29 Embedding LOCOMO/等价门槛 + CLI 一键 A/B + 自动选优、#30-#33 v1.0 发布工程（安装验证、文档站/API reference、CI lint/type/coverage gate、外部用户试用）。
 
 
 ## 术语表（Glossary）
@@ -561,7 +569,40 @@ Session 运行中
 
 10 个 Phase 构建了全部 17 核心模块，7 轮优化从 Bug修复→结构性债务→常量统一→事件驱动→开发体验→结缔组织→真流式，将代码从 61files/4KLOC/49tests 提升到 94files/11KLOC/214tests。Round 8-12 实现 Agent OS 内核，97files/18KLOC/446tests。Round 107-130 元飞轮打磨，最终 187files/29KLOC/1499tests。详见附录 B。
 
-### 7.2 下一步：Agent OS 内核路线图
+### 7.2 Roadmap 代码核验状态（2026-04-24 审计）
+
+> **审计口径：** 本节不是按文件名判断，而是逐项查了 PRD 验收标准对应的代码路径、CLI 参数、测试和实现注释。状态含义：✅ 已按愿景落地；🟡 已有可用实现但未达到原验收口径；⏳ 尚未落地/仍是愿景。
+
+| Round / 项 | PRD 愿景 | 代码核验证据 | 状态 | 还差什么 |
+|-----------|----------|--------------|------|----------|
+| Round 13 #20 | `schema_version` 表 + numbered migrations + `caveman migrate --dry-run` + 失败回滚 | `caveman/memory/store_helpers.py` 已有 `schema_version` 表、`SCHEMA_VERSION = 2`、numbered `_MIGRATIONS`、事务迁移和失败 rollback；`caveman/cli/migrate.py` + `caveman migrate --dry-run/--apply` 已落地；`tests/test_memory_migrations.py` 覆盖 dry-run、apply、失败回滚、v2 `last_accessed` 回填 | ✅ 已实现 | 后续按新 schema 变更继续追加 v3+ migration 函数/测试 |
+| Round 13 #21 | `last_accessed` 独立列 + 旧 metadata 回填 + HybridScorer/查询路径可读 | `_SCHEMA` 已含 `last_accessed TEXT` 和 `idx_memories_last_accessed`；`store_helpers._migration_002_last_accessed_column()` 从旧 `metadata_json.last_accessed` 回填到独立列；`SQLiteMemoryStore.recall()` 批量更新列并同步 metadata；fallback/related/FTS/vector 查询都 select `last_accessed` 并经 `row_to_entry()` 注入 metadata，fallback/recent 按 `COALESCE(last_accessed, created_at)` 排序；`tests/test_memory_migrations.py::test_memory_schema_migration_backfills_last_accessed_from_metadata` 覆盖回填 | ✅/🟡 已实现核心 | HybridScorer API 仍消费 `MemoryEntry.metadata["last_accessed"]`，但底层来源已是列；若要完全达成“直读列”表述，可后续给 MemoryEntry 增加一等字段 |
+| Round 13 #22 | metadata well-known keys 类型校验 | `caveman/memory/types.py` 有 `MetadataKeys` 常量；未发现 `store()` 写入时类型校验和 WARNING 逻辑 | 🟡 部分完成 | 写入校验器 + warning 测试 |
+| Round 13 #23 | 检索日志写入 SQLite，含 query/results/latency_ms，`caveman doctor` 可查询 | `caveman/training/retrieval_log.py` 默认写 `~/.caveman/training/retrieval_log.sqlite`，建 `retrieval_log` 表，字段含 query/results_json/source/adopted_ids_json/latency_ms/timestamp；`MemoryManager.recall()` 与 `RecallEngine` 记录 latency；`RetrievalLog.stats()` 被 `caveman/cli/doctor.py` 展示为 Retrieval Log 检查；`tests/test_training_pivot_fixes.py` 覆盖 log/read/stats/training pairs/MemoryManager 接入 | ✅ 已实现 | 后续可补“按 query 明细查询/导出”的 doctor 子命令，但原验收口径已满足 |
+| Round 14 #24 | LLM Judge 替代 heuristic quality_gate | `caveman/memory/quality_gate.py` 已有 `check_quality_async(..., llm_fn, use_llm=True)`，硬规则先挡明显垃圾，再用 LLM JSON `{accept, reason}` 判断长期记忆价值；`QualityGateStats` 统计 heuristic/LLM checked/rejected/failed 和拒绝率；`SQLiteMemoryStore` 已接受 `quality_llm_fn`/`use_llm_quality_gate` 并在 store 前调用；但 `MemoryManager.with_sqlite()`、`BuiltinMemoryProvider.initialize()`、`agent.factory.create_agent()` 和 `config/default.yaml` 均未向上暴露/传递该开关，也缺少 LLM quality_gate 单测 | ✅/🟡 核心实现已落地，产品接线未完成 | config/factory/provider 开关、LLM provider wiring、成本统计、LLM 分支测试、doctor/metrics 展示 |
+| Round 14 #25 | 端到端飞轮验证 | 已有 `tests/test_event_chain.py`、`tests/test_prd_audit.py`、`tests/test_flywheel_chain4.py` 等覆盖事件链/飞轮片段；未见 PRD 所述“10 轮对话全链路”验收测试 | 🟡 部分完成 | 增加 10-turn E2E：Shield→Nudge→Ripple→Lint→Recall |
+| Round 14 #26 | LLM judge helpful/unhelpful 直接写 trust_score，替代旧 ConfidenceTracker | `caveman/memory/judge.py` 新增 `MemoryJudge`；`phase_finalize()` 对 recalled memories 使用 LLM Judge 判定 helpful/unhelpful，并通过 SQLite `mark_helpful(metadata=...)` 写入 `judge_mode/judge_confidence/judge_reason`；无 LLM 或失败时才走保守启发式兜底；`tests/test_memory_self_audit.py` 覆盖 LLM JSON 解析、metadata 写回、启发式兜底 | ✅/🟡 已实现核心 | 后续把 judge 决策统计接入 doctor/metrics，并与 #24 quality_gate LLM 模式统一成本统计 |
+| Round 15 #27 | 检索日志 → query-memory 训练对 | `RetrievalLog.generate_training_pairs()` + `PairExtractor.extract_from_retrieval_log()` 已实现；`caveman train --target embedding --dry-run` 可构建数据集；没有 `caveman train --prepare` 独立参数 | ✅/🟡 已实现核心，CLI 名称不同 | 如坚持 PRD 验收口径，补 `--prepare` 别名 |
+| Round 15 #28 | 本地 embedding 微调 nomic/bge，LOCOMO ≥65% | `EmbeddingTrainer` 用 sentence-transformers 微调；`memory.embedding` 支持 local；但 `pyproject.toml` 的 `embedding` extra 只有 fastembed/jieba，未包含 sentence-transformers 训练依赖；未见 LOCOMO 自动评估 ≥65% | 🟡 部分完成 | 训练依赖产品化、LOCOMO 或等价基准数据 + 门槛测试 |
+| Round 15 #29 | A/B 评估框架，微调前后 recall@5 对比，自动选更优 | `EmbeddingEvaluator` 有 Recall@5/10、MRR、HitRate@5 和 compare 报告；未接入 CLI `--eval-only`（docstring 提到但 `train` 参数没有），也未自动选择更优模型 | 🟡 部分完成 | CLI eval-only、before/after 自动跑、模型选择策略 |
+| Round 16 #30 | `pip install caveman && caveman setup` 三平台 <3min | 有 `setup()` 配置向导；`pyproject.toml` 包名/README Quick Start 是 `caveman-agent`，与 PRD 验收命令 `pip install caveman` 不一致；未见 macOS/Ubuntu/WSL2 安装耗时自动验证 | 🟡 部分完成 | 包名/安装命令决策，三平台安装 smoke benchmark |
+| Round 16 #31 | README + 文档站/API 参考 | README 已有 Quick Start/Architecture；`docs/` 有 ARCHITECTURE/ADR/MCP/IMPORT_SPEC；未见文档站 | 🟡 部分完成 | docs site/API reference 发布 |
+| Round 16 #32 | GitHub Actions CI + pytest/lint/type check + coverage ≥80% | `.github/workflows/ci.yml` 已跑 pytest 和 CLI smoke；未跑 lint/type check/coverage gate | 🟡 部分完成 | ruff/mypy/coverage ≥80% gate |
+| Round 16 #33 | 3 个非作者用户 Day 1-7 试用 | 代码/文档未见外部用户试用记录 | ⏳ 未完成 | 招募/记录 3 个用户 7 天反馈 |
+
+**当前最大未完成愿景（按产品价值排序）：**
+1. **LLM Judge quality_gate 产品接线（#24）** — 底层 `check_quality_async` + LLM JSON judge + 拒绝率统计 + SQLite store 参数已经落地，但还没从 `MemoryManager.with_sqlite`/provider/config/factory 暴露开关，也缺 LLM 分支测试和成本/doctor 展示；下一步是把“能用的内核能力”变成默认可配置产品能力。
+2. **端到端飞轮验证（#25）** — 需要补 10-turn 自动化验收：Shield→Nudge→Ripple→Lint→Recall 全链路通过，证明飞轮不是片段可用。
+3. **v1.0 Gate 的发布工程** — CI 质量门、安装验证、文档站、外部用户试用仍未完成。
+4. **Embedding 评估闭环** — 训练/评估模块已可用，检索日志也已 SQLite 化；但训练依赖未随产品 extra 完整声明，还没形成 CLI 一键 A/B + 自动选优，也没有 LOCOMO/等价基准门槛。
+
+**2026-04-24 复利校正：安全上限误判已处理 ✅**
+- 问题：`agent.max_iterations` 被配置校验硬性限制在 1000，`delegation.max_iterations` 被限制在 200，flywheel CLI 默认每轮只有 15 次 LLM/tool 迭代；另有真实运行层面的 gateway 隐藏 `_MAX_TOOL_CALLS = 80`，会在单次任务执行到 80 个工具调用时直接暂停。对普通短任务看似“安全”，但对元飞轮、全局审计、跨模块修复这类长期复利任务，会把深度执行误判为风险并提前截断。
+- 决策：不保留拍脑袋的任意上限。安全不靠隐藏 hard cap，而靠用户/配置显式预算、进度汇报、测试验证、权限边界、stuck-loop 检测、idle/absolute timeout 和可观测性。
+- 代码状态：`caveman/config/validator.py` 已支持 `(min, None)` 范围；`agent.max_iterations` / `delegation.max_iterations` 只有下限无任意上限；`caveman/cli/flywheel.py` 与 `caveman/cli/utility_commands.py` 的 flywheel 默认预算已提升到 50；`caveman/gateway/task_runner_helpers.py` 已移除隐藏 80 工具调用 hard cap；`caveman/config/default.yaml` 新增 `gateway.limits.max_tool_calls: null`，仅当用户显式设置正整数预算时才按工具调用数暂停，且文案明确“任务未判定完成，可继续/提高预算”。测试覆盖“大预算不报警”、flywheel 默认预算、默认 81+ 工具调用不中断、显式工具预算暂停、null 表示无限制。
+- 原则：长期主义 + 最高复利 > 过度保守的局部安全感。预算应可调、可审计、可扩展，而不是阻断自进化。
+
+### 7.3 下一步：Agent OS 内核路线图
 
 > **排序原则：** 内核先稳定，用户态再丰富。先让 kernel 能 boot，再让 shell 好用。
 
@@ -658,7 +699,7 @@ Session 运行中
 **v1.0 发布标准（Round 16 验收后）：**
 - [ ] 安装 < 3 分钟（3 个 OS）
 - [ ] 飞轮端到端测试通过
-- [ ] Schema 迁移框架可用
+- [x] Schema 迁移框架可用（#20 已落地：`schema_version`、numbered migrations、`caveman migrate --dry-run/--apply`、失败回滚测试）
 - [ ] 3 个外部用户完成 7 天试用
 - [ ] README + 文档站上线
 - [ ] CI 绿灯 + 覆盖率 ≥ 80%
@@ -1535,6 +1576,20 @@ def down(conn):
 | 数据导出 | 供研究者 SFT/RL | 高质量轨迹 (quality_score ≥0.7) | P1 |
 | 技能 RL | 技能路由优化 | 技能使用反馈 | P2 |
 | 推理模型 SFT/RL | ~~替代云端模型~~ → 仅作研究用途 | 轨迹 + Verification 对 | P3（降级） |
+
+### 10.3 训练管道代码核验状态（2026-04-24）
+
+| 能力 | 实现证据 | 状态 | 备注 |
+|------|----------|------|------|
+| 轨迹导出 | `caveman export` + `TrajectoryRecorder.batch_export()`；SFT 数据集支持 ShareGPT/ChatML/OpenAI | ✅ | 符合“供研究者使用”的出口 |
+| Embedding 训练对生成 | `RetrievalLog.generate_training_pairs()`、`PairExtractor.extract_from_retrieval_log()`；fallback 到 trajectories；RetrievalLog 已是 SQLite 表并记录 latency/source/adoption | ✅ | 主数据源已从“对话 Q&A”修正为“真实检索日志”，且可被 doctor 统计 |
+| Embedding 微调 | `EmbeddingTrainer` 基于 sentence-transformers；默认 nomic，可传 bge 等模型 | 🟡 | 训练代码存在；但 sentence-transformers 未纳入 `embedding` extra，未完成 LOCOMO 门槛验证 |
+| 本地 embedding provider | `memory.embedding.get_embedding_fn("local")` 与相关测试 | ✅ | 支持加载本地微调模型 |
+| Embedding 评估 | `EmbeddingEvaluator` 支持 Recall@5/10、MRR、HitRate@5、before/after compare；`tests/test_training_pivot_fixes.py` 覆盖 eval set 和 compare 报告 | 🟡 | 模块有；CLI `--eval-only` 尚未接上，也未自动选优 |
+| A/B 自动选优 | 未见自动选择更优模型逻辑 | ⏳ | 仍是愿景 |
+| 推理模型 SFT/RL | `training.sft` / `training.rl` 以 mock/fallback 和数据导出为主 | ✅（按降级后定位） | 不再作为替代 Claude 的核心目标 |
+
+**文档标记结论：** §10 的方向是对的，检索日志/训练对/本地 embedding provider/评估基础设施均已落地；但“训练依赖产品化 + Embedding 微调 + LOCOMO/等价门槛 + CLI 一键 A/B + 自动选优”还不是闭环产品能力。
 
 
 

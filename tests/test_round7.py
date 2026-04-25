@@ -155,6 +155,24 @@ def test_openai_build_params_no_tools():
     assert "tool_choice" not in params
 
 
+def test_openai_gpt55_uses_max_reasoning_effort():
+    """GPT-5.5 should request the strongest reasoning effort by default."""
+    from caveman.providers.openai_provider import OpenAIProvider
+    p = OpenAIProvider(api_key="test", model="gpt-5.5")
+    params = p._build_params(messages=[{"role": "user", "content": "hi"}])
+    assert params["max_completion_tokens"] == p.max_tokens
+    assert "max_tokens" not in params
+    assert params["reasoning_effort"] == "high"
+
+
+def test_openai_gpt4o_does_not_send_reasoning_effort():
+    """Non-reasoning OpenAI models should keep the old request shape."""
+    from caveman.providers.openai_provider import OpenAIProvider
+    p = OpenAIProvider(api_key="test", model="gpt-4o")
+    params = p._build_params(messages=[{"role": "user", "content": "hi"}])
+    assert "reasoning_effort" not in params
+
+
 # ── Provider no longer buffers stream for retry ──
 
 def test_anthropic_complete_no_buffer_retry():
@@ -190,7 +208,7 @@ def test_provider_base_requires_build_params():
         def context_length(self): return 1000
         def _get_client(self): return None
         async def complete(self, messages, **kwargs):
-            yield {"type": "done"}
+            yield {"type": "message_stop"}
 
     with pytest.raises(TypeError, match="_build_params"):
         IncompleteProvider()

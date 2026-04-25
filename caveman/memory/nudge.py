@@ -193,6 +193,12 @@ class MemoryNudge:
                 "nudge_number": self._nudge_count,
             },
         )
+        if not mid:
+            logger.info(
+                "Nudge candidate rejected by memory store: %s",
+                candidate["content"][:80],
+            )
+            return None
         return MemoryEntry(
             id=mid, content=candidate["content"],
             memory_type=mem_type, created_at=datetime.now(),

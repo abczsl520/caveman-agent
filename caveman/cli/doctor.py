@@ -107,10 +107,13 @@ async def run_doctor(config_dir: str | None = None) -> DoctorReport:
 
     # --- Memory health ---
     mem_dir = base / "memory"
-    mm = MemoryManager(base_dir=mem_dir)
-    await mm.load()
+    mm = MemoryManager.with_sqlite(base_dir=mem_dir)
     total = mm.total_count
-    type_counts = {mt.value: len(mm._memories.get(mt, [])) for mt in MemoryType}
+    backend = getattr(mm, "_backend", None)
+    if backend and hasattr(backend, "type_counts"):
+        type_counts = backend.type_counts()
+    else:
+        type_counts = {mt.value: 0 for mt in MemoryType}
 
     if total == 0:
         report.add_check("Memory", "warn", "No memories yet \u2014 flywheel cold start")
@@ -199,6 +202,22 @@ async def run_doctor(config_dir: str | None = None) -> DoctorReport:
             f"{len(session_files)} session essences stored")
     else:
         report.add_check("Shield Sessions", "info", "No sessions yet")
+
+    # --- Retrieval log (training/evaluation data foundation) ---
+    try:
+        from caveman.training.retrieval_log import RetrievalLog
+        retrieval_stats = RetrievalLog().stats()
+        count = retrieval_stats.get("count", 0)
+        avg_latency = retrieval_stats.get("avg_latency_ms")
+        by_source = retrieval_stats.get("by_source", {})
+        detail = f"{count} events"
+        if avg_latency is not None:
+            detail += f", avg latency {avg_latency:.1f}ms"
+        if by_source:
+            detail += f", sources {by_source}"
+        report.add_check("Retrieval Log", "ok" if count else "info", detail)
+    except Exception as e:
+        report.add_check("Retrieval Log", "warn", f"Unavailable: {e}")
 
     # --- Scheduler stats ---
     report.add_check("LLM Scheduler", "info", "Stats available at runtime via scheduler.get_stats()")

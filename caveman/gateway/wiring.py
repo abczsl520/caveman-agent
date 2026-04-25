@@ -27,7 +27,7 @@ def wire_gateway(server: GatewayServer) -> dict[str, Any]:
             logger.debug("Wired: %s", name)
         except Exception as e:
             failed.append(f"{name}: {e}")
-            logger.debug("Skip %s: %s", name, e)
+            logger.warning("Gateway wiring skipped %s: %s", name, e, exc_info=True)
 
     # --- Message processing pipeline ---
 
@@ -97,31 +97,43 @@ def wire_gateway(server: GatewayServer) -> dict[str, Any]:
 # ── Individual wiring functions ──────────────────────────────────────────
 
 def _wire_processor(server) -> Any:
+    """Expose MessageProcessor for tests/legacy callers that provide an adapter.
+
+    Live BasePlatformAdapter instances already own the message lifecycle and call
+    GatewayServer.handle_task via set_message_handler(); constructing a standalone
+    MessageProcessor without an adapter fails and silently left the subsystem
+    half-wired. Keep a factory instead of a broken instance.
+    """
     from caveman.gateway.processor import MessageProcessor
-    proc = MessageProcessor()
-    server._processor = proc
-    return proc
+    server._processor_cls = MessageProcessor
+    return MessageProcessor
 
 
 def _wire_stream_consumer(server) -> Any:
+    """Expose StreamConsumer class; instances require per-message send/edit funcs."""
     from caveman.gateway.stream_consumer import StreamConsumer
-    consumer = StreamConsumer()
-    server._stream_consumer = consumer
-    return consumer
+    server._stream_consumer_cls = StreamConsumer
+    return StreamConsumer
 
 
 def _wire_outbound(server) -> Any:
+    """Expose OutboundDelivery; instances require a concrete platform adapter.
+
+    A server-level GatewayRouter is not an adapter and does not implement the
+    BasePlatformAdapter.send(chat_id, content, ...) contract, so constructing
+    OutboundDelivery(router=...) fails at startup. Adapters can instantiate this
+    class with themselves when they need outbound retry/chunk helpers.
+    """
     from caveman.gateway.outbound import OutboundDelivery
-    queue = OutboundDelivery(router=server.router)
-    server._outbound = queue
-    return queue
+    server._outbound_cls = OutboundDelivery
+    return OutboundDelivery
 
 
 def _wire_debounce(server) -> Any:
     from caveman.gateway.debounce import MessageDebouncer
-    pool = MessageDebouncer()
-    server._debounce = pool
-    return pool
+    debouncer = MessageDebouncer(server.handle_task)
+    server._debounce = debouncer
+    return debouncer
 
 
 def _wire_session_manager(server) -> Any:

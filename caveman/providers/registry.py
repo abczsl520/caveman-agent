@@ -184,6 +184,12 @@ def _create_provider(
     if base_url:
         kwargs["base_url"] = base_url
 
+    # OpenAI reasoning models: allow config to set effort, e.g.
+    # providers.openai.reasoning_effort: high
+    reasoning_effort = section.get("reasoning_effort")
+    if reasoning_effort is not None:
+        kwargs["reasoning_effort"] = reasoning_effort
+
     # Ollama special case: base_url defaults
     if spec.name == "ollama" and not base_url:
         from caveman.paths import DEFAULT_OLLAMA_URL

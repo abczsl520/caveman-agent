@@ -106,6 +106,13 @@ def create_loop(
 
     # Create memory manager (SQLite + FTS5 by default)
     scorer_config = mem_cfg.get("scorer", {})  # e.g. {"trust_weight": 0.3}
+    quality_cfg = mem_cfg.get("quality_gate", {}) or {}
+    q_mode = str(quality_cfg.get("mode", "heuristic")).lower()
+    use_llm_quality_gate = bool(quality_cfg.get("use_llm", False)) or q_mode == "llm"
+    # "off" disables only the optional LLM judge; security and hard heuristics
+    # still run in SQLiteMemoryStore to protect the flywheel from garbage/secrets.
+    if q_mode == "off":
+        use_llm_quality_gate = False
 
     # RetrievalLog — records every memory search for embedding training (PRD §5.2 Ring 6)
     from caveman.training.retrieval_log import RetrievalLog
@@ -115,6 +122,8 @@ def create_loop(
         base_dir=mem_dir, embedding_fn=embedding_fn,
         scorer_config=scorer_config,
         retrieval_log=retrieval_log,
+        quality_llm_fn=llm_fn if use_llm_quality_gate else None,
+        use_llm_quality_gate=use_llm_quality_gate,
     )
 
     # WorkspaceMemorySync: keep MEMORY.md etc. synced to vector DB (PRD §8.8.1)

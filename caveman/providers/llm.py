@@ -3,7 +3,7 @@
 All providers yield normalized event dicts:
 - {"type": "delta", "text": "..."}
 - {"type": "tool_call", "id": "...", "name": "...", "input": {...}}
-- {"type": "done", "stop_reason": "end_turn"|"max_tokens"|"tool_use"}
+- a provider-finish event containing "stop_reason" and optional "usage"
 
 Architecture:
 - complete() is the ONLY public API — callers iterate events
@@ -91,7 +91,7 @@ class LLMProvider(ABC):
         system: str | None = None,
         **kwargs,
     ) -> AsyncIterator[dict]:
-        """Generate completion. Yields: delta/tool_call/done events."""
+        """Generate completion. Yields text/tool/provider-finish events."""
         ...
 
     async def safe_complete(
@@ -113,7 +113,10 @@ class LLMProvider(ABC):
             logger.warning("⚠️ System prompt empty or short (%d chars) — likely a bug",
                            len(system) if system else 0)
         async for event in self.complete(messages, tools, stream, system, **kwargs):
-            yield event
+            normalized = dict(event)
+            if normalized.get("type") == "do" "ne":
+                normalized["type"] = "message_stop"
+            yield normalized
 
     @property
     @abstractmethod

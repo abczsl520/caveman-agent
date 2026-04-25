@@ -79,12 +79,65 @@ Use file_edit for surgical changes. Keep changes minimal.
 After fixing, run tests: bash -c "cd {project_dir} && {python} -m pytest tests/ -x -q --tb=short"
 """
 
+_TEST_PASS_RE = re.compile(
+    r"(?:\b\d+\s+passed\b|\ball\s+tests?\s+pass(?:ed)?\b|\btests?\s+pass(?:ed)?\b)",
+    re.IGNORECASE,
+)
+_FAILURE_RE = re.compile(
+    r"(?:\bFAILED\b|\bfailed\b|\btraceback\b|\berror:\s|\bexited with code\s+[1-9]|\btests?\s+fail(?:ed)?\b)",
+    re.IGNORECASE,
+)
+_NO_P0_RE = re.compile(r"(?:no\s+P0|P0\s*[:=-]\s*(?:0|none|no\s+issues?))", re.IGNORECASE)
+
+
+def _latest_commit(project: Path) -> str | None:
+    """Return current HEAD short hash, or None outside git repos."""
+    try:
+        return subprocess.check_output(
+            ["git", "log", "-1", "--format=%h"], cwd=str(project), text=True
+        ).strip()
+    except Exception:
+        return None
+
+
+def _evaluate_round_response(resp: str, before_commit: str | None, after_commit: str | None) -> dict:
+    """Conservative flywheel round evaluator.
+
+    A round is not successful merely because the agent returned text. It needs
+    objective completion evidence: tests passed, a commit changed, or a clean
+    audit that explicitly found no P0. This prevents "done/fixed" language from
+    inflating flywheel progress.
+    """
+    mentions_no_p0 = bool(_NO_P0_RE.search(resp))
+    raw_p0 = len(re.findall(r'\bP0\b', resp))
+    p0 = 0 if mentions_no_p0 else raw_p0
+    p1 = len(re.findall(r'\bP1\b', resp))
+    p2 = len(re.findall(r'\bP2\b', resp))
+    tests_passed = bool(_TEST_PASS_RE.search(resp))
+    failure = bool(_FAILURE_RE.search(resp))
+    commit_changed = bool(before_commit and after_commit and before_commit != after_commit)
+
+    success = (not failure) and (commit_changed or tests_passed or mentions_no_p0)
+
+    fixed = 1 if commit_changed else 0
+    return {
+        "p0": p0,
+        "p1": p1,
+        "p2": p2,
+        "fixed": fixed,
+        "success": success,
+        "tests_passed": tests_passed,
+        "commit_changed": commit_changed,
+        "failure_detected": failure,
+        "explicit_no_p0": mentions_no_p0,
+    }
+
 
 async def run_flywheel(
     rounds: int = 5,
     target: str | None = None,
     project_dir: str | None = None,
-    max_iterations: int = 15,
+    max_iterations: int = 50,
 ) -> dict:
     """Run the meta-flywheel: Caveman audits and fixes itself."""
     import sys
@@ -111,23 +164,18 @@ async def run_flywheel(
         )
 
         try:
+            before_commit = _latest_commit(project)
             result = await loop.run(prompt)
             resp = result.get("response", str(result)) if isinstance(result, dict) else str(result)
             duration = time.time() - round_start
 
-            # Parse P0/P1/P2 counts from response
-            p0 = len(re.findall(r'\bP0\b', resp))
-            p1 = len(re.findall(r'\bP1\b', resp))
-            p2 = len(re.findall(r'\bP2\b', resp))
-            fixed = len(re.findall(r'(?:fixed|修复|✅)', resp, re.IGNORECASE))
-
-            # Get latest commit hash
-            try:
-                commit = subprocess.check_output(
-                    ["git", "log", "-1", "--format=%h"], cwd=str(project), text=True
-                ).strip()
-            except Exception:
-                commit = None
+            after_commit = _latest_commit(project)
+            evaluation = _evaluate_round_response(resp, before_commit, after_commit)
+            p0 = evaluation["p0"]
+            p1 = evaluation["p1"]
+            p2 = evaluation["p2"]
+            fixed = evaluation["fixed"]
+            commit = after_commit
 
             stats_tracker.record(
                 round_num=i + 1, target=subsystem,
@@ -139,8 +187,11 @@ async def run_flywheel(
                 "round": i + 1,
                 "subsystem": subsystem,
                 "result": resp[:500],
-                "success": True,
+                "success": evaluation["success"],
                 "p0": p0, "p1": p1, "p2": p2, "fixed": fixed,
+                "tests_passed": evaluation["tests_passed"],
+                "commit_changed": evaluation["commit_changed"],
+                "failure_detected": evaluation["failure_detected"],
                 "duration_s": round(duration, 1),
             })
         except Exception as e:
@@ -158,7 +209,7 @@ async def run_flywheel(
     }
 
 
-def run_flywheel_sync(rounds: int = 5, target: str | None = None, max_iterations: int = 15) -> None:
+def run_flywheel_sync(rounds: int = 5, target: str | None = None, max_iterations: int = 50) -> None:
     """Synchronous wrapper for CLI."""
     result = asyncio.run(run_flywheel(rounds=rounds, target=target, max_iterations=max_iterations))
     print(f"\n{'='*50}")
@@ -273,7 +324,7 @@ def flywheel_cli(
     all_: bool = False,
     parallel: list[str] | None = None,
     rounds: int = 5,
-    max_iter: int = 15,
+    max_iter: int = 50,
     stats: bool = False,
 ) -> None:
     """Dispatch flywheel CLI subcommands."""

@@ -46,11 +46,11 @@ class MockLLMProvider(LLMProvider):
             yield {"type": "tool_call", "id": "tc_001", "name": "file_write",
                    "input": {"path": str(self._tmp_path / "test_output.txt"),
                              "content": "Hello from integration test!"}}
-            yield {"type": "done", "stop_reason": "tool_use"}
+            yield {"type": "message_stop", "stop_reason": "tool_use"}
         else:
             # Second call: return final text
             yield {"type": "delta", "text": "File written successfully."}
-            yield {"type": "done", "stop_reason": "end_turn"}
+            yield {"type": "message_stop", "stop_reason": "end_turn"}
 
 
 @pytest.mark.asyncio
@@ -114,7 +114,7 @@ class MockLLMProviderDirect(LLMProvider):
 
     async def complete(self, messages, tools=None, stream=True, system=None, **kwargs):
         yield {"type": "delta", "text": "The answer is 42."}
-        yield {"type": "done", "stop_reason": "end_turn"}
+        yield {"type": "message_stop", "stop_reason": "end_turn"}
 
 
 @pytest.mark.asyncio

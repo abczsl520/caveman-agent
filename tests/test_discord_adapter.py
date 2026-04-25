@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 from typing import Any, Dict, Optional
 
 from caveman.gateway.platform_types import (
@@ -190,6 +190,25 @@ class TestBuildEvent:
         assert event.message_type == MessageType.PHOTO
         assert len(event.media_urls) == 1
         assert "photo.jpg" in event.text
+
+    @pytest.mark.asyncio
+    async def test_no_response_clears_processing_without_terminal_reaction(self):
+        adapter = DiscordAdapter(_make_config())
+        adapter._client = MagicMock()
+        adapter._client.user = object()
+        raw_message = MagicMock()
+        raw_message.remove_reaction = AsyncMock()
+        raw_message.add_reaction = AsyncMock()
+        event = MessageEvent(
+            text="hello",
+            source=SessionSource(platform=Platform.DISCORD, chat_id="123"),
+            raw_message=raw_message,
+        )
+
+        await adapter.on_processing_complete(event, ProcessingOutcome.NO_RESPONSE)
+
+        raw_message.remove_reaction.assert_awaited_once_with("👀", adapter._client.user)
+        raw_message.add_reaction.assert_not_awaited()
 
 
 class TestSendResult:

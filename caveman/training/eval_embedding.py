@@ -30,11 +30,34 @@ class EvalResult:
     total_queries: int = 0
     model_path: str = ""
 
+    @property
+    def quality_score(self) -> float:
+        """Single gate score used for A/B model selection."""
+        if self.total_queries <= 0:
+            return 0.0
+        return (
+            self.recall_at_5 * 0.35
+            + self.recall_at_10 * 0.25
+            + self.mrr * 0.25
+            + self.hit_rate_at_5 * 0.15
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "recall_at_5": self.recall_at_5,
+            "recall_at_10": self.recall_at_10,
+            "mrr": self.mrr,
+            "hit_rate_at_5": self.hit_rate_at_5,
+            "total_queries": self.total_queries,
+            "model_path": self.model_path,
+            "quality_score": self.quality_score,
+        }
+
     def __str__(self) -> str:
         return (
             f"Recall@5={self.recall_at_5:.3f} Recall@10={self.recall_at_10:.3f} "
             f"MRR={self.mrr:.3f} HitRate@5={self.hit_rate_at_5:.3f} "
-            f"({self.total_queries} queries)"
+            f"Quality={self.quality_score:.3f} ({self.total_queries} queries)"
         )
 
 
@@ -80,6 +103,52 @@ class EmbeddingEvaluator:
                 })
 
         return eval_set
+
+    def evaluate_logged_results(self, model_path: str = "logged-baseline") -> EvalResult:
+        """Evaluate currently logged retrieval rankings without rerunning search.
+
+        This gives `caveman train --target embedding --eval-only` a deterministic
+        benchmark that works on any machine: adoption/high-score retrieval log
+        entries become ground truth, and their stored ranking is scored with the
+        same Recall@K/MRR/HitRate metrics used by live evaluation.
+        """
+        eval_set = self.build_eval_set()
+        if not eval_set:
+            return EvalResult(total_queries=0, model_path=model_path)
+
+        recall5: list[float] = []
+        recall10: list[float] = []
+        mrrs: list[float] = []
+        hits5: list[float] = []
+
+        for item in eval_set:
+            relevant = set(item["relevant_ids"])
+            ranked_ids = [r.get("memory_id", "") for r in item.get("all_results", [])]
+            if not relevant or not ranked_ids:
+                continue
+
+            top5 = set(ranked_ids[:5])
+            top10 = set(ranked_ids[:10])
+            recall5.append(len(relevant & top5) / len(relevant))
+            recall10.append(len(relevant & top10) / len(relevant))
+            hits5.append(1.0 if relevant & top5 else 0.0)
+
+            rr = 0.0
+            for rank, rid in enumerate(ranked_ids, 1):
+                if rid in relevant:
+                    rr = 1.0 / rank
+                    break
+            mrrs.append(rr)
+
+        n = len(mrrs)
+        return EvalResult(
+            recall_at_5=sum(recall5) / max(n, 1),
+            recall_at_10=sum(recall10) / max(n, 1),
+            mrr=sum(mrrs) / max(n, 1),
+            hit_rate_at_5=sum(hits5) / max(n, 1),
+            total_queries=n,
+            model_path=model_path,
+        )
 
     async def evaluate(
         self,
@@ -135,6 +204,59 @@ class EmbeddingEvaluator:
             total_queries=n,
         )
 
+    def improvement_decision(
+        self,
+        before: EvalResult,
+        after: EvalResult,
+        min_delta: float = 0.01,
+        min_queries: int = 1,
+    ) -> tuple[bool, str]:
+        """Return whether `after` should replace `before`.
+
+        The gate deliberately uses objective metrics only. A model is selected
+        only when both sides have enough queries and the weighted quality score
+        improves by at least `min_delta`.
+        """
+        if before.total_queries < min_queries or after.total_queries < min_queries:
+            return False, f"insufficient eval queries: before={before.total_queries}, after={after.total_queries}, required={min_queries}"
+        delta = after.quality_score - before.quality_score
+        if delta >= min_delta:
+            return True, f"quality improved by {delta:.3f} >= {min_delta:.3f}"
+        return False, f"quality delta {delta:.3f} < {min_delta:.3f}"
+
+    def write_selection(
+        self,
+        model_path: str | Path,
+        before: EvalResult,
+        after: EvalResult,
+        output_path: Path,
+        min_delta: float = 0.01,
+    ) -> bool:
+        """Persist selected embedding model only when the A/B gate passes."""
+        import json
+        from datetime import datetime
+
+        selected, reason = self.improvement_decision(before, after, min_delta=min_delta)
+        if not selected:
+            return False
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(
+            json.dumps(
+                {
+                    "selected_model_path": str(model_path),
+                    "selected_at": datetime.now().isoformat(),
+                    "reason": reason,
+                    "before": before.to_dict(),
+                    "after": after.to_dict(),
+                    "min_delta": min_delta,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        return True
+
     def compare(self, before: EvalResult, after: EvalResult) -> str:
         """Generate a comparison report between two eval results."""
         lines = ["## Embedding Training Evaluation"]
@@ -148,6 +270,7 @@ class EmbeddingEvaluator:
             ("Recall@10", before.recall_at_10, after.recall_at_10),
             ("MRR", before.mrr, after.mrr),
             ("HitRate@5", before.hit_rate_at_5, after.hit_rate_at_5),
+            ("Quality", before.quality_score, after.quality_score),
         ]:
             delta = a - b
             sign = "+" if delta >= 0 else ""

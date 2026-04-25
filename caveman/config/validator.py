@@ -15,6 +15,8 @@ from caveman.errors import ConfigError
 
 # ── Schema definition ──
 # Each field: {type, required, default, choices, range, description}
+# `range` accepts (min, max); either side may be None. A None max means
+# "no arbitrary upper bound" — important for long-compounding autonomous work.
 
 CONFIG_SCHEMA: dict[str, dict] = {
     "agent.default_model": {
@@ -25,8 +27,8 @@ CONFIG_SCHEMA: dict[str, dict] = {
     "agent.max_iterations": {
         "type": int,
         "default": 50,
-        "range": (1, 1000),
-        "description": "Max agent loop iterations",
+        "range": (1, None),
+        "description": "Max agent loop iterations (no arbitrary upper bound; tune by task budget)",
     },
     "providers.anthropic.api_key": {
         "type": str,
@@ -54,6 +56,12 @@ CONFIG_SCHEMA: dict[str, dict] = {
         "range": (100, 128000),
         "description": "Max output tokens for OpenAI",
     },
+    "providers.openai.reasoning_effort": {
+        "type": str,
+        "default": "high",
+        "choices": ["minimal", "low", "medium", "high"],
+        "description": "Reasoning effort for OpenAI reasoning models",
+    },
     "memory.backend": {
         "type": str,
         "default": "local",
@@ -69,6 +77,23 @@ CONFIG_SCHEMA: dict[str, dict] = {
         "default": "auto",
         "choices": ["auto", "openai", "ollama", "fastembed", "local", "none"],
         "description": "Embedding provider",
+    },
+    "memory.quality_gate.use_llm": {
+        "type": bool,
+        "default": False,
+        "description": "Use the active provider as an LLM judge for memory write quality after heuristic filters",
+    },
+    "memory.quality_gate.mode": {
+        "type": str,
+        "default": "heuristic",
+        "choices": ["heuristic", "llm", "off"],
+        "description": "Memory write quality gate mode",
+    },
+    "memory.quality_gate.timeout_seconds": {
+        "type": int,
+        "default": 8,
+        "range": (1, 60),
+        "description": "Timeout budget for LLM quality judging",
     },
     "skills.local_dir": {
         "type": str,
@@ -124,6 +149,12 @@ CONFIG_SCHEMA: dict[str, dict] = {
         "type": str,
         "description": "Telegram bot token",
     },
+    "gateway.limits.max_tool_calls": {
+        "type": int,
+        "nullable": True,
+        "range": (1, None),
+        "description": "Optional explicit per-task tool-call budget; omit/null for no arbitrary tool-count cap",
+    },
     # Compression
     "compression.threshold": {
         "type": float,
@@ -141,8 +172,8 @@ CONFIG_SCHEMA: dict[str, dict] = {
     "delegation.max_iterations": {
         "type": int,
         "default": 30,
-        "range": (1, 200),
-        "description": "Max iterations for delegated subtasks",
+        "range": (1, None),
+        "description": "Max iterations for delegated subtasks (no arbitrary upper bound; caller controls budget)",
     },
     "delegation.max_concurrent": {
         "type": int,
@@ -208,6 +239,10 @@ def validate_config(config: dict, strict: bool = True) -> list[str]:
         if value is _MISSING:
             continue  # Optional fields that aren't set
 
+        # Null explicitly disables optional limits (e.g. no arbitrary tool-count cap).
+        if value is None and schema.get("nullable", False):
+            continue
+
         # Type check
         expected_type = schema.get("type")
         if expected_type and not isinstance(value, expected_type):
@@ -219,8 +254,16 @@ def validate_config(config: dict, strict: bool = True) -> list[str]:
         value_range = schema.get("range")
         if value_range and isinstance(value, (int, float)):
             lo, hi = value_range
-            if not (lo <= value <= hi):
-                msg = f"Config '{path}': value {value} out of range [{lo}, {hi}]"
+            below_min = lo is not None and value < lo
+            above_max = hi is not None and value > hi
+            if below_min or above_max:
+                if hi is None:
+                    bound = f">= {lo}"
+                elif lo is None:
+                    bound = f"<= {hi}"
+                else:
+                    bound = f"[{lo}, {hi}]"
+                msg = f"Config '{path}': value {value} out of range {bound}"
                 warnings.append(msg)
 
         # Choices check

@@ -20,9 +20,9 @@ class TestStreamEvent:
         assert e.timestamp > 0
 
     def test_to_dict(self):
-        e = StreamEvent(type="done", data="result")
+        e = StreamEvent(type="result", data="result")
         d = e.to_dict()
-        assert d["type"] == "done"
+        assert d["type"] == "result"
         assert d["data"] == "result"
         assert "ts" in d
 
@@ -92,7 +92,7 @@ class TestRunStream:
         async def fake_complete(messages, system=None, tools=None, stream=True, **kw):
             yield {"type": "delta", "text": "Hello"}
             yield {"type": "delta", "text": " world"}
-            yield {"type": "done", "stop_reason": "end_turn", "usage": {"input_tokens": 10, "output_tokens": 5}}
+            yield {"type": "message_stop", "stop_reason": "end_turn", "usage": {"input_tokens": 10, "output_tokens": 5}}
 
         mock_provider.complete = fake_complete
         mock_provider.safe_complete = fake_complete
@@ -154,12 +154,93 @@ class TestRunStream:
 
             types = [e.type for e in events]
             assert "token" in types
-            assert "done" in types
+            assert "result" in types
             token_data = [e.data for e in events if e.type == "token"]
             assert "Hello" in token_data
 
     @pytest.mark.asyncio
-    async def test_run_stream_with_tool_calls(self):
+    async def test_run_stream_continues_obviously_truncated_final(self):
+        """A persisted half final like '- PR' must trigger continuation, not finalize."""
+        from caveman.agent.loop import AgentLoop
+
+        mock_provider = MagicMock()
+        mock_provider.model = "test-model"
+        mock_provider.context_length = 200_000
+        calls = 0
+
+        async def fake_complete(messages, system=None, tools=None, stream=True, **kw):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                yield {"type": "delta", "text": "元宝，我仔细对照了 PRD 和代码。\n\n📌 已更新 docs/PRD.md\n\n这次主要把几项状态标清楚了：\n\n- #21 last_accessed 已有独立列、migration、回填、索引和 recall 写回\n- #23 RetrievalLog 已从 JSONL 升级为 SQLite，并接入 MemoryManager/RecallEngine/doctor\n- #24 quality_gate 底层 LLM judge 已落地，但产品接线未完成\n- PR"}
+                yield {"type": "message_stop", "stop_reason": "end_turn", "usage": {}}
+            else:
+                yield {"type": "delta", "text": "D 已更新，剩余项会继续审计。"}
+                yield {"type": "message_stop", "stop_reason": "end_turn", "usage": {}}
+
+        mock_provider.complete = fake_complete
+        mock_provider.safe_complete = fake_complete
+
+        with patch("caveman.agent.loop.phase_prepare") as mock_prepare, \
+             patch("caveman.agent.loop.phase_finalize", new_callable=AsyncMock, side_effect=lambda task, final, *a, **k: final), \
+             patch("caveman.agent.loop.record_assistant_turn"):
+
+            mock_context = MagicMock()
+            mock_context.should_compress.return_value = False
+            mock_context.messages = []
+            mock_prepare.return_value = (mock_context, "system", [])
+
+            loop = AgentLoop.__new__(AgentLoop)
+            loop.provider = mock_provider
+            loop.max_iterations = 5
+            from caveman.agent.iteration_budget import IterationBudget
+            loop.budget = IterationBudget(5)
+            loop._fallback_chain = None
+            loop._last_activity_ts = 0.0
+            loop._last_activity_desc = ""
+            loop._current_tool = ""
+            loop.bus = MagicMock()
+            loop.bus.emit = AsyncMock()
+            loop.skill_manager = MagicMock()
+            loop.memory_manager = MagicMock()
+            loop.trajectory_recorder = MagicMock()
+            loop.trajectory_recorder.record_turn = AsyncMock()
+            loop._recall = MagicMock()
+            loop.engine_flags = MagicMock()
+            loop.tool_registry = MagicMock()
+            loop.tool_registry.get_schemas.return_value = []
+            loop.permission_manager = MagicMock()
+            loop.permission_manager.request = AsyncMock(return_value=True)
+            loop._tool_call_count = 0
+            loop._bg_skill_nudge = AsyncMock()
+            loop._nudge_task_ref = ""
+            loop._turn_number = 0
+            loop._turn_count = 0
+            loop._persistent_context = None
+            loop._system_prompt_cache = None
+            loop.surface = "cli"
+            loop.metrics = MagicMock()
+            loop._shield = None
+            loop._reflect = None
+            loop._nudge = MagicMock()
+            loop._lint = None
+            loop._ripple = None
+            loop._llm_fn = AsyncMock()
+            loop._check_termination = AsyncMock(return_value=True)
+            loop._post_task_engines = AsyncMock()
+            loop._offer_matching_skill = AsyncMock()
+            loop._record_turn_metrics = MagicMock()
+            loop._safe_bg = MagicMock()
+
+            events = []
+            async for event in loop.run_stream("audit PRD"):
+                events.append(event)
+
+        assert calls == 2
+        result_events = [e.data for e in events if e.type == "result"]
+        assert result_events == ["D 已更新，剩余项会继续审计。"]
+        assert any("最终回复看起来被截断" in str(call.args[1]) for call in mock_context.add_message.call_args_list)
+
         """Provider yields tool_call events, verify they propagate."""
         from caveman.agent.loop import AgentLoop
 
@@ -170,7 +251,7 @@ class TestRunStream:
         async def fake_complete(messages, system=None, tools=None, stream=True, **kw):
             yield {"type": "delta", "text": "Let me check..."}
             yield {"type": "tool_call", "id": "tc1", "name": "bash", "input": {"cmd": "ls"}}
-            yield {"type": "done", "stop_reason": "tool_use", "usage": {"input_tokens": 10, "output_tokens": 5}}
+            yield {"type": "message_stop", "stop_reason": "tool_use", "usage": {"input_tokens": 10, "output_tokens": 5}}
 
         mock_provider.complete = fake_complete
         mock_provider.safe_complete = fake_complete
@@ -235,7 +316,7 @@ class TestRunStream:
             types = [e.type for e in events]
             assert "token" in types
             assert "tool_call" in types
-            assert "done" in types
+            assert "result" in types
 
 
 # ── Gateway streaming ──────────────────────────────────────────────
@@ -262,7 +343,7 @@ class TestGatewayStreaming:
         async def fake_stream():
             yield StreamEvent(type="token", data="Hello")
             yield StreamEvent(type="token", data=" world")
-            yield StreamEvent(type="done", data="Hello world")
+            yield StreamEvent(type="result", data="Hello world")
 
         result = await gw.send_streaming("ch1", fake_stream())
         assert result["ok"] is True
@@ -287,7 +368,7 @@ class TestGatewayStreaming:
         gw = FakeGateway()
 
         async def empty_stream():
-            yield StreamEvent(type="done", data="")
+            yield StreamEvent(type="result", data="")
 
         result = await gw.send_streaming("ch1", empty_stream())
         assert result["ok"] is True

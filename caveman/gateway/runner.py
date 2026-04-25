@@ -1,16 +1,16 @@
 """Gateway runner — streaming session management for Discord/Telegram."""
 from __future__ import annotations
 import asyncio, logging
-import re
-import time
+import re, time
 from typing import Any, NamedTuple
 
 from caveman.agent.factory import create_loop
 from caveman.agent.session_store import SessionMeta
 from caveman.agent.session_db import SessionDB
 from caveman.config.loader import load_config
+from caveman.timeouts import TASK_DEFAULT, TASK_SHORT
 from caveman.gateway.router import GatewayRouter
-from caveman.gateway.task_runner import run_single_task
+from caveman.gateway.task_runner import run_single_task, AgentTaskError
 from caveman.gateway.infra import GatewayInfra
 from caveman.gateway.session_context import set_session_context, clear_session_context
 from caveman.gateway.message_pipeline import (
@@ -19,30 +19,16 @@ from caveman.gateway.message_pipeline import (
 from caveman.gateway.reply_queue import QueueManager
 from caveman.gateway.routing import resolve_route
 from caveman.paths import CAVEMAN_HOME
-from caveman.timeouts import TASK_DEFAULT, TASK_SHORT
+from caveman.gateway.transcript_cleaner import clean_transcript_message as _clean_transcript_message
 __all__ = ["SESSION_TTL", "GatewayServer", "run_gateway", "run_gateway_forever"]
 
 logger = logging.getLogger("caveman.gateway")
-# Patterns to clean legacy metadata injections from persisted transcripts.
-_TOOL_COUNT_PREFIX = re.compile(r"^(\[使用了\s*\d+\s*个工具调用\]\s*)+", re.MULTILINE)
-_FORMAT_REMINDER = re.compile(r"\n?\[Format:\s*\w+\s*—[^\]]*\]\s*$")
-_STYLE_RESET = re.compile(r"^\[Style reset\]\s*")
-_COMPACTION_NOTE = re.compile(r"\n*\[Note: Earlier turns compacted.*\]\s*$")
-
-def _clean_transcript_message(role: str, content: str) -> str | None:
-    """Clean legacy metadata injections from a transcript message."""
-    if not content: return content
-    if role == "assistant":
-        content = _TOOL_COUNT_PREFIX.sub("", content).lstrip()
-    elif role == "user":
-        content = _FORMAT_REMINDER.sub("", content).rstrip()
-    elif role == "system":
-        if _STYLE_RESET.match(content): return None
-        content = _COMPACTION_NOTE.sub("", content).rstrip()
-    return content
 
 _AUTO_MAX_ROUNDS = 20
-_AUTO_PATTERNS = re.compile(r'不要停|不间断|持续|一直|keep\s*going|don.t\s*stop|autonomous|auto.?continue', re.I)
+_AUTO_PATTERNS = re.compile(
+    r'继续\s*飞轮|自动第\s*\d+\s*/\s*\d+\s*轮|不要停|不间断|持续|一直|keep\s*going|don.t\s*stop|autonomous|auto.?continue',
+    re.I,
+)
 SESSION_TTL = 30 * 60
 
 class _SendResult(NamedTuple):
@@ -56,11 +42,9 @@ class _AdapterBridge:
     def name(self) -> str:
         return self._a.name.lower()
     async def send_message(self, channel_id: str, content: str) -> None:
-        r = await self._a.send(channel_id, content)
-        return _SendResult(id=r.message_id) if r.success else None
+        r = await self._a.send(channel_id, content); return _SendResult(id=r.message_id) if r.success else None
     async def send_reply(self, channel_id: str, content: str, reply_to: int) -> None:
-        r = await self._a.send(channel_id, content, reply_to=str(reply_to))
-        return _SendResult(id=r.message_id) if r.success else None
+        r = await self._a.send(channel_id, content, reply_to=str(reply_to)); return _SendResult(id=r.message_id) if r.success else None
 
 class GatewayServer:
     """Owns all gateway state: sessions, store, router, locks."""
@@ -276,7 +260,15 @@ class GatewayServer:
                         self.router, self.store, self._cfg(),
                     )
 
-                return "" if result else "Done."
+                # Do not fabricate a textual completion when the agent already
+                # streamed/sent its own output, or when it produced no final text.
+                # Returning "Done." here caused Discord to show a false terminal
+                # signal for interrupted/empty/incomplete work and broke flywheel
+                # semantics. Empty result means "no extra platform reply needed".
+                return ""
+            except AgentTaskError as e:
+                logger.warning("Task aborted by agent error: %s", e)
+                return ""
             except Exception as e:
                 logger.exception("Task failed: %s", e)
                 return "⚠️ Something went wrong. Please try again."
@@ -288,7 +280,9 @@ class GatewayServer:
         for rnd in range(1, _AUTO_MAX_ROUNDS + 1):
             session["auto_rounds"] = rnd
             cont_task = (f"继续飞轮 (自动第 {rnd}/{_AUTO_MAX_ROUNDS} 轮)。"
-                         f"上一轮结果摘要：{(result or '')[:200]}。继续下一个最高复利的改进。完成后报告。")
+                         f"上一轮结果摘要：{(result or '')[:200]}。"
+                         "继续下一个最高复利的改进；如果还在排查或修复中，"
+                         "只汇报进展和证据，不要输出终止性收尾。")
             logger.info("Auto-continue round %d/%d", rnd, _AUTO_MAX_ROUNDS)
             await self.router.send(gw_name, channel_id, f"🔄 飞轮自动继续 ({rnd}/{_AUTO_MAX_ROUNDS})...")
             source_channel["_progress_sent"] = 0
@@ -296,6 +290,9 @@ class GatewayServer:
                 result = await asyncio.wait_for(
                     run_single_task(cont_task, session, gw_name, channel_id,
                                     source_channel, self.router, self.store, config), timeout=TASK_DEFAULT)
+            except AgentTaskError as e:
+                logger.warning("Auto-continue round %d aborted by agent error: %s", rnd, e)
+                break
             except asyncio.TimeoutError:
                 await self.router.send(gw_name, channel_id, f"⏰ 飞轮第 {rnd} 轮超时，暂停。")
                 break
@@ -304,7 +301,7 @@ class GatewayServer:
                 await self.router.send(gw_name, channel_id, f"⚠️ 飞轮第 {rnd} 轮出错：{str(e)[:200]}。暂停。")
                 break
         else:
-            await self.router.send(gw_name, channel_id, f"✅ 飞轮自动模式完成 {_AUTO_MAX_ROUNDS} 轮。")
+            await self.router.send(gw_name, channel_id, f"🔄 飞轮自动模式已跑满 {_AUTO_MAX_ROUNDS} 轮；这只是轮次上限，不代表所有问题已完成。")
         return result
 
     async def start(self) -> None:
@@ -409,8 +406,7 @@ class GatewayServer:
             ]
             for key in expired:
                 session = self.sessions.get(key)
-                if not session:
-                    continue
+                if not session: continue
                 try:
                     await self._cleanup_session(key, session)
                     self.sessions.pop(key, None)  # pop AFTER successful cleanup
@@ -432,8 +428,7 @@ class GatewayServer:
 _server: GatewayServer | None = None
 def _get_server() -> GatewayServer:
     global _server
-    if _server is None:
-        _server = GatewayServer()
+    if _server is None: _server = GatewayServer()
     return _server
 async def run_gateway(config_path: str | None = None) -> None:
     """Backward-compatible entry point. Creates the singleton GatewayServer."""

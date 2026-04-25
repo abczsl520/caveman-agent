@@ -95,14 +95,14 @@ def test_acp_session_events():
 
         session = ACPSession()
         await session.emit(ACPEventType.STATUS, {"msg": "working"})
-        await session.emit(ACPEventType.DONE, {"reason": "complete"})
+        await session.emit(ACPEventType.RESULT, {"reason": "complete"})
 
         events = []
         async for event in session.events():
             events.append(event)
         assert len(events) == 2
         assert events[0]["type"] == "status"
-        assert events[1]["type"] == "done"
+        assert events[1]["type"] == "task_result"
 
     asyncio.run(_run())
 
@@ -310,3 +310,38 @@ def test_execution_plan_summary():
     assert summary["by_status"]["failed"] == 1
     assert not summary["is_complete"]
     assert plan.has_failures
+
+@pytest.mark.asyncio
+async def test_bridge_acp_empty_loop_result_is_no_response():
+    from caveman.bridge.acp import ACPServer
+
+    class EmptyLoop:
+        async def run(self, task):
+            return ""
+
+    server = ACPServer(agent_loop_factory=lambda **config: EmptyLoop())
+    session = await server.create_session("silent task")
+    await asyncio.sleep(0.05)
+
+    assert session.status == "no_response"
+    assert not any(msg.get("role") == "assistant" for msg in session.messages)
+
+    events = []
+    while not session._event_queue.empty():
+        events.append(await session._event_queue.get())
+    assert any(e["type"] == "status" and e["data"].get("status") == "no_response" for e in events)
+    assert not any(e["type"] == "task_result" for e in events)
+
+
+@pytest.mark.asyncio
+async def test_bridge_acp_end_session_is_closed_not_completed_result():
+    from caveman.bridge.acp import ACPServer
+
+    server = ACPServer()
+    session = await server.load_session("s-close", [])
+    await server.end_session(session.session_id)
+
+    assert session.status == "closed"
+    event = await session._event_queue.get()
+    assert event["type"] == "status"
+    assert event["data"]["status"] == "closed"

@@ -102,7 +102,7 @@ async def flywheel_exec(
             }
 
     except asyncio.TimeoutError:
-        return {"ok": False, "error": "Flywheel timed out after 10 minutes"}
+        return {"ok": False, "error": f"Flywheel timed out after {SUBPROCESS_FLYWHEEL:g} seconds"}
     except Exception as e:
         logger.exception("Flywheel failed: %s", e)
         return {"ok": False, "error": str(e)}
