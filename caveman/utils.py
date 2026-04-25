@@ -274,11 +274,29 @@ __all__ = [
 ]
 
 
-_SUCCESS_PATTERNS = [
-    r"(?:✅|done|completed|finished|success|passed|fixed|resolved|created|built)",
-    r"(?:all\s+\d+\s+(?:tests?\s+)?pass)",
+_STRONG_SUCCESS_PATTERNS = [
+    # Objective verification evidence. These are safe to use for trust/metrics.
+    r"\b\d+\s+passed\b",
+    r"\ball\s+tests?\s+pass(?:ed)?\b",
+    r"\btests?\s+pass(?:ed)?\b",
+    r"\bexit(?:ed)?\s+(?:with\s+)?(?:code\s+)?0\b",
+    r"\breturn(?:ed)?\s+(?:code\s+)?0\b",
+    r"\bpytest\b[^\n]{0,120}\bpassed\b",
+    r"\bverified\b[^\n]{0,120}\b(?:pass(?:ed)?|working|fixed|resolved|green)\b",
+    r"\bvalidated\b[^\n]{0,120}\b(?:pass(?:ed)?|working|fixed|resolved|green)\b",
+    r"\bcommit(?:ted)?\b[^\n]{0,120}\b(?:[0-9a-f]{7,40}|changed|created)\b",
+    r"\bno\s+P0\b",
+    r"\bP0\s*[:=-]\s*(?:0|none|no\s+issues?)\b",
+]
+
+_WEAK_SUCCESS_PATTERNS = [
+    # Human/model claims only. These may indicate partial progress but are not
+    # sufficient evidence for trust-score boosts, metrics success, or flywheel
+    # round success. This list intentionally includes the historically dangerous
+    # tokens that caused premature done: done/completed/✅/successfully/fixed.
+    r"(?:✅|done|completed|finished|success|successfully|passed|fixed|resolved|created|built)",
     r"(?:here (?:is|are) (?:the|your))",
-    r"(?:I've |I have |successfully )",
+    r"(?:I've |I have )",
 ]
 
 _FAILURE_PATTERNS = [
@@ -291,55 +309,61 @@ _FAILURE_PATTERNS = [
 ]
 
 _ERROR_IN_SUCCESS_CONTEXT = _re.compile(
-    r"(?:fixed|resolved|found|identified|debugged|handled|caught|diagnosed)\s+(?:the\s+)?error",
+    r"(?:fixed|resolved|found|identified|debugged|handled|caught|diagnosed)\b[^\n]{0,160}\b"
+    r"(?:error|exception|traceback|typeerror|valueerror|importerror|syntaxerror|runtimeerror)",
     _re.IGNORECASE,
 )
 
 
-def detect_success(text: str) -> bool:
-    """Multi-signal success detection for confidence feedback loop.
+def _count_matches(patterns: list[str], sample: str) -> int:
+    return sum(1 for p in patterns if _re.search(p, sample, _re.IGNORECASE))
 
-    Used by phase_finalize (trust scoring) and Reflect (outcome detection).
-    Replaces the old catastrophic `"error" not in text[:100]`.
+
+def detect_success(text: str) -> bool:
+    """Conservative success detection for trust/metrics feedback.
+
+    This function is shared by phase_finalize, Reflect/outcome, and metrics.
+    Natural-language claims of task closure or confidence are intentionally
+    insufficient; only external verification evidence should raise trust.
+
+    Returns True only when there is explicit verification evidence such as tests
+    passing, exit code 0, a verified/validated result, a commit change, or an
+    explicit "no P0" audit outcome. Absence of failure is not success.
     """
     if not text:
         return False
 
-    sample = text[:500]
-    success_signals = sum(
-        1 for p in _SUCCESS_PATTERNS if _re.search(p, sample, _re.IGNORECASE)
-    )
-    failure_signals = sum(
-        1 for p in _FAILURE_PATTERNS if _re.search(p, sample, _re.IGNORECASE)
-    )
+    sample = text[:1000]
+    failure_signals = _count_matches(_FAILURE_PATTERNS, sample)
+    strong_success_signals = _count_matches(_STRONG_SUCCESS_PATTERNS, sample)
 
-    if _ERROR_IN_SUCCESS_CONTEXT.search(sample):
-        failure_signals = max(0, failure_signals - 1)
-        success_signals += 1
+    if failure_signals:
+        # A verified fix may mention the original error. Only discount an error
+        # word when there is also strong evidence; otherwise failure wins.
+        if _ERROR_IN_SUCCESS_CONTEXT.search(sample) and strong_success_signals:
+            failure_signals = max(0, failure_signals - 1)
+        if failure_signals > 0:
+            return False
 
-    if success_signals == 0 and failure_signals == 0:
-        # ANTI-HALLUCINATION: No signal ≠ success.
-        # Returning True here caused trust inflation — every ambiguous output
-        # boosted recalled memories' trust, making garbage float to the top.
-        # Now returns False (unknown/neutral), so only genuinely successful
-        # tasks boost trust. This is the conservative default.
-        return False
-
-    return success_signals >= failure_signals
+    return strong_success_signals > 0
 
 
 def detect_outcome(text: str) -> str:
     """Detect task outcome as 'success' | 'partial' | 'failure'.
 
-    Wrapper around detect_success for Reflect compatibility.
+    `success` requires the same objective evidence as detect_success(). Weak
+    completion claims become `partial` so downstream systems do not equate
+    response end / model confidence with verified task completion.
     """
     if not text:
         return "failure"
     if detect_success(text):
         return "success"
-    # Check if there are ANY success signals (partial)
-    sample = text[:500]
-    has_success = any(
-        _re.search(p, sample, _re.IGNORECASE) for p in _SUCCESS_PATTERNS
-    )
-    return "partial" if has_success else "failure"
+    sample = text[:1000]
+    has_failure = _count_matches(_FAILURE_PATTERNS, sample) > 0
+    has_weak_success = _count_matches(_WEAK_SUCCESS_PATTERNS, sample) > 0
+    if has_weak_success and not has_failure:
+        return "partial"
+    if has_weak_success and has_failure:
+        return "partial"
+    return "failure"

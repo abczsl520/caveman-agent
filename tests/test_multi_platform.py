@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from typing import Any, Dict, Optional
 
 from caveman.gateway.platform_types import (
-    MessageEvent, MessageType, Platform, PlatformConfig, SendResult,
+    MessageEvent, MessageType, Platform, PlatformConfig, ProcessingOutcome, SendResult,
 )
 from caveman.gateway.slack_adapter import SlackAdapter
 from caveman.gateway.whatsapp_adapter import WhatsAppAdapter
@@ -59,6 +59,68 @@ class TestSlackAdapter:
         result = await adapter.send("C123", "hello")
         assert result.success
         assert result.message_id == "123.456"
+
+    @pytest.mark.asyncio
+    async def test_processing_success_clears_eyes_without_success_checkmark(self):
+        adapter = SlackAdapter(_make_config())
+        mock_app = MagicMock()
+        mock_app.client.reactions_remove = AsyncMock()
+        mock_app.client.reactions_add = AsyncMock()
+        adapter._app = mock_app
+        event = MessageEvent(
+            text="hello",
+            source=MagicMock(chat_id="C123"),
+            message_id="111.222",
+        )
+
+        await adapter.on_processing_complete(event, ProcessingOutcome.SUCCESS)
+
+        mock_app.client.reactions_remove.assert_awaited_once_with(
+            channel="C123", timestamp="111.222", name="eyes",
+        )
+        mock_app.client.reactions_add.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_processing_no_response_clears_eyes_without_terminal_reaction(self):
+        adapter = SlackAdapter(_make_config())
+        mock_app = MagicMock()
+        mock_app.client.reactions_remove = AsyncMock()
+        mock_app.client.reactions_add = AsyncMock()
+        adapter._app = mock_app
+        event = MessageEvent(
+            text="hello",
+            source=MagicMock(chat_id="C123"),
+            message_id="111.222",
+        )
+
+        await adapter.on_processing_complete(event, ProcessingOutcome.NO_RESPONSE)
+
+        mock_app.client.reactions_remove.assert_awaited_once_with(
+            channel="C123", timestamp="111.222", name="eyes",
+        )
+        mock_app.client.reactions_add.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_processing_failure_adds_error_reaction(self):
+        adapter = SlackAdapter(_make_config())
+        mock_app = MagicMock()
+        mock_app.client.reactions_remove = AsyncMock()
+        mock_app.client.reactions_add = AsyncMock()
+        adapter._app = mock_app
+        event = MessageEvent(
+            text="hello",
+            source=MagicMock(chat_id="C123"),
+            message_id="111.222",
+        )
+
+        await adapter.on_processing_complete(event, ProcessingOutcome.FAILURE)
+
+        mock_app.client.reactions_remove.assert_awaited_once_with(
+            channel="C123", timestamp="111.222", name="eyes",
+        )
+        mock_app.client.reactions_add.assert_awaited_once_with(
+            channel="C123", timestamp="111.222", name="x",
+        )
 
 
 # ── WhatsApp Tests ──────────────────────────────────────────────────────────

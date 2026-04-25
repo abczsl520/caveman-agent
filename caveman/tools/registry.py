@@ -119,13 +119,20 @@ class ToolRegistry:
                 count += 1
         return count
 
+    def visible_tool_names(self) -> list[str]:
+        """Return tool names intended for model/user-facing listings."""
+        return [name for name, info in self._tools.items() if not info.get("hidden_from_schema")]
+
     def get_schemas(self) -> list[dict]:
         """Return tool schemas for LLM API calls."""
         return [{"name": k, "description": v["description"], "input_schema": v["schema"]}
-                for k, v in self._tools.items()]
+                for k, v in self._tools.items() if not v.get("hidden_from_schema")]
 
-    def get_tool_by_name(self, name: str) -> dict | None:
-        return self._tools.get(name)
+    def register_alias(self, alias: str, target: str) -> None:
+        """Register a dispatch-only alias that is hidden from LLM tool schemas."""
+        if target not in self._tools:
+            raise ValueError(f"Cannot alias unknown tool: {target}")
+        self._tools[alias] = {**self._tools[target], "hidden_from_schema": True}
 
     async def dispatch(self, name: str, args: dict[str, Any], timeout: float = 120.0) -> Any:
         from caveman.errors import ToolNotFoundError, ToolTimeoutError
@@ -251,11 +258,15 @@ class ToolRegistry:
                 logger.debug("unknown: suppressed %s", exc)
 
         count = self.auto_discover()
+        if "todo_finish" in self._tools and "todo_done" not in self._tools:
+            self.register_alias("todo_done", "todo_finish")
         logger.debug("Auto-discovered %d built-in tools", count)
 
     @property
     def tool_count(self) -> int:
-        return len(self._tools)
+        return len(self.visible_tool_names())
 
-    def list_tools(self) -> list[str]:
-        return list(self._tools.keys())
+    def list_tools(self, include_hidden: bool = False) -> list[str]:
+        if include_hidden:
+            return list(self._tools.keys())
+        return self.visible_tool_names()

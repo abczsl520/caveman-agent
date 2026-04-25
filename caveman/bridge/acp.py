@@ -37,7 +37,8 @@ class ACPEventType(Enum):
     THINKING = "thinking"
     STATUS = "status"
     ERROR = "error"
-    DONE = "done"
+    RESULT = "task_result"
+    DONE = "task_result"  # legacy enum member; emits neutral value
 
 
 class ACPSession:
@@ -70,7 +71,7 @@ class ACPSession:
         while True:
             event = await self._event_queue.get()
             yield event
-            if event["type"] == ACPEventType.DONE.value:
+            if event["type"] == ACPEventType.RESULT.value:
                 break
 
     def to_dict(self) -> dict:
@@ -112,8 +113,8 @@ class ACPServer:
     async def end_session(self, session_id: str) -> None:
         session = self._sessions.get(session_id)
         if session:
-            session.status = "completed"
-            await session.emit(ACPEventType.DONE, {"reason": "session_ended"})
+            session.status = "closed"
+            await session.emit(ACPEventType.STATUS, {"status": "closed", "reason": "session_ended"})
 
     async def _process_session(self, session: ACPSession, task: str, config: dict) -> None:
         try:
@@ -121,19 +122,24 @@ class ACPServer:
             if self._loop_factory:
                 loop = self._loop_factory(**config)
                 result = await loop.run(task)
-                session.add_message("assistant", str(result))
-                await session.emit(ACPEventType.MESSAGE, {"content": str(result)})
+                text = "" if result is None else str(result)
+                if text:
+                    session.add_message("assistant", text)
+                    await session.emit(ACPEventType.MESSAGE, {"content": text})
+                    session.status = "result_available"
+                    await session.emit(ACPEventType.RESULT, {"reason": "result_available"})
+                else:
+                    session.status = "no_response"
+                    await session.emit(ACPEventType.STATUS, {"status": "no_response"})
             else:
-                await session.emit(
-                    ACPEventType.MESSAGE,
-                    {"content": f"Task received: {task} (no agent loop configured)"},
-                )
-            session.status = "completed"
-            await session.emit(ACPEventType.DONE, {"reason": "task_complete"})
+                fallback = f"Task received: {task} (no agent loop configured)"
+                await session.emit(ACPEventType.MESSAGE, {"content": fallback})
+                session.status = "result_available"
+                await session.emit(ACPEventType.RESULT, {"reason": "result_available"})
         except Exception as e:
             session.status = "failed"
             await session.emit(ACPEventType.ERROR, {"message": str(e)})
-            await session.emit(ACPEventType.DONE, {"reason": "error"})
+            await session.emit(ACPEventType.RESULT, {"reason": "error"})
             logger.error("ACP session %s failed: %s", session.session_id, e)
 
 

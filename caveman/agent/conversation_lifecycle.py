@@ -1,29 +1,19 @@
 """Conversation lifecycle awareness — dynamic format rules based on dialog state.
 
 Instead of static format rules that never change, this module provides
-context-aware formatting guidance that adapts to:
+context-aware guidance that adapts to:
   - Conversation complexity (simple / medium / complex)
-  - Current phase (opening / working / closing)
+  - Current phase (opening / working)
   - Accumulated tool calls and turns
 
-This is a Harness-layer capability (PRD §8.2), not a prompt patch.
-The prompt builder injects phase-appropriate rules, so the LLM naturally
-produces the right format without guessing.
-
-Design principles:
-  - Complexity is inferred, not declared — from turn count + tool calls
-  - Phase transitions are automatic — no manual signaling needed
-  - Rules are additive — base style always applies, phase rules layer on top
-  - Closing signal is structural — not emoji-based guessing
+The guidance is intentionally positive-only: it describes the current working
+state and evidence requirements without quoting legacy terminal wording.
+Negative prompts that quote the bad token tend to prime the model to repeat it.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-
-from caveman.agent.behavior_rules import get_rule as _get_rule
-
-_CLOSING_MARKER = _get_rule("CLOSING_FORMAT") or "✅---本轮已完成---✅"
 
 __all__ = [
     "ConversationComplexity",
@@ -32,7 +22,6 @@ __all__ = [
     "get_phase_rules",
     "get_section_markers",
 ]
-
 
 
 class ConversationComplexity(Enum):
@@ -46,7 +35,7 @@ class ConversationPhase(Enum):
     """Where are we in the conversation lifecycle?"""
     OPENING = "opening"    # First turn — set expectations
     WORKING = "working"    # Middle turns — doing the work
-    CLOSING = "closing"    # Final answer — wrap up
+    CLOSING = "closing"    # Reserved for future structural state, not prompt text
 
 
 @dataclass
@@ -75,99 +64,105 @@ class ConversationState:
 
 
 # ---------------------------------------------------------------------------
-# Phase-aware format rules
+# Phase-aware guidance
 # ---------------------------------------------------------------------------
 
-# Section markers — deliberately excludes ✅ and ❌ which have
-# "conclusion/judgment" semantics. Those are reserved for closing only.
+# Section markers — deliberately excludes verdict/completion-like symbols.
 _SECTION_MARKERS = "📌 🔍 💡 ⚡ 🎯 🔧"
 
-# Base rules that always apply (surface-specific base is in response_style.py)
+# These strings previously triggered false terminal behavior and must stay out
+# of runtime guidance. Keep this list in tests too.
+_PRIMING_TERMS = (
+    "Done.",
+    "done",
+    "✅",
+    "❌",
+    "本轮已完成",
+    "FINAL response",
+    "terminal completion marker",
+    "completion marker",
+)
+
+# Base rules that always apply (surface-specific base is in response_style.py).
+# Use positive wording only. Do not quote forbidden legacy markers here.
 _PHASE_RULES: dict[str, dict[str, str]] = {
     "discord": {
-        # Opening: first impression, set expectations
         "opening": (
             "This is the start of the conversation.\n"
-            "- Jump straight into the answer — no preamble\n"
-            "- If the task is simple, answer directly and stop — no closing ceremony\n"
-            f"- Use these emoji as section markers: {_SECTION_MARKERS}\n"
-            "- Do NOT use ✅ or ❌ anywhere in your response"
+            "- Answer directly without preamble\n"
+            "- For small questions, give the answer and stop naturally\n"
+            f"- Use these section markers when helpful: {_SECTION_MARKERS}"
         ),
-        # Working: middle of a multi-turn task
         "working": (
-            "You are in the middle of a multi-turn task.\n"
-            "- Report progress concisely\n"
-            f"- Use these emoji as section markers: {_SECTION_MARKERS}\n"
-            "- Do NOT use ✅ or ❌ anywhere — you're not done yet\n"
-            "- Do NOT add closing statements — you're still working"
+            "This task is still in active execution.\n"
+            "- Report progress concisely with evidence\n"
+            f"- Use these section markers when helpful: {_SECTION_MARKERS}\n"
+            "- If work remains, state the remaining items and continue the next concrete action"
         ),
-        # Working but complex enough to warrant closing format when done
         "working_complex": (
-            "You are working on a complex multi-turn task.\n"
-            "- Report progress concisely\n"
-            f"- Use these emoji as section markers: {_SECTION_MARKERS}\n"
-            "- Do NOT use ✅ or ❌ as section markers\n"
-            "- If you are making MORE tool calls after this response, do NOT add any closing\n"
-            "- If this is your FINAL response (no more tool calls needed), end with:\n"
-            f"  {_CLOSING_MARKER}\n"
-            "  (brief 2-3 sentence summary before the closing line)\n"
-
-            f"- \u26a0\ufe0f HARD RULE: Once you write {_CLOSING_MARKER}, you MUST NOT make any more tool calls. The closing marker is a terminal signal."
+            "This is a complex task under active verification.\n"
+            "- Report progress concisely with evidence, remaining risks, and next action\n"
+            f"- Use these section markers when helpful: {_SECTION_MARKERS}\n"
+            "- Keep acting while verified work remains\n"
+            "- Give a natural summary only after checks prove the requested outcome"
         ),
     },
     "telegram": {
         "opening": (
             "Start of conversation.\n"
-            "- Answer directly, no preamble\n"
-            "- Simple questions: answer and stop\n"
-            f"- Section markers: {_SECTION_MARKERS}\n"
-            "- No ✅/❌ anywhere"
+            "- Answer directly\n"
+            "- Small questions can stop naturally\n"
+            f"- Section markers when helpful: {_SECTION_MARKERS}"
         ),
         "working": (
-            "Mid-task.\n"
-            f"- Section markers: {_SECTION_MARKERS}\n"
-            "- No ✅/❌ — not done yet\n"
-            "- No premature closing"
+            "Task is in active execution.\n"
+            f"- Section markers when helpful: {_SECTION_MARKERS}\n"
+            "- State evidence, remaining items, and next action"
         ),
         "working_complex": (
-            "Complex multi-turn task in progress.\n"
-            f"- Section markers: {_SECTION_MARKERS}\n"
-            "- No ✅/❌ as markers\n"
-            f"- If this is your FINAL response: end with {_CLOSING_MARKER}\n"
-
-            f"- \u26a0\ufe0f HARD RULE: Once you write {_CLOSING_MARKER}, you MUST NOT make any more tool calls. The closing marker is a terminal signal."
+            "Complex task under active verification.\n"
+            f"- Section markers when helpful: {_SECTION_MARKERS}\n"
+            "- Continue concrete actions while verified work remains\n"
+            "- Summarize naturally only after checks prove the requested outcome"
         ),
     },
     "cli": {
         "opening": "",
         "working": "",
         "working_complex": (
-            "If this is your FINAL response (no more tool calls needed), end with:\n"
-            f"  {_CLOSING_MARKER}\n"
-            "  (brief 2-3 sentence summary before the closing line)\n"
-
-            f"- \u26a0\ufe0f HARD RULE: Once you write {_CLOSING_MARKER}, you MUST NOT make any more tool calls. The closing marker is a terminal signal."
+            "Complex task under active verification. Continue concrete actions while verified work remains; "
+            "summarize naturally only after checks prove the requested outcome."
         ),
     },
 }
 
 
-def get_phase_rules(surface: str, state: ConversationState) -> str:
-    """Get phase-appropriate format rules for the current conversation state.
+def _assert_no_priming_terms(text: str) -> None:
+    """Fail fast if runtime lifecycle text reintroduces false-terminal priming."""
+    lower = text.lower()
+    for term in _PRIMING_TERMS:
+        needle = term.lower()
+        if needle and needle in lower:
+            raise AssertionError(f"Lifecycle guidance contains priming term: {term!r}")
 
-    Called by the prompt builder to inject dynamic formatting guidance.
-    Returns empty string if no special rules needed (e.g., CLI).
+
+def get_phase_rules(surface: str, state: ConversationState) -> str:
+    """Get phase-appropriate guidance for the current conversation state.
+
+    Called by the prompt builder to inject dynamic guidance. Returns empty string
+    if no special rules are needed.
     """
     rules = _PHASE_RULES.get(surface, _PHASE_RULES.get("cli", {}))
     if not rules:
         return ""
 
     phase = state.phase
-    if phase == ConversationPhase.WORKING:
-        # Medium+ conversations get conditional closing instructions
-        if state.complexity in (ConversationComplexity.MEDIUM, ConversationComplexity.COMPLEX):
-            return rules.get("working_complex", rules.get("working", ""))
-    return rules.get(phase.value, "")
+    if phase == ConversationPhase.WORKING and state.complexity == ConversationComplexity.COMPLEX:
+        text = rules.get("working_complex", rules.get("working", ""))
+    else:
+        text = rules.get(phase.value, "")
+    _assert_no_priming_terms(text)
+    return text
 
 
 def get_section_markers() -> str:

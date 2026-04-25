@@ -98,7 +98,7 @@ class TestReflectEngine:
         trajectory = [
             {"from": "human", "value": "Deploy the app"},
             {"from": "gpt", "value": "Running bash deploy script"},
-            {"from": "gpt", "value": "Done: deployed successfully ✅"},
+            {"from": "gpt", "value": "Validated deployment: health checks passed, exit code 0"},
             {"from": "gpt", "value": "All health checks pass"},
         ]
         r = await engine.reflect("Deploy the app", trajectory, "success")
@@ -124,7 +124,7 @@ class TestReflectEngine:
             {"from": "human", "value": "Deploy the app"},
             {"from": "gpt", "value": "Running deploy script via bash"},
             {"from": "gpt", "value": "Created deployment config file"},
-            {"from": "gpt", "value": "Done: deployed successfully ✅"},
+            {"from": "gpt", "value": "Validated deployment: health checks passed, exit code 0"},
             {"from": "gpt", "value": "All health checks pass"},
         ]
 

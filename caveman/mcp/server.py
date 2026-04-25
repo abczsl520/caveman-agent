@@ -32,6 +32,18 @@ __all__ = ["memory_store", "memory_search", "memory_recall", "shield_save", "shi
 
 logger = logging.getLogger(__name__)
 
+
+def _memory_manager() -> MemoryManager:
+    """Return the production memory backend used by the main agent.
+
+    MCP is an integration surface for external agents. It must read/write the
+    same SQLite + FTS5 store as normal Caveman sessions; using bare
+    ``MemoryManager()`` would silently fall back to legacy JSON files and split
+    the memory graph.
+    """
+    return MemoryManager.with_sqlite()
+
+
 # Create the MCP server
 mcp = FastMCP(
     "Caveman",
@@ -56,8 +68,7 @@ async def memory_store(
         importance: How important this memory is (0.0-1.0).
     """
 
-    mgr = MemoryManager()
-    await mgr.load()
+    mgr = _memory_manager()
     tag_list = [t.strip() for t in tags.split(",") if t.strip()]
 
     # Determine memory type from importance
@@ -94,8 +105,7 @@ async def memory_search(
         min_score: Minimum relevance score (0.0-1.0).
     """
 
-    mgr = MemoryManager()
-    await mgr.load()
+    mgr = _memory_manager()
     scored_results = await mgr.recall_scored(query, top_k=top_k)
 
     filtered = [
@@ -250,8 +260,7 @@ async def reflect(
     if reflection.skill_updates:
         engine._apply_skill_updates(reflection)
     try:
-        mgr = MemoryManager()
-        await mgr.load()
+        mgr = _memory_manager()
         summary = "; ".join(reflection.lessons) if reflection.lessons else outcome
         await mgr.store(
             content=f"Reflection on '{task}' ({outcome}): {summary}",

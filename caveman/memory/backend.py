@@ -59,6 +59,17 @@ class MemoryBackend(Protocol):
         """Update metadata for an existing memory. Returns True if found."""
         ...
 
+    async def mark_helpful(self, memory_id: str, helpful: bool = True, metadata: dict | None = None) -> None:
+        """Adjust trust/helpful feedback for a memory.
+
+        Backends should persist optional judge metadata when possible.
+        """
+        ...
+
+    async def get_by_id(self, memory_id: str) -> MemoryEntry | None:
+        """Fetch one memory by ID, or None if it does not exist."""
+        ...
+
     def close(self) -> None:
         """Clean shutdown."""
         ...

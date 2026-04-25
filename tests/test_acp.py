@@ -131,7 +131,7 @@ async def test_acp_client_send():
     poll2_resp.json.return_value = {
         "id": "task-abc",
         "status": "completed",
-        "result": {"role": "assistant", "parts": [{"type": "text", "text": "done"}]},
+        "result": {"role": "assistant", "parts": [{"type": "text", "text": "task result"}]},
     }
     poll2_resp.raise_for_status = MagicMock()
 
@@ -144,7 +144,7 @@ async def test_acp_client_send():
 
     result = await client.send_task("hello", poll_interval=0.01)
     assert result["status"] == "completed"
-    assert result["result"]["parts"][0]["text"] == "done"
+    assert result["result"]["parts"][0]["text"] == "task result"
 
     await client.close()
     mock_client.aclose.assert_called_once()
@@ -239,3 +239,35 @@ async def test_acp_tool_send_error():
 
         assert "error" in result
         assert "refused" in result["error"]
+
+@pytest.mark.asyncio
+async def test_acp_task_empty_agent_fn_is_no_response():
+    """Empty agent output is not exposed as task completion."""
+    from caveman.acp.server import ACPServer
+
+    async def empty_agent(text: str):
+        return ""
+
+    server = ACPServer(agent_fn=empty_agent)
+    msg = {"role": "user", "parts": [{"type": "text", "text": "silent"}]}
+    result = await server.handle_create_task(msg)
+
+    assert result["status"] == "no_response"
+    assert result["result"] is None
+    assert result["completed_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_acp_task_none_agent_fn_is_no_response():
+    """None from an agent is a no-response state, not a completed result."""
+    from caveman.acp.server import ACPServer
+
+    async def none_agent(text: str):
+        return None
+
+    server = ACPServer(agent_fn=none_agent)
+    msg = {"role": "user", "parts": [{"type": "text", "text": "silent"}]}
+    result = await server.handle_create_task(msg)
+
+    assert result["status"] == "no_response"
+    assert result["result"] is None

@@ -214,11 +214,11 @@ def build_template(budget: int, focus_topic: str | None = None) -> str:
 [User preferences, coding style, constraints, important decisions]
 
 ## Progress
-### Done
-[Completed work — include specific file paths, commands, results]
-### In Progress
+### Verified Changes
+[Evidence-backed changes — include specific file paths, commands, results]
+### Active Work
 [Work currently underway]
-### Blocked
+### Blockers
 [Any blockers or issues]
 
 ## Key Decisions
@@ -227,7 +227,7 @@ def build_template(budget: int, focus_topic: str | None = None) -> str:
 ## Resolved Questions
 [Questions already answered — include the answer]
 
-## Pending User Asks
+## Open User Asks
 [Unanswered questions or unfulfilled requests. "None." if empty]
 
 ## Relevant Files

@@ -15,7 +15,7 @@ from caveman.paths import CAVEMAN_HOME
 __all__ = [
     "todo_add",
     "todo_list",
-    "todo_done",
+    "todo_finish",
     "todo_remove",
 ]
 
@@ -70,7 +70,7 @@ async def todo_add(title: str, priority: str = "medium") -> dict:
     name="todo_list",
     description="List todos",
     params={
-        "status": {"type": "string", "description": "Filter: pending/done/all", "default": "pending"},
+        "status": {"type": "string", "description": "Filter: pending/finished/all", "default": "pending"},
     },
     required=[],
 )
@@ -83,19 +83,19 @@ async def todo_list(status: str = "pending") -> list[dict]:
 
 
 @tool(
-    name="todo_done",
-    description="Mark a todo as done",
+    name="todo_finish",
+    description="Mark a todo item as finished",
     params={
         "id": {"type": "string", "description": "Todo ID"},
     },
     required=["id"],
 )
-async def todo_done(id: str) -> dict:
-    """Mark a todo as done."""
+async def todo_finish(id: str) -> dict:
+    """Mark a todo item as finished."""
     todos = _load()
     for t in todos:
         if t["id"] == id:
-            t["status"] = "done"
+            t["status"] = "finished"
             _save(todos)
             return {"ok": True}
     return {"error": f"Todo {id} not found"}
@@ -118,3 +118,7 @@ async def todo_remove(id: str) -> dict:
         return {"error": f"Todo {id} not found"}
     _save(todos)
     return {"ok": True}
+
+
+# Backward-compatible Python alias; registry exposes only todo_finish to the LLM.
+todo_done = todo_finish

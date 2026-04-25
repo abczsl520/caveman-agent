@@ -26,10 +26,24 @@ class MockProvider(LLMProvider):
 
         if call_count == 0 and tools:
             yield {"type": "tool_call", "id": "call_1", "name": "web_search", "input": {"query": "test"}}
-            yield {"type": "done", "stop_reason": "tool_use", "usage": {}}
+            yield {"type": "message_stop", "stop_reason": "tool_use", "usage": {}}
         else:
             yield {"type": "delta", "text": "Task completed successfully."}
-            yield {"type": "done", "stop_reason": "end_turn", "usage": {}}
+            yield {"type": "message_stop", "stop_reason": "end_turn", "usage": {}}
+class PrematureClosingProvider(MockProvider):
+    """Provider emits text claiming done and a tool call in the same turn."""
+
+    async def complete(self, messages, tools=None, stream=True, system=None, **kwargs):
+        call_count = getattr(self, "_call_count", 0)
+        self._call_count = call_count + 1
+
+        if call_count == 0 and tools:
+            yield {"type": "delta", "text": "All done.\n\n✅---本轮已完成---✅"}
+            yield {"type": "tool_call", "id": "call_1", "name": "web_search", "input": {"query": "test"}}
+            yield {"type": "message_stop", "stop_reason": "tool_use", "usage": {}}
+        else:
+            yield {"type": "delta", "text": "Actual work finished after tool execution."}
+            yield {"type": "message_stop", "stop_reason": "end_turn", "usage": {}}
 
 
 @pytest.mark.asyncio
@@ -54,3 +68,21 @@ async def test_agent_loop_tool_execution():
                                 {"type": "object", "properties": {"query": {"type": "string"}}})
     result = await loop.run("Search for AI news")
     assert len(call_log) > 0
+
+
+@pytest.mark.asyncio
+async def test_premature_closing_marker_does_not_skip_tool_execution():
+    provider = PrematureClosingProvider()
+    loop = AgentLoop(model="mock", provider=provider)
+
+    call_log = []
+    async def mock_tool(query: str):
+        call_log.append(query)
+        return {"results": [{"title": "Test", "url": "http://test.com"}]}
+
+    loop.tool_registry.register("web_search", mock_tool, "Search web",
+                                {"type": "object", "properties": {"query": {"type": "string"}}})
+    result = await loop.run("Search for AI news")
+
+    assert call_log == ["test"]
+    assert "Actual work finished" in result

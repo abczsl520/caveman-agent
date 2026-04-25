@@ -18,6 +18,9 @@ __all__ = [
     "MemorySource",
     "MemoryEntry",
     "MetadataKeys",
+    "MetadataSpec",
+    "METADATA_REGISTRY",
+    "validate_metadata",
     "resolve_memory_type",
     "get_turn_text",
 ]
@@ -96,6 +99,11 @@ class MetadataKeys:
     # Internal/temporary (prefixed with _, not persisted across versions)
     _FTS_RANK = "_fts_rank"               # float — FTS5 rank score
     _VECTOR_SIM = "_vector_sim"           # float — vector cosine similarity
+
+# Re-export runtime metadata contract helpers from a separate module to keep
+# type definitions lightweight while preserving the public caveman.memory.types
+# import path used by tests and engines.
+from .metadata import METADATA_REGISTRY, MetadataSpec, validate_metadata
 
 
 # --- Unified type resolution (used by Nudge + LLM extraction) ---

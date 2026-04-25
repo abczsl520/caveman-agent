@@ -19,8 +19,7 @@ async def run_self_test() -> str:
 
     # 1. Memory Store
     try:
-        mm = MemoryManager(base_dir=tmpdir)
-        await mm.load()
+        mm = MemoryManager.with_sqlite(base_dir=tmpdir / "memory")
         mid = await mm.store("Caveman uses a 6-engine flywheel for memory permanence", MemoryType.SEMANTIC)
         await mm.store("Route C: parasitic on OpenClaw + selective self-build", MemoryType.SEMANTIC)
         await mm.store("Python core + Node.js bridge architecture", MemoryType.EPISODIC)

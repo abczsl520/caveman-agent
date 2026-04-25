@@ -52,7 +52,10 @@ async def sync_slash_commands(client, locale: str = "en") -> None:
                 await interaction.response.defer()
                 result = await dispatch(f"/{name} {args}".strip())
                 text = result.get("text", str(result))[:2000]
-                await interaction.followup.send(text or "Done.")
+                if text:
+                    await interaction.followup.send(text)
+                else:
+                    await interaction.followup.send("命令已接收；没有额外输出。")
             return _handler
 
         handler = app_commands.Command(
@@ -75,7 +78,10 @@ async def sync_slash_commands(client, locale: str = "en") -> None:
                     await interaction.response.defer()
                     result = await dispatch(f"/{name} {args}".strip())
                     text = result.get("text", str(result))[:2000]
-                    await interaction.followup.send(text or "Done.")
+                    if text:
+                        await interaction.followup.send(text)
+                    else:
+                        await interaction.followup.send("命令已接收；没有额外输出。")
                 return _zh_handler
 
             zh_handler = app_commands.Command(

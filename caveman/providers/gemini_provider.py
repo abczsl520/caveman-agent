@@ -121,7 +121,7 @@ class GeminiProvider(LLMProvider):
         system: str | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[dict]:
-        """Generate completion. Yields normalized events (delta/tool_call/done)."""
+        """Generate completion. Yields normalized events (delta/tool_call/message_stop)."""
         if not self.api_key:
             yield {"type": "error", "error": "Gemini API key not configured. Set GEMINI_API_KEY.", "action": "abort"}
             return
@@ -181,7 +181,7 @@ class GeminiProvider(LLMProvider):
                     events = _parse_response(data)
                     for event in events:
                         # Record usage from the final chunk
-                        if event.get("type") == "done":
+                        if event.get("type") == "message_stop":
                             usage = event.get("usage", {})
                             self._call_count += 1
                             self._total_input_tokens += usage.get("input_tokens", 0)
@@ -332,7 +332,7 @@ def _parse_response(data: dict) -> list[dict]:
     if finish_reason:
         usage_meta = data.get("usageMetadata", {})
         events.append({
-            "type": "done",
+            "type": "message_stop",
             "stop_reason": normalize_stop_reason(finish_reason),
             "usage": {
                 "input_tokens": usage_meta.get("promptTokenCount", 0),

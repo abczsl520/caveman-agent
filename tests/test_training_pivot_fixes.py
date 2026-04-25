@@ -11,15 +11,17 @@ class TestRetrievalLog:
 
     def test_log_and_read(self, tmp_path):
         from caveman.training.retrieval_log import RetrievalLog, RetrievalEntry
-        log = RetrievalLog(tmp_path / "test.jsonl")
+        log = RetrievalLog(tmp_path / "test.sqlite")
         log.log(RetrievalEntry(
             query="that server",
             results=[{"memory_id": "m1", "content": "198.51.100.20 Ubuntu", "score": 0.9}],
             source="recall",
+            latency_ms=12.5,
         ))
         entries = log.read_all()
         assert len(entries) == 1
         assert entries[0].query == "that server"
+        assert entries[0].latency_ms == 12.5
         assert entries[0].results[0]["memory_id"] == "m1"
 
     def test_log_search_convenience(self, tmp_path):
@@ -31,15 +33,20 @@ class TestRetrievalLog:
             id: str = "m1"
             content: str = "test content"
 
-        log = RetrievalLog(tmp_path / "test.jsonl")
-        log.log_search("query", [(0.85, FakeMemory())], source="memory_search")
+        log = RetrievalLog(tmp_path / "test.sqlite")
+        log.log_search("query", [(0.85, FakeMemory())], source="memory_search", latency_ms=3.2)
         entries = log.read_all()
         assert len(entries) == 1
         assert entries[0].results[0]["score"] == 0.85
+        assert entries[0].latency_ms == 3.2
+        stats = log.stats()
+        assert stats["count"] == 1
+        assert stats["avg_latency_ms"] == 3.2
+        assert stats["by_source"] == {"memory_search": 1}
 
     def test_mark_adopted(self, tmp_path):
         from caveman.training.retrieval_log import RetrievalLog
-        log = RetrievalLog(tmp_path / "test.jsonl")
+        log = RetrievalLog(tmp_path / "test.sqlite")
         log.mark_adopted("that server", ["m1", "m3"])
         entries = log.read_all()
         assert entries[0].source == "adoption"
@@ -47,7 +54,7 @@ class TestRetrievalLog:
 
     def test_generate_training_pairs(self, tmp_path):
         from caveman.training.retrieval_log import RetrievalLog, RetrievalEntry
-        log = RetrievalLog(tmp_path / "test.jsonl")
+        log = RetrievalLog(tmp_path / "test.sqlite")
 
         # Search event
         log.log(RetrievalEntry(
@@ -69,7 +76,7 @@ class TestRetrievalLog:
 
     def test_generate_pairs_score_fallback(self, tmp_path):
         from caveman.training.retrieval_log import RetrievalLog, RetrievalEntry
-        log = RetrievalLog(tmp_path / "test.jsonl")
+        log = RetrievalLog(tmp_path / "test.sqlite")
 
         # No adoption data — use score threshold
         log.log(RetrievalEntry(
@@ -86,7 +93,7 @@ class TestRetrievalLog:
 
     def test_count(self, tmp_path):
         from caveman.training.retrieval_log import RetrievalLog, RetrievalEntry
-        log = RetrievalLog(tmp_path / "test.jsonl")
+        log = RetrievalLog(tmp_path / "test.sqlite")
         assert log.count() == 0
         log.log(RetrievalEntry(query="q1", results=[]))
         log.log(RetrievalEntry(query="q2", results=[]))
@@ -101,7 +108,7 @@ class TestPairExtractorRetrievalLog:
         from caveman.training.retrieval_log import RetrievalLog, RetrievalEntry
 
         # Create retrieval log with data
-        log_path = tmp_path / "retrieval_log.jsonl"
+        log_path = tmp_path / "retrieval_log.sqlite"
         log = RetrievalLog(log_path)
         log.log(RetrievalEntry(
             query="that server IP",
@@ -192,7 +199,7 @@ class TestEvalEmbedding:
         from caveman.training.eval_embedding import EmbeddingEvaluator
         from caveman.training.retrieval_log import RetrievalLog, RetrievalEntry
 
-        log_path = tmp_path / "test.jsonl"
+        log_path = tmp_path / "test.sqlite"
         log = RetrievalLog(log_path)
         log.log(RetrievalEntry(
             query="server IP",
@@ -228,7 +235,7 @@ class TestMemoryManagerRetrievalLog:
         from caveman.memory.types import MemoryType
         from caveman.training.retrieval_log import RetrievalLog
 
-        log_path = tmp_path / "retrieval.jsonl"
+        log_path = tmp_path / "retrieval.sqlite"
         log = RetrievalLog(log_path)
         mgr = MemoryManager(base_dir=tmp_path / "mem", retrieval_log=log)
 

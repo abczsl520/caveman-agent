@@ -10,9 +10,9 @@ The Recall Engine is the complement to the Shield:
 Upgraded in Round 14: priority-based injection with token budgets.
 """
 from __future__ import annotations
-
 import logging
 import re
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -159,7 +159,9 @@ class RecallEngine:
         """Recall and format memories within budget. Returns (text, count)."""
         from caveman.utils import estimate_tokens
         try:
+            start = time.perf_counter()
             memories = await self._memory_manager.recall(query, top_k=self._max_memories)
+            latency_ms = (time.perf_counter() - start) * 1000
         except Exception as e:
             logger.warning("Recall memory search failed: %s", e)
             return "", 0
@@ -202,7 +204,9 @@ class RecallEngine:
         if self._retrieval_log:
             try:
                 self._retrieval_log.log_search(
-                    query=query, results=[(1.0, m) for m in memories], source="recall")
+                    query=query, results=[(1.0, m) for m in memories],
+                    source="recall", latency_ms=latency_ms,
+                )
             except Exception as e:
                 logger.debug("Suppressed in recall: %s", e)
 

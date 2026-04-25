@@ -157,7 +157,11 @@ class ACPServer:
                 while sent < len(events):
                     yield events[sent].to_sse()
                     sent += 1
-                yield f"data: {json.dumps({'type': 'done', 'result': task.result or ''})}\n\n"
+                if task.result is not None:
+                    yield f"data: {json.dumps({'type': 'task_result', 'result': task.result})}\n\n"
+                else:
+                    yield f"data: {json.dumps({'type': 'status', 'status': task.status})}\n\n"
+
 
             return StreamingResponse(event_gen(), media_type="text/event-stream",
                                      headers={"Cache-Control": "no-cache"})
@@ -276,10 +280,17 @@ class ACPServer:
                 task.status = "cancelled"
                 return
 
-            task.status = "completed"
-            task.result = {"role": "assistant", "parts": [{"type": "text", "text": str(result_text)}]}
-            if task.emitter:
-                await task.emitter.on_done(str(result_text))
+            result_text = "" if result_text is None else str(result_text)
+            if result_text:
+                task.status = "completed"
+                task.result = {"role": "assistant", "parts": [{"type": "text", "text": result_text}]}
+                if task.emitter:
+                    await task.emitter.on_task_result(result_text)
+            else:
+                task.status = "no_response"
+                task.result = None
+                if task.emitter:
+                    await task.emitter.on_status("no_response", "Task returned no user-visible response")
         except Exception as e:
             logger.warning("ACP task %s failed: %s", task.id, e)
             task.status = "failed"
@@ -339,8 +350,8 @@ class ACPServer:
             try:
                 from caveman.tools.registry import ToolRegistry
                 reg = ToolRegistry()
-                reg.auto_discover()
-                tools = sorted(reg.list_tools())
+                reg._register_builtins()
+                tools = sorted(reg.visible_tool_names())
                 return f"Available tools ({len(tools)}):\n" + "\n".join(f"  {t}" for t in tools)
             except Exception as e:
                 return f"Error listing tools: {e}"

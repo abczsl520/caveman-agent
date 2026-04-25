@@ -20,7 +20,7 @@ class ACPSession:
     session_id: str
     agent_id: str = ""
     task: str = ""
-    status: str = "pending"  # pending | running | completed | failed | cancelled
+    status: str = "pending"  # pending | running | result_available | no_response | failed | cancelled
     created_at: float = 0
     completed_at: float = 0
     parent_session: str = ""
@@ -85,16 +85,21 @@ class ACPLifecycleManager:
                 if hasattr(result, "__await__"):
                     result = await result
                 if isinstance(result, dict):
-                    session.result = result.get("text", "")
-                    session.status = "completed"
+                    session.result = str(result.get("text") or result.get("result") or "")
+                    returned_status = str(result.get("status") or "").lower()
+                    if returned_status in {"running", "pending"}:
+                        session.status = returned_status
+                    else:
+                        session.status = "result_available" if session.result else "no_response"
                 else:
                     session.result = str(result) if result else ""
-                    session.status = "completed"
+                    session.status = "result_available" if session.result else "no_response"
             except Exception as e:
                 session.status = "failed"
                 session.error = str(e)
             finally:
-                session.completed_at = time.monotonic()
+                if session.status not in {"running", "pending"}:
+                    session.completed_at = time.monotonic()
 
         return f"ACP session {session_id[:8]} ({agent_id}): {session.status}"
 
@@ -168,14 +173,14 @@ class ACPLifecycleManager:
         return None
 
     def _cleanup_completed(self) -> int:
-        """Remove oldest completed sessions."""
-        completed = [
+        """Remove oldest inactive sessions."""
+        inactive = [
             (sid, s) for sid, s in self._sessions.items()
-            if s.status in ("completed", "failed", "cancelled")
+            if s.status in {"result_available", "no_response", "completed", "failed", "cancelled"}
         ]
-        completed.sort(key=lambda x: x[1].completed_at)
+        inactive.sort(key=lambda x: x[1].completed_at or x[1].created_at)
         removed = 0
-        for sid, _ in completed[:len(completed) // 2]:
+        for sid, _ in inactive[:len(inactive) // 2]:
             self._sessions.pop(sid)
             removed += 1
         return removed

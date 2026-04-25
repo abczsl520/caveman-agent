@@ -27,14 +27,14 @@ class ToolTestProvider(LLMProvider):
         if call == 0 and tools:
             # Call bash tool
             yield {"type": "tool_call", "id": "c1", "name": "bash", "input": {"command": "echo caveman"}}
-            yield {"type": "done", "stop_reason": "tool_use", "usage": {}}
+            yield {"type": "message_stop", "stop_reason": "tool_use", "usage": {}}
         elif call == 1 and tools:
             # Call file_list
             yield {"type": "tool_call", "id": "c2", "name": "file_list", "input": {"path": "."}}
-            yield {"type": "done", "stop_reason": "tool_use", "usage": {}}
+            yield {"type": "message_stop", "stop_reason": "tool_use", "usage": {}}
         else:
             yield {"type": "delta", "text": "All tools executed successfully."}
-            yield {"type": "done", "stop_reason": "end_turn", "usage": {}}
+            yield {"type": "message_stop", "stop_reason": "end_turn", "usage": {}}
 
 
 @pytest.mark.asyncio

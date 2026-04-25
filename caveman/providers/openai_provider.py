@@ -16,7 +16,12 @@ from caveman.timeouts import HTTP_LLM
 logger = logging.getLogger(__name__)
 
 # Models that use max_completion_tokens instead of max_tokens
-_NEW_TOKEN_PARAM_MODELS = {"o1", "o1-mini", "o1-preview", "o3", "o3-mini", "o4-mini"}
+_NEW_TOKEN_PARAM_MODELS = {"o1", "o1-mini", "o1-preview", "o3", "o3-mini", "o4", "o4-mini", "gpt-5", "gpt-5.5"}
+
+# Reasoning models support explicit effort controls. Use the highest supported
+# effort by default for GPT-5.x unless config overrides it.
+_REASONING_EFFORT_MODELS = {"o1", "o3", "o4", "gpt-5", "gpt-5.5"}
+_ALLOWED_REASONING_EFFORTS = {"minimal", "low", "medium", "high"}
 
 
 def _repair_json(raw: str) -> dict:
@@ -47,13 +52,21 @@ def _repair_json(raw: str) -> dict:
 class OpenAIProvider(LLMProvider):
     """OpenAI GPT provider with streaming tool use."""
 
-    def __init__(self, api_key: str, model: str | None = None, max_tokens: int | None = None,
-                 base_url: str | None = None, credential_pool: Any | None = None):
+    def __init__(
+        self,
+        api_key: str,
+        model: str | None = None,
+        max_tokens: int | None = None,
+        base_url: str | None = None,
+        credential_pool: Any | None = None,
+        reasoning_effort: str | None = None,
+    ):
         from caveman.paths import DEFAULT_OPENAI_MODEL, DEFAULT_MAX_TOKENS_OPENAI
         self.api_key = api_key
         self.model = model or DEFAULT_OPENAI_MODEL
         self.max_tokens = max_tokens or DEFAULT_MAX_TOKENS_OPENAI
         self.base_url = base_url
+        self.reasoning_effort = reasoning_effort
         self._client = None
         self._credential_pool = credential_pool
         self._total_input_tokens = 0
@@ -129,6 +142,26 @@ class OpenAIProvider(LLMProvider):
         model_lower = self.model.lower()
         return any(model_lower.startswith(m) for m in _NEW_TOKEN_PARAM_MODELS)
 
+    def _supports_reasoning_effort(self) -> bool:
+        """Check if model supports explicit reasoning effort controls."""
+        model_lower = self.model.lower()
+        return any(model_lower.startswith(m) for m in _REASONING_EFFORT_MODELS)
+
+    def _effective_reasoning_effort(self) -> str | None:
+        """Return validated reasoning effort, defaulting GPT-5.x to high."""
+        effort = self.reasoning_effort
+        if effort is None and self._supports_reasoning_effort():
+            effort = "high"
+        if not effort:
+            return None
+        effort = effort.lower()
+        if effort not in _ALLOWED_REASONING_EFFORTS:
+            raise ValueError(
+                f"Invalid reasoning_effort={effort!r}; expected one of "
+                f"{sorted(_ALLOWED_REASONING_EFFORTS)}"
+            )
+        return effort
+
     def _build_params(
         self,
         messages: list[dict],
@@ -167,6 +200,10 @@ class OpenAIProvider(LLMProvider):
             params["max_completion_tokens"] = self.max_tokens
         else:
             params["max_tokens"] = self.max_tokens
+
+        reasoning_effort = self._effective_reasoning_effort()
+        if reasoning_effort:
+            params["reasoning_effort"] = reasoning_effort
 
         if openai_tools:
             params["tools"] = openai_tools
@@ -289,7 +326,7 @@ class OpenAIProvider(LLMProvider):
                             "output_tokens": getattr(chunk_usage, "completion_tokens", 0) or 0,
                         }
                         self._record_usage(usage)
-                    yield {"type": "done", "stop_reason": normalize_stop_reason(choice.finish_reason), "usage": usage}
+                    yield {"type": "message_stop", "stop_reason": normalize_stop_reason(choice.finish_reason), "usage": usage}
         finally:
             # Ensure stream is closed even on generator exit / exception
             if hasattr(stream, 'close'):
@@ -317,7 +354,7 @@ class OpenAIProvider(LLMProvider):
         }
         self._record_usage(usage)
         yield {
-            "type": "done",
+            "type": "message_stop",
             "stop_reason": normalize_stop_reason(choice.finish_reason),
             "usage": usage,
         }

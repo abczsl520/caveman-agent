@@ -1,17 +1,21 @@
-"""Output format validator — enforces closing format on final responses.
+"""Output format validator — suppresses premature terminal markers.
 
-When conversation_lifecycle rules request ✅---本轮已完成---✅ as closing,
-this validator ensures the LLM output actually uses it instead of bare ✅.
+The canonical ✅---本轮已完成---✅ marker is retained only as a legacy token for
+recognition/stripping. It must not be synthesized or preserved by default:
+completion is a semantic state verified by work/results, not an emoji line.
 """
 from __future__ import annotations
 import re, logging
 
 logger = logging.getLogger(__name__)
 
-# The canonical closing line — read from behavior_rules for single source of truth
-from caveman.agent.behavior_rules import get_rule as _get_rule
 from caveman.agent.conversation_lifecycle import ConversationComplexity, ConversationState
-CLOSING_LINE = _get_rule("CLOSING_FORMAT") or "✅---本轮已完成---✅"
+
+# Legacy terminal markers are recognized only so they can be stripped. Do not
+# import them from behavior_rules: they are not part of current output policy.
+LEGACY_CLOSING_LINE = "✅---本轮已完成---✅"
+LEGACY_AGENT_CLOSING_LINE = "✅ DONE"
+CLOSING_LINE = LEGACY_CLOSING_LINE
 
 # Patterns that indicate LLM tried to close but used wrong format
 _BARE_CHECKMARK = re.compile(
@@ -23,6 +27,62 @@ _WRONG_CLOSING = re.compile(
     re.IGNORECASE,
 )
 _QUESTION_ENDING = re.compile(r'[?？]\s*(?:[)）】\]"”’。.!！…]*)\s*$')
+
+# Final answers that end in an obviously incomplete fragment must not be
+# treated as completed work. This catches provider/gateway truncation cases
+# where stop_reason is not reliably reported as max_tokens (observed: final
+# response persisted ending with the half word "- PR").
+_INCOMPLETE_LINE_START = re.compile(r'^\s*(?:[-*•]|\d+[.)、]|#{1,6}\s+)\s*\S{0,40}\s*$')
+_INCOMPLETE_CODE_FENCE = re.compile(r'```')
+_SENTENCE_ENDING = tuple('。.!！？?…」』”’）)]}`')
+
+
+def final_text_looks_truncated(text: str) -> bool:
+    """Heuristically detect a final response that is visibly cut off.
+
+    This is intentionally conservative: it only flags dangling bullets/headings,
+    unmatched code fences/brackets, or obvious mid-word fragments at the end of
+    a substantial final response. It is a continuation guard, not a success
+    detector.
+    """
+    if not text or not text.strip():
+        return False
+    stripped = strip_closing_markers(text).strip()
+
+    # Unclosed fenced code block almost always means the final answer was cut,
+    # even if the snippet is short.
+    if len(_INCOMPLETE_CODE_FENCE.findall(stripped)) % 2 == 1:
+        return True
+
+    if len(stripped) < 120:
+        return False
+
+    # Cheap unmatched bracket guard for prose/code snippets.
+    pairs = [('(', ')'), ('[', ']'), ('{', '}'), ('（', '）'), ('【', '】')]
+    for left, right in pairs:
+        if stripped.count(left) > stripped.count(right) + 1:
+            return True
+
+    lines = [line.rstrip() for line in stripped.splitlines() if line.strip()]
+    if not lines:
+        return False
+    last = lines[-1].strip()
+
+    # Dangling list/header fragments, e.g. the observed failure ending in
+    # "  - PR" after a long PRD audit summary.
+    if _INCOMPLETE_LINE_START.match(last) and not last.endswith(_SENTENCE_ENDING):
+        return True
+
+    # Markdown link/code span cut halfway.
+    if last.count('`') % 2 == 1 or last.count('[') > last.count(']'):
+        return True
+
+    # English/identifier fragment after a long answer; avoid flagging normal
+    # Chinese prose that often omits punctuation.
+    if re.search(r'(?:^|\s)[A-Za-z_/#.-]{2,18}$', last) and not last.endswith(_SENTENCE_ENDING):
+        return True
+
+    return False
 
 
 def final_sentence_is_question(text: str) -> bool:
@@ -51,88 +111,36 @@ def should_use_closing_marker(
     final_text: str = "",
     surface: str = "cli",
 ) -> bool:
-    """Decide whether a final response should carry the canonical closing marker.
+    """Terminal completion markers are disabled by default.
 
-    Long-term policy:
-    - Questions keep the conversation open, so never auto-close.
-    - Simple answers should feel natural; no ceremony.
-    - Complex work needs a structural terminal signal.
-    - Medium work closes only when it has meaningful execution weight.
+    The function is kept for call-site compatibility, but a structural marker
+    must not be inferred from complexity/tool counts. Natural summaries are OK;
+    terminal emoji markers are not.
     """
-    if surface == "agent":
-        return state.tool_call_count >= 1
-    if not final_text or final_sentence_is_question(final_text):
-        return False
-    if "HEARTBEAT" in final_text:
-        return False
+    return False
 
-    complexity = state.complexity
-    if complexity == ConversationComplexity.SIMPLE:
-        return False
-    if complexity == ConversationComplexity.COMPLEX:
-        return True
+def strip_closing_markers(text: str, surface: str = "cli") -> str:
+    """Remove terminal closing markers when policy says the turn should stay open.
 
-    # Medium: avoid marker spam after tiny one-tool lookups, but close real work.
-    return (
-        state.has_progress_calls
-        or state.tool_call_count >= 3
-        or state.turn_count >= 3
-        or state.iteration_count >= 2
-    )
-
+    This is deliberately conservative: it removes only canonical terminal
+    markers and a bare trailing checkmark line, not ordinary checkmarks used
+    inside content.
+    """
+    if not text:
+        return text
+    marker = LEGACY_AGENT_CLOSING_LINE if surface == "agent" else CLOSING_LINE
+    cleaned = text.replace(marker, "")
+    cleaned = _WRONG_CLOSING.sub("", cleaned)
+    cleaned = _BARE_CHECKMARK.sub("", cleaned).rstrip()
+    return cleaned
 
 def enforce_closing_format(text: str, should_close: bool, surface: str = "cli") -> str:
-    """Fix closing format if LLM used bare ✅ instead of the canonical format.
+    """Suppress terminal completion markers.
 
-    Args:
-        text: The LLM's final response text.
-        should_close: Whether the conversation lifecycle expects a closing line.
-        surface: The surface type (cli, gateway, agent). Agent uses ✅ DONE.
-
-    Returns:
-        Text with corrected closing format, or unchanged if no fix needed.
+    ``should_close`` is intentionally ignored while completion markers are
+    disabled. This strips both canonical markers and malformed trailing attempts
+    so accidental prompt/model inertia cannot signal done to the gateway/flywheel.
     """
-    if not should_close or not text:
+    if not text:
         return text
-
-    # Skip enforcement for heartbeat responses and open-ended questions
-    if "HEARTBEAT" in text or final_sentence_is_question(text):
-        return text
-
-    # Agent surface uses different closing marker
-    if surface == "agent":
-        _agent_marker = "✅ DONE"
-        if _agent_marker in text:
-            return text
-        return text.rstrip() + "\n\n" + _agent_marker
-
-    # Already has correct closing — no-op
-    if CLOSING_LINE in text:
-        return text
-
-    # Case 1: bare ✅ at end of text
-    stripped = text.rstrip()
-    if stripped.endswith("✅") and "---" not in stripped[-30:]:
-        fixed = stripped[:-1].rstrip() + "\n\n" + CLOSING_LINE
-        logger.info("Closing format fixed: bare ✅ → canonical format")
-        return fixed
-
-    # Case 2: wrong closing pattern (e.g. ✅完成✅, ✅ done ✅)
-    if _WRONG_CLOSING.search(text):
-        fixed = _WRONG_CLOSING.sub(CLOSING_LINE, text)
-        logger.info("Closing format fixed: wrong pattern → canonical format")
-        return fixed
-
-    # Case 3: no closing at all but should have one — append it
-    # A closing attempt = ✅ at start/end of one of the last 3 lines
-    last_lines = text.rstrip().split("\n")[-3:]
-    has_closing_attempt = any(
-        line.strip().startswith("✅") or line.strip().endswith("✅")
-        for line in last_lines
-    )
-    if should_close and not has_closing_attempt:
-        fixed = text.rstrip() + "\n\n" + CLOSING_LINE
-        logger.info("Closing format added: missing → appended")
-        return fixed
-
-    return text
+    return strip_closing_markers(text, surface=surface)

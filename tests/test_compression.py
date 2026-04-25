@@ -105,7 +105,7 @@ async def test_smart_with_mock_llm():
             return 100_000
         async def complete(self, messages, stream=False, **kw):
             yield {"type": "delta", "text": "Summary: user asked to do things, tools were run."}
-            yield {"type": "done", "stop_reason": "end_turn", "usage": {}}
+            yield {"type": "message_stop", "stop_reason": "end_turn", "usage": {}}
 
     pipe = CompressionPipeline(preserve_last_n=3, provider=MockProvider())
     msgs = []

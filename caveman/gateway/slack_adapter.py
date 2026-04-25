@@ -166,6 +166,7 @@ class SlackAdapter(BasePlatformAdapter):
     async def on_processing_complete(
         self, event: MessageEvent, outcome: ProcessingOutcome,
     ) -> None:
+        """Clear processing indicator and surface only non-success outcomes."""
         if not self._app or not event.message_id or not event.source:
             return
         try:
@@ -176,12 +177,13 @@ class SlackAdapter(BasePlatformAdapter):
             )
         except Exception as exc:
             logger.debug("on_processing_complete: suppressed %s", exc)
-        emoji = "white_check_mark" if outcome == ProcessingOutcome.SUCCESS else "x"
+        if outcome in (ProcessingOutcome.SUCCESS, ProcessingOutcome.NO_RESPONSE):
+            return
         try:
             await self._app.client.reactions_add(
                 channel=event.source.chat_id,
                 timestamp=event.message_id,
-                name=emoji,
+                name="x",
             )
         except Exception as exc:
             logger.debug("on_processing_complete: suppressed %s", exc)

@@ -52,7 +52,7 @@ class TestMemoryTools:
         with patch("caveman.mcp.server.MemoryManager") as MockMgr:
             mock_mgr = AsyncMock()
             mock_mgr.store.return_value = "mem_123"
-            MockMgr.return_value = mock_mgr
+            MockMgr.with_sqlite.return_value = mock_mgr
 
             result = await memory_store(
                 content="Python uses 0-based indexing",
@@ -74,7 +74,7 @@ class TestMemoryTools:
 
             mock_mgr = AsyncMock()
             mock_mgr.recall_scored.return_value = [(0.85, mock_result)]
-            MockMgr.return_value = mock_mgr
+            MockMgr.with_sqlite.return_value = mock_mgr
 
             result = await memory_search(query="python indexing")
             assert result["count"] == 1

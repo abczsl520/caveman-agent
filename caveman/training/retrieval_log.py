@@ -1,8 +1,9 @@
-"""Retrieval log — record memory search queries and results for embedding training.
+"""Retrieval log — SQLite-backed memory search log for embedding training.
 
 Every time Recall or memory_search runs, we log:
   - query: what the user/system searched for
   - results: which memories were returned (with scores)
+  - latency_ms: how long the retrieval took (when caller can provide it)
   - adopted: which results were actually used (if trackable)
 
 This log is the correct data source for embedding training pairs,
@@ -12,12 +13,29 @@ from __future__ import annotations
 
 import json
 import logging
+import sqlite3
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from caveman.db import connect as db_connect
+
 logger = logging.getLogger(__name__)
+
+_SCHEMA = """
+CREATE TABLE IF NOT EXISTS retrieval_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    query TEXT NOT NULL,
+    results_json TEXT NOT NULL DEFAULT '[]',
+    source TEXT NOT NULL DEFAULT 'recall',
+    adopted_ids_json TEXT NOT NULL DEFAULT '[]',
+    latency_ms REAL,
+    timestamp TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_retrieval_log_timestamp ON retrieval_log(timestamp);
+CREATE INDEX IF NOT EXISTS idx_retrieval_log_source ON retrieval_log(source);
+"""
 
 
 @dataclass
@@ -26,36 +44,61 @@ class RetrievalEntry:
 
     query: str
     results: list[dict]  # [{"memory_id": str, "content": str, "score": float}]
-    source: str = "recall"  # "recall" | "memory_search" | "nudge"
+    source: str = "recall"  # "recall" | "memory_search" | "nudge" | "adoption"
     adopted_ids: list[str] = field(default_factory=list)  # IDs user actually used
     timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
+    latency_ms: float | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, d: dict) -> RetrievalEntry:
+    def from_dict(cls, d: dict) -> "RetrievalEntry":
         return cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
 
 
 class RetrievalLog:
-    """Append-only log of memory retrieval events.
+    """Append-only SQLite log of memory retrieval events.
 
-    Stored as JSONL at ~/.caveman/training/retrieval_log.jsonl
+    The public API intentionally matches the old JSONL implementation so the
+    training/eval pipeline remains stable while the storage becomes queryable by
+    `caveman doctor` and future data tooling.
     """
 
     def __init__(self, log_path: Path | None = None) -> None:
         if log_path is None:
             from caveman.paths import TRAINING_DIR
-            log_path = TRAINING_DIR / "retrieval_log.jsonl"
-        self._path = log_path
+            log_path = TRAINING_DIR / "retrieval_log.sqlite"
+        self._path = Path(log_path).expanduser()
         self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._conn: sqlite3.Connection | None = None
+
+    def _get_conn(self) -> sqlite3.Connection:
+        if self._conn is None:
+            self._conn = db_connect(self._path)
+            self._conn.executescript(_SCHEMA)
+        return self._conn
+
+    @property
+    def path(self) -> Path:
+        return self._path
 
     def log(self, entry: RetrievalEntry) -> None:
-        """Append a retrieval event to the log."""
+        """Append a retrieval event to the SQLite log."""
         try:
-            with open(self._path, "a", encoding="utf-8") as f:
-                f.write(json.dumps(entry.to_dict(), ensure_ascii=False) + "\n")
+            self._get_conn().execute(
+                "INSERT INTO retrieval_log(query, results_json, source, adopted_ids_json, latency_ms, timestamp) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    entry.query,
+                    json.dumps(entry.results, ensure_ascii=False),
+                    entry.source,
+                    json.dumps(entry.adopted_ids, ensure_ascii=False),
+                    entry.latency_ms,
+                    entry.timestamp,
+                ),
+            )
+            self._get_conn().commit()
         except Exception as e:
             logger.warning("Failed to write retrieval log: %s", e)
 
@@ -64,6 +107,7 @@ class RetrievalLog:
         query: str,
         results: list[tuple[float, Any]],
         source: str = "recall",
+        latency_ms: float | None = None,
     ) -> None:
         """Convenience: log from (score, MemoryEntry) tuples."""
         result_dicts = []
@@ -73,7 +117,9 @@ class RetrievalLog:
                 "content": getattr(entry, "content", str(entry))[:500],
                 "score": round(score, 4),
             })
-        self.log(RetrievalEntry(query=query, results=result_dicts, source=source))
+        self.log(RetrievalEntry(
+            query=query, results=result_dicts, source=source, latency_ms=latency_ms,
+        ))
 
     def mark_adopted(self, query: str, adopted_ids: list[str]) -> None:
         """Mark which results from a query were actually used.
@@ -89,23 +135,57 @@ class RetrievalLog:
         ))
 
     def read_all(self) -> list[RetrievalEntry]:
-        """Read all entries from the log."""
+        """Read all entries from the SQLite log."""
         if not self._path.exists():
             return []
-        entries = []
-        for line in self._path.read_text(encoding="utf-8").splitlines():
-            if line.strip():
-                try:
-                    entries.append(RetrievalEntry.from_dict(json.loads(line)))
-                except (json.JSONDecodeError, TypeError) as e:
-                    logger.warning("Skip malformed retrieval log entry: %s", e)
+        try:
+            rows = self._get_conn().execute(
+                "SELECT query, results_json, source, adopted_ids_json, timestamp, latency_ms "
+                "FROM retrieval_log ORDER BY id"
+            ).fetchall()
+        except sqlite3.DatabaseError as e:
+            logger.warning("Failed to read retrieval log: %s", e)
+            return []
+
+        entries: list[RetrievalEntry] = []
+        for row in rows:
+            try:
+                entries.append(RetrievalEntry(
+                    query=row[0],
+                    results=json.loads(row[1]) if row[1] else [],
+                    source=row[2] or "recall",
+                    adopted_ids=json.loads(row[3]) if row[3] else [],
+                    timestamp=row[4],
+                    latency_ms=row[5],
+                ))
+            except (json.JSONDecodeError, TypeError) as e:
+                logger.warning("Skip malformed retrieval log row: %s", e)
         return entries
 
     def count(self) -> int:
         """Count entries without loading all into memory."""
         if not self._path.exists():
             return 0
-        return sum(1 for line in self._path.read_text(encoding="utf-8").splitlines() if line.strip())
+        return int(self._get_conn().execute("SELECT COUNT(*) FROM retrieval_log").fetchone()[0])
+
+    def stats(self) -> dict[str, Any]:
+        """Return doctor-friendly retrieval log metrics."""
+        if not self._path.exists():
+            return {"count": 0, "avg_latency_ms": None, "by_source": {}}
+        conn = self._get_conn()
+        count = int(conn.execute("SELECT COUNT(*) FROM retrieval_log").fetchone()[0])
+        avg = conn.execute(
+            "SELECT AVG(latency_ms) FROM retrieval_log WHERE latency_ms IS NOT NULL"
+        ).fetchone()[0]
+        rows = conn.execute(
+            "SELECT source, COUNT(*) FROM retrieval_log GROUP BY source ORDER BY source"
+        ).fetchall()
+        return {
+            "count": count,
+            "avg_latency_ms": float(avg) if avg is not None else None,
+            "by_source": {row[0]: row[1] for row in rows},
+            "path": str(self._path),
+        }
 
     def generate_training_pairs(self) -> list[dict]:
         """Generate query-positive pairs from retrieval log for embedding training.
@@ -154,3 +234,11 @@ class RetrievalLog:
                     })
 
         return pairs
+
+    def close(self) -> None:
+        if self._conn is not None:
+            self._conn.close()
+            self._conn = None
+
+    def __del__(self):
+        self.close()

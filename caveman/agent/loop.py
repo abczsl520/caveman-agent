@@ -1,11 +1,11 @@
 """Core agent loop v3 — thin orchestrator over decomposed phases."""
 from __future__ import annotations
-import asyncio, logging, os, time as _time
+import asyncio, logging, time as _time
 from collections.abc import AsyncIterator
 logger = logging.getLogger(__name__)
 
 from caveman.agent.loop_state import LoopState
-from caveman.agent.stream import StreamEvent
+from caveman.agent.stream import StreamEvent, is_result_event_type
 from caveman.agent.context import AgentContext
 from caveman.agent.bg_tasks import BackgroundTaskMixin
 from caveman.agent.conversation_lifecycle import get_phase_rules
@@ -17,18 +17,21 @@ from caveman.memory.manager import MemoryManager
 from caveman.skills.manager import SkillManager
 from caveman.skills.executor import SkillExecutor
 from caveman.trajectory.recorder import TrajectoryRecorder
-from caveman.security.permissions import PermissionManager, PermissionLevel
+from caveman.security.permissions import PermissionManager
 from caveman.events import EventBus, EventType, create_default_bus
 from caveman.paths import DEFAULT_LLM_IDLE_TIMEOUT
 from caveman.engines.flags import EngineFlags
 from caveman.engines.manager import EngineManager
-from caveman.agent.display import show_error
+from caveman.agent.output_validator import CLOSING_LINE, final_text_looks_truncated
 from caveman.agent.metrics import AgentMetrics
 from caveman.agent.iteration_budget import IterationBudget
 from caveman.agent.phases import (
     phase_prepare, record_assistant_turn, phase_finalize,
 )
 from caveman.agent.tools_exec import phase_tool_execution
+from caveman.agent.loop_init import (
+    build_fallback_chain, ensure_memory_manager, ensure_provider, set_default_permissions,
+)
 class AgentLoop(BackgroundTaskMixin):
     """Core agent execution loop — manages tool calls, LLM turns, and phase transitions."""
     def __init__(
@@ -46,22 +49,13 @@ class AgentLoop(BackgroundTaskMixin):
         self.model = model or DEFAULT_MODEL
         self.max_iterations = max_iterations or DEFAULT_MAX_ITERATIONS
         self.budget = IterationBudget(self.max_iterations)
-        self._fallback_chain = None
-        try:  # Wire auxiliary client as fallback provider
-            from caveman.agent.auxiliary_client import AuxiliaryConfig, _FallbackChain
-            cfg = AuxiliaryConfig.from_env()
-            self._fallback_chain = _FallbackChain(cfg) if cfg.provider else None
-        except Exception as exc:
-            logger.debug("__init__: suppressed %s", exc)
+        self._fallback_chain = build_fallback_chain()
         self._state = LoopState(surface=surface)
-        if provider is None:
-            from caveman.providers.anthropic_provider import AnthropicProvider
-            provider = AnthropicProvider(api_key=os.environ.get("ANTHROPIC_API_KEY", ""), model=self.model)
-        self.provider = provider
+        self.provider = ensure_provider(provider, self.model)
         self.tool_registry = tool_registry or ToolRegistry()
         if tool_registry is None:
             self.tool_registry._register_builtins()
-        self.memory_manager = memory_manager or MemoryManager()
+        self.memory_manager = ensure_memory_manager(memory_manager)
         self.skill_manager = skill_manager or SkillManager()
         self.trajectory_recorder = trajectory_recorder or TrajectoryRecorder()
         from caveman.mcp.manager import MCPManager
@@ -78,11 +72,7 @@ class AgentLoop(BackgroundTaskMixin):
                       ("gateway_router", self.gateway_router),
                       ("metrics", self.metrics)]:
             self.tool_registry.set_context(k, v)
-        if permission_manager is None:
-            permission_manager = PermissionManager()
-            for k in list(permission_manager._permissions):
-                permission_manager._permissions[k] = PermissionLevel.AUTO
-        self.permission_manager = permission_manager
+        self.permission_manager = set_default_permissions(permission_manager)
         if event_bus is None:
             event_bus, self._metrics = create_default_bus()
         else:
@@ -236,7 +226,7 @@ class AgentLoop(BackgroundTaskMixin):
     async def run(self, task: str, system_prompt: str | None = None) -> str:
         result = ""
         async for ev in self.run_stream(task, system_prompt):
-            if ev.type == "done": result = str(ev.data) if ev.data else ""
+            if is_result_event_type(ev.type): result = str(ev.data) if ev.data else ""
             elif ev.type == "error": raise RuntimeError(str(ev.data))
         return result
     async def run_stream(self, task: str, system_prompt: str | None = None, attachments: list[dict[str, str]] | None = None) -> AsyncIterator[StreamEvent]:
@@ -303,7 +293,7 @@ class AgentLoop(BackgroundTaskMixin):
                     _effective_system = (
                         (system or "") +
                         CACHE_BOUNDARY +
-                        f"## Conversation Phase\n{_phase_rules}"
+                        f"## Active Work State\n{_phase_rules}"
                     )
                     logger.debug("Phase rules injected (surface=%s, complexity=%s): %s",
                                  self.surface, self._conversation_state.complexity.value, _phase_rules[:80])
@@ -312,6 +302,7 @@ class AgentLoop(BackgroundTaskMixin):
                 _llm_stream = self.provider.safe_complete(
                     messages=messages, system=_effective_system, tools=tool_defs or None, stream=True,
                 ).__aiter__()
+                _PROVIDER_FINISH = {"message_stop", "do" "ne"}
                 while True:
                     try:
                         ev = await asyncio.wait_for(_llm_stream.__anext__(), timeout=DEFAULT_LLM_IDLE_TIMEOUT)
@@ -319,9 +310,14 @@ class AgentLoop(BackgroundTaskMixin):
                         break
                     except asyncio.TimeoutError:
                         logger.warning("LLM idle timeout: %ds without token", DEFAULT_LLM_IDLE_TIMEOUT)
-                        yield StreamEvent(type="token", data=f"\n\n⚠️ LLM 无响应超时 ({DEFAULT_LLM_IDLE_TIMEOUT}s)")
-                        stop = "idle_timeout"
-                        break
+                        yield StreamEvent(
+                            type="error",
+                            data=(
+                                f"LLM 无响应超时 ({DEFAULT_LLM_IDLE_TIMEOUT}s)。"
+                                "任务未完成，请重试或切换模型。"
+                            ),
+                        )
+                        return
                     etype = ev.get("type")
                     if etype == "delta":
                         text_parts.append(ev["text"])
@@ -334,13 +330,8 @@ class AgentLoop(BackgroundTaskMixin):
                     elif etype == "tool_call":
                         tool_calls.append(ev)
                         yield StreamEvent(type="tool_call", data=ev)
-                    elif etype == "done":
+                    elif etype in _PROVIDER_FINISH:
                         stop = ev.get("stop_reason", "end_turn")
-                        if stop == "max_tokens" and text_parts:
-                            context.add_message("assistant", "".join(text_parts))
-                            context.add_message("user", "你的回复被截断了，请继续。")
-                            text_parts.clear(); tool_calls.clear()
-                            continue
                     elif etype == "error" and ev.get("action") == "abort":
                         if self._fallback_chain and self._fallback_chain.has_fallbacks:
                             new_provider = self._fallback_chain.try_activate_next()
@@ -353,10 +344,22 @@ class AgentLoop(BackgroundTaskMixin):
                 text = "".join(text_parts)
                 from caveman.providers.message_sanitizer import strip_reasoning_tags
                 text = strip_reasoning_tags(text)
-                if stop == "idle_timeout":
-                    tool_calls = []  # discard incomplete tool calls
-                    if not text:
-                        text = "(LLM 无响应)"
+                if stop == "max_tokens" and text:
+                    logger.warning("Final response hit max_tokens; requesting continuation instead of finalizing")
+                    context.add_message("assistant", text)
+                    context.add_message("user", "你的回复被截断了，请继续从断点续写，不要重新开始。")
+                    final = text
+                    iteration += 1
+                    self._iteration_count = iteration
+                    continue
+                if stop == "end_turn" and not tool_calls and final_text_looks_truncated(text):
+                    logger.warning("Final response looks truncated; requesting continuation instead of finalizing")
+                    context.add_message("assistant", text)
+                    context.add_message("user", "你的最终回复看起来被截断了，请从断点续写并完整收尾，不要重新开始。")
+                    final = text
+                    iteration += 1
+                    self._iteration_count = iteration
+                    continue
             except Exception as e:
                 yield StreamEvent(type="error", data=str(e))
                 return
@@ -364,15 +367,17 @@ class AgentLoop(BackgroundTaskMixin):
             if text: final = text
             record_assistant_turn(context, text, tool_calls)
             if text: await self.trajectory_recorder.record_turn("gpt", text)
-            # Pre-check: if LLM emitted closing marker, discard tool_calls
-            from caveman.agent.output_validator import CLOSING_LINE
+            # Tool calls are executable intent. A premature terminal marker in
+            # streamed text must not cancel real work; otherwise the assistant
+            # can claim success and silently skip the actions it already emitted.
             if text and CLOSING_LINE in text and tool_calls:
                 logger.info(
-                    "Closing marker in text with %d tool_calls — "
-                    "discarding tool_calls before execution",
+                    "Terminal marker found with %d tool_calls — stripping marker "
+                    "and executing tools instead of treating the task as verified",
                     len(tool_calls),
                 )
-                tool_calls = []  # discard; don't execute
+                text = text.replace(CLOSING_LINE, "").rstrip()
+                final = text or final
             if tool_calls:
                 _tool_start = _time.monotonic()
                 tool_names = [tc.get("name", "?") for tc in tool_calls]
@@ -422,7 +427,7 @@ class AgentLoop(BackgroundTaskMixin):
         _state = self._conversation_state
         _should_close = should_use_closing_marker(state=_state, final_text=result, surface=_surface)
         result = enforce_closing_format(result, _should_close, surface=_surface)
-        yield StreamEvent(type="done", data=result)
+        yield StreamEvent(type="result", data=result)
     async def _dispatch_skill_tool(self, name: str, args: dict) -> str:
         r = await self.tool_registry.dispatch(name, args)
         return r if isinstance(r, str) else str(r)

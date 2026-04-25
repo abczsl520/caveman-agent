@@ -8,12 +8,14 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import List, TYPE_CHECKING
 
 from .types import MemoryType, MemoryEntry
+from .metadata import validate_metadata
 from .retrieval import HybridScorer, tokenize
 from .recall_cache import RecallCache
 from caveman.utils import cosine_similarity as _cosine_similarity
@@ -63,17 +65,28 @@ class MemoryManager:
         self._memories: dict[MemoryType, list[MemoryEntry]] = {t: [] for t in MemoryType}
         self._embeddings: dict[str, list[float]] = {}
 
+    @property
+    def backend(self):
+        """Return the active memory backend (read-only public accessor)."""
+        return self._backend
+
     @classmethod
     def with_sqlite(
         cls, base_dir: Path | str | None = None, db_path: Path | str | None = None,
         embedding_fn=None, retrieval_log=None, ripple_engine=None,
         scorer_config: dict | None = None,
+        quality_llm_fn=None,
+        use_llm_quality_gate: bool = False,
     ) -> "MemoryManager":
         """Create a MemoryManager backed by SQLite + FTS5 (recommended)."""
         from .sqlite_store import SQLiteMemoryStore
+        if db_path is None and base_dir is not None:
+            db_path = Path(base_dir).expanduser() / "caveman.db"
         store = SQLiteMemoryStore(
             db_path=db_path, embedding_fn=embedding_fn,
             scorer_config=scorer_config,
+            quality_llm_fn=quality_llm_fn,
+            use_llm_quality_gate=use_llm_quality_gate,
         )
         return cls(
             base_dir=base_dir, embedding_fn=embedding_fn,
@@ -122,9 +135,10 @@ class MemoryManager:
 
         async with self._lock:
             mid = str(uuid.uuid4())
+            meta = validate_metadata(metadata, context="json memory store")
             entry = MemoryEntry(
                 id=mid, content=content, memory_type=memory_type,
-                created_at=datetime.now(), metadata=metadata or {},
+                created_at=datetime.now(), metadata=meta,
             )
             self._memories[memory_type].append(entry)
             if self._embedding_fn:
@@ -150,12 +164,15 @@ class MemoryManager:
             return cached
 
         if self._use_backend:
+            start = time.perf_counter()
             results = await self._backend.recall(query, memory_type, top_k)
+            latency_ms = (time.perf_counter() - start) * 1000
             self._recall_cache.put(query, top_k, memory_type, results)
             if self._retrieval_log and results:
                 try:
                     self._retrieval_log.log_search(
-                        query=query, results=[(1.0, e) for e in results], source="memory_search",
+                        query=query, results=[(1.0, e) for e in results],
+                        source="memory_search", latency_ms=latency_ms,
                     )
                 except Exception as e:
                     logger.debug("Retrieval log write failed: %s", e)
@@ -312,6 +329,22 @@ class MemoryManager:
                 self._embeddings = json.loads(await aio_read_text(emb_path, encoding="utf-8"))
             except json.JSONDecodeError as e:
                 logger.warning("Failed to load embeddings: %s", e)
+
+    async def get_by_id(self, memory_id: str) -> MemoryEntry | None:
+        """Fetch a memory by ID, or None if it does not exist."""
+        if self._use_backend:
+            get_by_id = getattr(self._backend, "get_by_id", None)
+            if get_by_id is None:
+                return None
+            return await get_by_id(memory_id)
+        async with self._lock:
+            if not any(self._memories.values()):
+                await self.load()
+            for entries in self._memories.values():
+                for entry in entries:
+                    if entry.id == memory_id:
+                        return entry
+        return None
 
     @property
     def total_count(self) -> int:

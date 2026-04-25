@@ -62,8 +62,7 @@ async def _bench_recall(mm: MemoryManager, n: int = 20) -> dict:
 async def run_bench(rounds: int = 1) -> str:
     """Run benchmarks and return formatted report."""
     tmpdir = Path(mkdtemp(prefix="caveman-bench-"))
-    mm = MemoryManager(base_dir=tmpdir)
-    await mm.load()
+    mm = MemoryManager.with_sqlite(base_dir=tmpdir / "memory")
 
     results = []
     for r in range(rounds):

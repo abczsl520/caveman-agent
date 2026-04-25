@@ -34,16 +34,21 @@ async def test_todo_lifecycle(registry, tmp_path):
         assert items[0]["title"] == "Buy milk"
         assert items[0]["priority"] == "high"
 
-        # Done
-        r = await registry.dispatch("todo_done", {"id": tid})
+        # Finish via public tool name
+        r = await registry.dispatch("todo_finish", {"id": tid})
         assert r["ok"] is True
+
+        # Legacy dispatch alias remains available for old sessions, but hidden from schemas/lists.
+        assert "todo_done" not in {schema["name"] for schema in registry.get_schemas()}
+        assert "todo_done" not in registry.list_tools()
+        assert "todo_done" in registry.list_tools(include_hidden=True)
 
         # List pending (empty now)
         items = await registry.dispatch("todo_list", {"status": "pending"})
         assert len(items) == 0
 
-        # List done
-        items = await registry.dispatch("todo_list", {"status": "done"})
+        # List finished
+        items = await registry.dispatch("todo_list", {"status": "finished"})
         assert len(items) == 1
 
         # Remove

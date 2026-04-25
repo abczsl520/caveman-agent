@@ -116,7 +116,7 @@ class OllamaProvider(LLMProvider):
         system: str | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[dict]:
-        """Generate completion. Yields normalized events (delta/tool_call/done)."""
+        """Generate completion. Yields normalized events (delta/tool_call/message_stop)."""
         params = self._build_params(messages, system, tools, **kwargs)
         max_retries = 3
 
@@ -193,7 +193,7 @@ class OllamaProvider(LLMProvider):
                             yield {"type": "tool_call", "id": tc["id"], "name": tc["name"], "input": inp}
                         usage = data.get("usage", {})
                         yield {
-                            "type": "done",
+                            "type": "message_stop",
                             "stop_reason": normalize_stop_reason(choice["finish_reason"]),
                             "usage": {
                                 "input_tokens": usage.get("prompt_tokens", 0),
@@ -229,7 +229,7 @@ class OllamaProvider(LLMProvider):
         self._total_input_tokens += usage.get("prompt_tokens", 0)
         self._total_output_tokens += usage.get("completion_tokens", 0)
         yield {
-            "type": "done",
+            "type": "message_stop",
             "stop_reason": normalize_stop_reason(choice.get("finish_reason", "stop")),
             "usage": {
                 "input_tokens": usage.get("prompt_tokens", 0),

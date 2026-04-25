@@ -16,6 +16,7 @@ providers:
     api_key: "${OPENAI_API_KEY}"
     model: "gpt-4o"
     max_tokens: 4096
+    reasoning_effort: "high"
 
 bridges:
   openclaw:
@@ -33,6 +34,10 @@ security:
 memory:
   backend: "local"
   local_dir: "~/.caveman/memory"
+  quality_gate:
+    mode: "heuristic"      # heuristic | llm | off
+    use_llm: false         # true routes heuristic-pass writes through active provider judge
+    timeout_seconds: 8
 
 skills:
   local_dir: "~/.caveman/skills"
@@ -65,6 +70,8 @@ gateway:
     idle_warning: 180        # seconds idle before warning
     idle_shutdown: 300       # seconds idle before graceful shutdown
     absolute_max: 1800       # absolute max seconds per task
+  limits:
+    max_tool_calls: null     # optional explicit budget; null = no arbitrary tool-count cap
 
 # Locale for command descriptions (en, zh, ja, ko, etc.)
 locale: "en"

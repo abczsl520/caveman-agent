@@ -8,7 +8,7 @@ Features:
 - Slash command registration
 - Thread/DM/channel support
 - Attachment handling (images, audio, video, documents)
-- Reaction-based processing indicators (👀 → ✅/❌)
+- Reaction-based processing indicators (👀 while running; ❌ on failure/cancel)
 - Message editing for streaming responses
 - Rate limiting per user
 - Permission filtering (channels + users)
@@ -250,7 +250,13 @@ class DiscordAdapter(BasePlatformAdapter):
     async def on_processing_complete(
         self, event: MessageEvent, outcome: ProcessingOutcome,
     ) -> None:
-        """Replace 👀 with ✅/❌ based on outcome."""
+        """Clear processing indicator and surface only non-success outcomes.
+
+        A normal handler return means "message processing finished", not that the
+        user's real task is objectively complete.  Do not add a success reaction
+        here: it is user-visible and reads as premature task completion for
+        long-running or multi-step work.  Keep failure/cancelled visible.
+        """
         msg = event.raw_message
         if not msg or not hasattr(msg, "remove_reaction"):
             return
@@ -259,9 +265,10 @@ class DiscordAdapter(BasePlatformAdapter):
                 await msg.remove_reaction("👀", self._client.user)
         except Exception:
             pass  # intentional: Exception suppressed
-        emoji = "✅" if outcome == ProcessingOutcome.SUCCESS else "❌"
+        if outcome in (ProcessingOutcome.SUCCESS, ProcessingOutcome.NO_RESPONSE):
+            return
         try:
-            await msg.add_reaction(emoji)
+            await msg.add_reaction("❌")
         except Exception as exc:
             logger.debug("on_processing_complete: suppressed %s", exc)
 

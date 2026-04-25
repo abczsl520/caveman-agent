@@ -10,44 +10,67 @@ Implements:
 from __future__ import annotations
 import asyncio
 import logging
-import time
 from typing import Any
 
+
+from caveman.agent.stream import is_result_event_type
 from caveman.gateway.router import GatewayRouter
 from caveman.gateway.smart_buffer import _SmartBuffer
 from caveman.gateway.task_runner_helpers import _activity_monitor, _handle_tool_call, _persist_result, _spawn_post_task_review
 
 logger = logging.getLogger("caveman.gateway")
 
+
+class AgentTaskError(RuntimeError):
+    """Agent task failed after the error was already reported to the user."""
+
+
 # Defaults (overridable via gateway config)
 _DEFAULT_PROGRESS_INTERVAL = 60.0   # 1 min between progress indicators
-_DEFAULT_IDLE_WARNING = 60.0        # 1 min idle → warning
-_DEFAULT_IDLE_SHUTDOWN = 120.0      # 2 min idle → graceful shutdown
-_DEFAULT_ABSOLUTE_MAX = 600.0       # 10 min absolute safety net
+_DEFAULT_IDLE_WARNING = 180.0       # 3 min idle → warning
+_DEFAULT_IDLE_SHUTDOWN = 900.0      # 15 min idle → graceful shutdown
+_DEFAULT_ABSOLUTE_MAX = 1800.0      # 30 min absolute safety net
 _STUCK_LOOP_THRESHOLD = 5           # Same tool+args repeated N times → abort
 _PATTERN_LOOP_WINDOW = 20           # Window for pattern-based loop detection
 _PATTERN_LOOP_REPEATS = 5           # Pattern must repeat N times to trigger
 
-def _resolve_timeouts(config: dict[str, Any] | None) -> dict[str, float]:
-    """Read user-configurable timeouts from gateway config."""
-    defaults = {
+def _resolve_timeouts(config: dict[str, Any] | None) -> dict[str, float | int | None]:
+    """Read user-configurable runtime policy from gateway config.
+
+    Long-compounding work must not be cut off by hidden tool-count caps. The
+    time-based guards remain defaults, while tool-call budget is opt-in via
+    `gateway.limits.max_tool_calls`.
+    """
+    defaults: dict[str, float | int | None] = {
         "progress_interval": _DEFAULT_PROGRESS_INTERVAL,
         "idle_warning": _DEFAULT_IDLE_WARNING,
         "idle_shutdown": _DEFAULT_IDLE_SHUTDOWN,
         "absolute_max": _DEFAULT_ABSOLUTE_MAX,
+        "max_tool_calls": None,
     }
     if not config:
         return defaults
-    timeouts = config.get("gateway", {}).get("timeouts", {})
-    if not isinstance(timeouts, dict):
-        return defaults
-    for key in defaults:
-        val = timeouts.get(key)
+    gateway = config.get("gateway", {})
+    timeouts = gateway.get("timeouts", {}) if isinstance(gateway, dict) else {}
+    if isinstance(timeouts, dict):
+        for key in ("progress_interval", "idle_warning", "idle_shutdown", "absolute_max"):
+            val = timeouts.get(key)
+            if val is not None:
+                try:
+                    defaults[key] = float(val)
+                except (TypeError, ValueError):
+                    pass  # intentional: TypeError/ValueError suppressed
+
+    limits = gateway.get("limits", {}) if isinstance(gateway, dict) else {}
+    if isinstance(limits, dict):
+        val = limits.get("max_tool_calls")
         if val is not None:
             try:
-                defaults[key] = float(val)
+                parsed = int(val)
+                if parsed > 0:
+                    defaults["max_tool_calls"] = parsed
             except (TypeError, ValueError):
-                pass  # intentional: TypeError/ValueError suppressed
+                pass  # invalid optional limit is ignored here; config validator reports it
     return defaults
 
 class _TaskContext:
@@ -55,7 +78,7 @@ class _TaskContext:
 
     __slots__ = (
         "gw_name", "channel_id", "router", "timeouts",
-        "tool_call_count", "shutdown_flag", "idle_warned",
+        "tool_call_count", "max_tool_calls", "shutdown_flag", "idle_warned",
         "last_event_time", "last_user_visible_time", "task_start_time",
         "recent_tool_calls", "child_tasks", "tool_heartbeat",
         "_hb_msg_id", "_hb_counts", "iteration", "max_iterations",
@@ -69,6 +92,8 @@ class _TaskContext:
         self.router = router
         self.timeouts = timeouts
         self.tool_call_count = 0
+        limit = timeouts.get("max_tool_calls")
+        self.max_tool_calls = int(limit) if isinstance(limit, (int, float)) and limit > 0 else None
         self.shutdown_flag = False
         self.idle_warned = False
         now = asyncio.get_running_loop().time()
@@ -132,12 +157,18 @@ class _TaskContext:
                             return f"pattern_loop:{'→'.join(pattern)}"
         return None
 
-    def spawn_task(self, coro, *, name: str, critical: bool = False) -> asyncio.Task:
-        """Create a tracked asyncio task with exception logging."""
+    def spawn_task(self, coro_factory, *, name: str, critical: bool = False) -> asyncio.Task:
+        """Create a tracked asyncio task with exception logging.
+
+        Accepts either a coroutine object or a zero-arg coroutine factory. The
+        factory form avoids "coroutine was never awaited" warnings if the task is
+        cancelled before its first scheduling step.
+        """
         ctx = self
 
         async def _wrapper():
             try:
+                coro = coro_factory() if callable(coro_factory) else coro_factory
                 await coro
             except asyncio.CancelledError:
                 pass  # intentional: Exception suppressed
@@ -152,11 +183,13 @@ class _TaskContext:
         task.add_done_callback(self.child_tasks.discard)
         return task
 
-    def cancel_all(self) -> None:
-        """Cancel all child tasks."""
-        for t in self.child_tasks:
-            if not t.done():
-                t.cancel()
+    async def cancel_all(self) -> None:
+        """Cancel all child tasks and wait for cancellation to settle."""
+        tasks = [t for t in self.child_tasks if not t.done()]
+        for t in tasks:
+            t.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
         self.child_tasks.clear()
 
     async def send(self, message: str) -> dict | None:
@@ -188,7 +221,7 @@ async def run_single_task(
     buf = _SmartBuffer(router, gw_name, channel_id)
     final_text = ""
 
-    ctx.spawn_task(_activity_monitor(ctx), name="activity_monitor", critical=True)
+    ctx.spawn_task(lambda: _activity_monitor(ctx), name="activity_monitor", critical=True)
 
     # Observability: log system prompt health before LLM call
     prompt_len = len(getattr(loop, '_system_prompt_cache', '') or '')
@@ -229,7 +262,9 @@ async def run_single_task(
 
             elif event.type == "error":
                 await buf.flush()
-                await ctx.send(f"⚠️ {str(event.data)[:500]}")
+                message = str(event.data)[:500]
+                await ctx.send(f"⚠️ {message}")
+                raise AgentTaskError(message)
 
             elif event.type == "iteration_start":
                 data = event.data or {}
@@ -244,24 +279,21 @@ async def run_single_task(
                     pct = int(util * 100)
                     await ctx.send(f"⚠️ 上下文已用 {pct}%，即将压缩。长对话建议开新 session。")
 
-            elif event.type == "done":
+            elif is_result_event_type(event.type):
                 final_text = str(event.data) if event.data else ""
                 await buf.flush()
-                # If enforce_closing_format appended a closing marker that
-                # wasn't in the streamed text, send it now.
-                from caveman.agent.behavior_rules import get_rule
-                _marker = get_rule("CLOSING_FORMAT") or ""
-                if _marker and _marker in final_text and _marker not in (buf._sent_text or ""):
-                    await ctx.send(_marker)
+                # Terminal completion markers are disabled by default. Do not
+                # send a marker-only message; it causes gateway/flywheel to
+                # treat partially verified work as complete.
 
         buf.cancel()
-        ctx.cancel_all()
+        await ctx.cancel_all()
         session.pop("_task_ctx", None)  # Clear interrupt reference
         # Clean up heartbeat status message
         if ctx._hb_msg_id:
             try:
                 await ctx.router.edit(ctx.gw_name, ctx.channel_id, ctx._hb_msg_id,
-                                      f"✅ 完成 ({ctx.tool_call_count} 个工具调用)")
+                                      f"📌 响应流已停止（{ctx.tool_call_count} 个工具调用；不代表任务已验证完成，结果以最终消息/后续继续为准）")
             except Exception as exc:
                 logger.debug("unknown: suppressed %s", exc)
         _persist_result(buf, final_text, session, store)
@@ -269,11 +301,10 @@ async def run_single_task(
         # Background review: extract memories from this task
         _spawn_post_task_review(session, ctx.tool_call_count)
 
-        # Send completion marker if needed
-        progress_count = source_channel.get("_progress_sent", 0)
-        if buf.sent_any or progress_count > 0:
-            return final_text or ""
-        return final_text or "Done."
+        # Do not fabricate "Done." when the agent produced no final text.
+        # Returning an empty string lets callers distinguish "ended" from
+        # "verified complete" and prevents flywheel/gateway false positives.
+        return final_text or ""
 
     except Exception:
         try:
@@ -281,5 +312,6 @@ async def run_single_task(
         except Exception as exc:
             logger.debug("unknown: suppressed %s", exc)
         buf.cancel()
-        ctx.cancel_all()
+        await ctx.cancel_all()
+        session.pop("_task_ctx", None)
         raise

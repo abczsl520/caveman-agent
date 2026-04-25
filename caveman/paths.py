@@ -174,5 +174,7 @@ DEFAULT_GATEWAY_URL = f"ws://127.0.0.1:{DEFAULT_GATEWAY_PORT}"
 DEFAULT_OLLAMA_URL = "http://localhost:11434"
 DEFAULT_HERMES_URL = "http://localhost:8000"
 
-# LLM idle timeout — abort if no token received for this long (seconds)
-DEFAULT_LLM_IDLE_TIMEOUT = 120  # 2 minutes between tokens
+# LLM idle timeout — abort if no stream event is received for this long (seconds).
+# Long-reasoning models can legitimately think for several minutes before the
+# first token/tool call, so keep this above the gateway progress thresholds.
+DEFAULT_LLM_IDLE_TIMEOUT = 600  # 10 minutes between stream events

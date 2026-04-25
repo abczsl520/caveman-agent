@@ -113,11 +113,17 @@ class BuiltinMemoryProvider(MemoryProvider):
     async def initialize(self, session_id: str, **kwargs: Any) -> None:
         if self._store is None:
             from caveman.memory.sqlite_store import SQLiteMemoryStore
-            self._store = SQLiteMemoryStore()
+            self._store = SQLiteMemoryStore(
+                db_path=kwargs.get("db_path"),
+                embedding_fn=kwargs.get("embedding_fn"),
+                scorer_config=kwargs.get("scorer_config"),
+                quality_llm_fn=kwargs.get("quality_llm_fn"),
+                use_llm_quality_gate=bool(kwargs.get("use_llm_quality_gate", False)),
+            )
 
     async def store(self, content: str, memory_type: MemoryType,
-                    metadata: dict | None = None) -> str:
-        return await self._store.store(content, memory_type, metadata)
+                    metadata: dict | None = None, *, trusted: bool = False) -> str:
+        return await self._store.store(content, memory_type, metadata, trusted=trusted)
 
     async def recall(self, query: str, memory_type: MemoryType | None = None,
                      top_k: int = 5) -> list[MemoryEntry]:

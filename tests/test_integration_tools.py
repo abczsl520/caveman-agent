@@ -94,7 +94,7 @@ async def test_todo_add_via_registry(registry, tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_todo_lifecycle_via_registry(registry, tmp_path, monkeypatch):
-    """Full todo lifecycle: add → list → done → list → remove."""
+    """Full todo lifecycle: add → list → finish → list → remove."""
     todo_file = tmp_path / "todos.json"
     import caveman.tools.builtin.todo_tool as todo_mod
     monkeypatch.setattr(todo_mod, "_TODO_FILE", todo_file)
@@ -108,9 +108,9 @@ async def test_todo_lifecycle_via_registry(registry, tmp_path, monkeypatch):
     pending = await registry.dispatch("todo_list", {"status": "pending"})
     assert len(pending) == 2
 
-    # Mark done
-    done_result = await registry.dispatch("todo_done", {"id": todo_id})
-    assert done_result["ok"] is True
+    # Mark finished
+    finish_result = await registry.dispatch("todo_finish", {"id": todo_id})
+    assert finish_result["ok"] is True
 
     # List pending (should be 1 now)
     pending = await registry.dispatch("todo_list", {"status": "pending"})
@@ -122,7 +122,7 @@ async def test_todo_lifecycle_via_registry(registry, tmp_path, monkeypatch):
 
     # List all
     all_todos = await registry.dispatch("todo_list", {"status": "all"})
-    assert len(all_todos) == 1  # only the done one remains
+    assert len(all_todos) == 1  # only the finished one remains
 
 
 @pytest.mark.asyncio

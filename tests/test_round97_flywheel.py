@@ -36,7 +36,7 @@ class TestConfidenceFeedbackLoop:
         bus = EventBus()
         await phase_finalize(
             task="Deploy the server",
-            final="Successfully deployed to port 8080",
+            final="Validated deployment on port 8080: health check passed, exit code 0",
             matched_skills=[],
             memory_manager=mm,
             skill_manager=SkillManager(),

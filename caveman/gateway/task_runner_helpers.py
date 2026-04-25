@@ -38,8 +38,8 @@ async def _activity_monitor(ctx: _TaskContext) -> None:
             logger.warning("Absolute timeout (%.0fs), graceful shutdown", total_secs)
             ctx.shutdown_flag = True
             await ctx.send(
-                f"⏸️ 任务运行 {int(total_secs/60)} 分钟，已达安全上限。"
-                f"已完成 {ctx.tool_call_count} 个工具调用，进度已保存。发消息可继续。"
+                f"⏸️ 任务运行 {int(total_secs/60)} 分钟，已达到最长运行时间。"
+                f"已执行 {ctx.tool_call_count} 个工具调用；任务未判定完成，进度已保存。发消息可继续。"
             )
             return
 
@@ -49,7 +49,7 @@ async def _activity_monitor(ctx: _TaskContext) -> None:
             ctx.shutdown_flag = True
             await ctx.send(
                 f"⏸️ {int(idle_secs/60)} 分钟无新进展，暂停任务。"
-                f"已完成 {ctx.tool_call_count} 个工具调用，进度已保存。发消息可继续。"
+                f"已执行 {ctx.tool_call_count} 个工具调用；任务未判定完成，进度已保存。发消息可继续。"
             )
             return
 
@@ -82,11 +82,16 @@ async def _handle_tool_call(event, ctx: _TaskContext, buf: _SmartBuffer) -> bool
         tool_args = str(event.data.get("input", event.data.get("arguments", "")))
     ctx.tool_call_count += 1
 
-    # Hard cap: too many tool calls in one task → abort
-    _MAX_TOOL_CALLS = 80
-    if ctx.tool_call_count >= _MAX_TOOL_CALLS:
+    # Optional explicit tool-call budget. By default there is no arbitrary
+    # per-task tool-count cap: long flywheel/audit tasks should be governed by
+    # progress visibility, timeouts, permissions, and stuck-loop detection.
+    # If configured, budget exhaustion pauses as incomplete/continuable work.
+    if ctx.max_tool_calls is not None and ctx.tool_call_count >= ctx.max_tool_calls:
         ctx.shutdown_flag = True
-        await ctx.send(f"⏸️ 单次任务已执行 {ctx.tool_call_count} 个工具调用，达到安全上限。进度已保存，发消息可继续。")
+        await ctx.send(
+            f"⏸️ 单次任务已执行 {ctx.tool_call_count} 个工具调用，达到你配置的工具预算 "
+            f"({ctx.max_tool_calls})。任务未判定完成，进度已保存，发消息可继续或提高 `gateway.limits.max_tool_calls`。"
+        )
         return True
 
     # Stuck-loop detection
@@ -146,7 +151,7 @@ async def _handle_tool_call(event, ctx: _TaskContext, buf: _SmartBuffer) -> bool
             except Exception as e:
                 logger.debug("Heartbeat send/edit failed: %s", e)
 
-    ctx.tool_heartbeat = ctx.spawn_task(_heartbeat(tool_name), name=f"heartbeat:{tool_name}")
+    ctx.tool_heartbeat = ctx.spawn_task(lambda: _heartbeat(tool_name), name=f"heartbeat:{tool_name}")
     return False
 
 def _persist_result(buf: _SmartBuffer, final_text: str, session: dict, store: Any) -> None:

@@ -37,7 +37,7 @@ def register_utility_commands(app: typer.Typer) -> None:
         all_: bool = typer.Option(False, "--all", help="Audit all discovered subsystems"),
         parallel: Optional[list[str]] = typer.Option(None, "--parallel", "-p", help="Audit multiple subsystems in parallel"),
         rounds: int = typer.Option(5, help="Number of flywheel rounds"),
-        max_iter: int = typer.Option(15, "--max-iter", help="Max LLM iterations per round"),
+        max_iter: int = typer.Option(50, "--max-iter", help="Max LLM iterations per round (raise freely for long-compounding audits)"),
         stats: bool = typer.Option(False, "--stats", help="Show flywheel statistics"),
     ) -> None:
         """Run the meta-flywheel: Caveman audits and fixes itself."""
@@ -46,6 +46,15 @@ def register_utility_commands(app: typer.Typer) -> None:
             target=target, all_=all_, parallel=parallel,
             rounds=rounds, max_iter=max_iter, stats=stats,
         )
+
+    @app.command()
+    def migrate(
+        db: Optional[str] = typer.Option(None, "--db", help="Memory DB path (default: CAVEMAN_HOME/memory/caveman.db)"),
+        dry_run: bool = typer.Option(True, "--dry-run/--apply", help="Preview migrations by default; use --apply to mutate"),
+    ) -> None:
+        """Preview or apply Caveman database migrations."""
+        from caveman.cli.migrate import run_migrate
+        typer.echo(run_migrate(db_path=db, dry_run=dry_run))
 
     @app.command()
     def audit() -> None:

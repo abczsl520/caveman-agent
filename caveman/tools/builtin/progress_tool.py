@@ -12,7 +12,7 @@ from caveman.tools.registry import tool
     name="progress",
     description=(
         "Send a progress update to the user in the current conversation. "
-        "Use this to report what you're doing, what you found, or when you're done. "
+        "Use this for current action, findings, blockers, verification evidence, or result summary. "
         "IMPORTANT: Use this every 2-3 tool calls to keep the user informed."
     ),
     params={

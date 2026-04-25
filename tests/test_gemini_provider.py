@@ -118,7 +118,7 @@ class TestParseResponse:
         events = _parse_response(data)
         assert len(events) == 2
         assert events[0] == {"type": "delta", "text": "Hello world"}
-        assert events[1]["type"] == "done"
+        assert events[1]["type"] == "message_stop"
         assert events[1]["stop_reason"] == "end_turn"
         assert events[1]["usage"]["input_tokens"] == 10
         assert events[1]["usage"]["output_tokens"] == 5
@@ -184,7 +184,7 @@ class TestGeminiComplete:
             events.append(event)
 
         assert any(e["type"] == "delta" and e["text"] == "Hello!" for e in events)
-        assert any(e["type"] == "done" for e in events)
+        assert any(e["type"] == "message_stop" for e in events)
 
     @pytest.mark.asyncio
     async def test_missing_api_key(self):

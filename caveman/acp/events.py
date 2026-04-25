@@ -176,5 +176,9 @@ class ACPEventEmitter:
     async def on_error(self, error: str) -> None:
         await self._emit(ACPEvent("error", {"error": error}))
 
+    async def on_task_result(self, result: Optional[str] = None) -> None:
+        await self._emit(ACPEvent("task_result", {"result": result or ""}))
+
     async def on_done(self, result: Optional[str] = None) -> None:
-        await self._emit(ACPEvent("done", {"result": result or ""}))
+        """Backward-compatible method name; emits the neutral task_result event."""
+        await self.on_task_result(result)
