@@ -30,7 +30,7 @@ class TestDoctorV2:
         from caveman.memory.manager import MemoryManager
         from caveman.memory.types import MemoryType
 
-        mm = MemoryManager(base_dir=tmp_path / "memory")
+        mm = MemoryManager.with_sqlite(base_dir=tmp_path / "memory")
         await mm.store("test fact", MemoryType.SEMANTIC)
         await mm.save()
 
@@ -210,7 +210,7 @@ class TestMemoryImport:
         (src / "facts.md").write_text("## Server Info\nServer IP is 203.0.113.10\n\n## Tools\nUse pyenv for Python version management")
         (src / "empty.md").write_text("")
 
-        mm = MemoryManager(base_dir=tmp_path / "memory")
+        mm = MemoryManager.with_sqlite(base_dir=tmp_path / "memory")
         result = await import_memories("directory", mm, directory=str(src), dry_run=False)
 
         assert result.imported >= 2  # Two sections from facts.md
@@ -225,7 +225,7 @@ class TestMemoryImport:
         src.mkdir()
         (src / "test.md").write_text("## Important\nThis is a test memory entry for import")
 
-        mm = MemoryManager(base_dir=tmp_path / "memory")
+        mm = MemoryManager.with_sqlite(base_dir=tmp_path / "memory")
         # dry_run=True is now the default
         result = await import_memories("directory", mm, directory=str(src))
 
@@ -238,7 +238,7 @@ class TestMemoryImport:
         from caveman.cli.importer import import_memories
         from caveman.memory.manager import MemoryManager
 
-        mm = MemoryManager(base_dir=tmp_path / "memory")
+        mm = MemoryManager.with_sqlite(base_dir=tmp_path / "memory")
         result = await import_memories("nonexistent", mm)
         assert "Unknown source" in result.details[0]
 

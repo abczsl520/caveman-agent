@@ -151,9 +151,10 @@ class TestLintEngine:
     def memory_with_entries(self, tmp_path):
         from caveman.memory.manager import MemoryManager
         from caveman.memory.types import MemoryEntry, MemoryType
-        mm = MemoryManager(base_dir=tmp_path)
+        mm = MemoryManager.with_sqlite(base_dir=tmp_path)
 
-        # Add test memories
+        import json
+
         now = datetime.now()
         old = now - timedelta(days=120)
         entries = [
@@ -168,8 +169,15 @@ class TestLintEngine:
             MemoryEntry(id="m5", content="Old fact from long ago",
                        memory_type=MemoryType.EPISODIC, created_at=old),
         ]
+
+        conn = mm.backend._get_conn()
         for e in entries:
-            mm._memories.setdefault(e.memory_type, []).append(e)
+            conn.execute(
+                "INSERT INTO memories (id, content, type, created_at, metadata_json, trust_score, entities_json) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (e.id, e.content, e.memory_type.value, e.created_at.isoformat(), "{}", 0.5, json.dumps([])),
+            )
+        conn.commit()
         return mm
 
     @pytest.mark.asyncio
@@ -208,12 +216,19 @@ class TestLintEngine:
         from caveman.memory.types import MemoryEntry, MemoryType
         # Add two memories with same IP but different claims (contradiction)
         now = datetime.now()
-        memory_with_entries._memories[MemoryType.SEMANTIC].extend([
+        conn = memory_with_entries.backend._get_conn()
+        for e in [
             MemoryEntry(id="c1", content="Main server 203.0.113.10 runs Ubuntu",
                        memory_type=MemoryType.SEMANTIC, created_at=now),
             MemoryEntry(id="c2", content="Main server 203.0.113.10 runs Windows",
                        memory_type=MemoryType.SEMANTIC, created_at=now),
-        ])
+        ]:
+            conn.execute(
+                "INSERT INTO memories (id, content, type, created_at, metadata_json, trust_score, entities_json) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (e.id, e.content, e.memory_type.value, e.created_at.isoformat(), "{}", 0.5, "[]"),
+            )
+        conn.commit()
         lint = LintEngine(memory_with_entries, check_paths=False)
         report = await lint.scan()
         contradiction_issues = [
@@ -234,7 +249,7 @@ class TestLintEngine:
     async def test_empty_memory(self, tmp_path):
         from caveman.memory.manager import MemoryManager
         from caveman.engines.lint import LintEngine
-        mm = MemoryManager(base_dir=tmp_path)
+        mm = MemoryManager.with_sqlite(base_dir=tmp_path)
         lint = LintEngine(mm)
         report = await lint.scan()
         assert report.scanned == 0
@@ -252,7 +267,7 @@ class TestNudgeRefiner:
     @pytest.fixture
     def memory_manager(self, tmp_path):
         from caveman.memory.manager import MemoryManager
-        return MemoryManager(base_dir=tmp_path)
+        return MemoryManager.with_sqlite(base_dir=tmp_path)
 
     @pytest.fixture
     def sample_memories(self):

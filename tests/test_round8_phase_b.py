@@ -239,7 +239,7 @@ class TestNudgeLLMIntegration:
         import tempfile
 
         mem_dir = tempfile.mkdtemp()
-        manager = MemoryManager(base_dir=mem_dir)
+        manager = MemoryManager.with_sqlite(base_dir=mem_dir)
 
         llm_response = json.dumps([
             {"type": "semantic", "content": "pyenv is not pre-installed on macOS"},
@@ -266,7 +266,7 @@ class TestNudgeLLMIntegration:
         import tempfile
 
         mem_dir = tempfile.mkdtemp()
-        manager = MemoryManager(base_dir=mem_dir)
+        manager = MemoryManager.with_sqlite(base_dir=mem_dir)
 
         nudge = MemoryNudge(memory_manager=manager, llm_fn=None, interval=1, first_nudge=1)
         turns = [
@@ -285,7 +285,7 @@ class TestNudgeLLMIntegration:
         import tempfile
 
         mem_dir = tempfile.mkdtemp()
-        manager = MemoryManager(base_dir=mem_dir)
+        manager = MemoryManager.with_sqlite(base_dir=mem_dir)
 
         async def failing_llm(prompt: str) -> str:
             raise RuntimeError("API down")
@@ -315,7 +315,7 @@ class TestNudgeLLMIntegration:
         from caveman.memory.manager import MemoryManager
         import tempfile
 
-        manager = MemoryManager(base_dir=tempfile.mkdtemp())
+        manager = MemoryManager.with_sqlite(base_dir=tempfile.mkdtemp())
         nudge = MemoryNudge(memory_manager=manager, interval=5, first_nudge=3)
 
         assert not nudge.should_nudge(0)

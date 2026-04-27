@@ -237,7 +237,7 @@ class TestMemoryManagerRetrievalLog:
 
         log_path = tmp_path / "retrieval.sqlite"
         log = RetrievalLog(log_path)
-        mgr = MemoryManager(base_dir=tmp_path / "mem", retrieval_log=log)
+        mgr = MemoryManager.with_sqlite(base_dir=tmp_path / "mem", retrieval_log=log)
 
         # Store a memory
         asyncio.run(

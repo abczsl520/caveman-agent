@@ -20,6 +20,25 @@ from unittest.mock import AsyncMock, MagicMock, patch
 class TestFlywheelE2E:
     """End-to-end: task → memory → skill → trajectory → quality."""
 
+    def _seed_memory_rows(self, mm, entries):
+        """Seed test memories through SQLite so production backend APIs see them."""
+        conn = mm.backend._get_conn()
+        for entry in entries:
+            conn.execute(
+                "INSERT INTO memories (id, content, type, created_at, metadata_json, trust_score, entities_json) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    entry.id,
+                    entry.content,
+                    entry.memory_type.value,
+                    entry.created_at.isoformat(),
+                    json.dumps(entry.metadata or {}),
+                    0.5,
+                    "[]",
+                ),
+            )
+        conn.commit()
+
     @pytest.fixture
     def flywheel_env(self, tmp_path):
         """Set up a complete Caveman environment."""
@@ -29,7 +48,7 @@ class TestFlywheelE2E:
         from caveman.events import EventBus, EventType
         from caveman.engines.flags import EngineFlags
 
-        mm = MemoryManager(base_dir=tmp_path / "memory")
+        mm = MemoryManager.with_sqlite(base_dir=tmp_path / "memory")
         sm = SkillManager(skills_dir=tmp_path / "skills")
         tr = TrajectoryRecorder(base_dir=tmp_path / "trajectories")
         bus = EventBus()
@@ -49,11 +68,10 @@ class TestFlywheelE2E:
         mm = flywheel_env["memory"]
         now = datetime.now()
 
-        # Seed existing memory
-        mm._memories[MemoryType.SEMANTIC] = [
+        self._seed_memory_rows(mm, [
             MemoryEntry(id="old", content="Server IP is 203.0.113.10",
-                       memory_type=MemoryType.SEMANTIC, created_at=now),
-        ]
+                        memory_type=MemoryType.SEMANTIC, created_at=now),
+        ])
 
         # Write new memory → Ripple
         ripple = RippleEngine(mm)
@@ -108,13 +126,13 @@ class TestFlywheelE2E:
         mm = flywheel_env["memory"]
         now = datetime.now()
 
-        # Add memories with issues
-        mm._memories[MemoryType.SEMANTIC] = [
+        # Add memories with issues through SQLite so Lint exercises production all_entries().
+        self._seed_memory_rows(mm, [
             MemoryEntry(id="m1", content="Config at /tmp/nonexistent/path.yaml",
                        memory_type=MemoryType.SEMANTIC, created_at=now),
             MemoryEntry(id="m2", content="Config at /tmp/nonexistent/path.yaml",
                        memory_type=MemoryType.SEMANTIC, created_at=now),  # dup
-        ]
+        ])
 
         lint = LintEngine(mm, check_paths=True)
         report = await lint.scan()
@@ -185,14 +203,12 @@ class TestFlywheelE2E:
 
         mm = flywheel_env["memory"]
         now = datetime.now()
-        mm._memories[MemoryType.SEMANTIC] = [
+        self._seed_memory_rows(mm, [
             MemoryEntry(id="s1", content="Server IP is 203.0.113.10",
                        memory_type=MemoryType.SEMANTIC, created_at=now),
-        ]
-        mm._memories[MemoryType.PROCEDURAL] = [
             MemoryEntry(id="p1", content="How to deploy: ssh + git pull + pm2 restart",
                        memory_type=MemoryType.PROCEDURAL, created_at=now),
-        ]
+        ])
 
         out = flywheel_env["tmp"] / "vault"
         result = export_to_obsidian(mm, out)
@@ -223,7 +239,7 @@ class TestSelfBootstrap:
             "## Skills\nRL-routed skill selection.\n"
         )
 
-        mm = MemoryManager(base_dir=tmp_path / "memory")
+        mm = MemoryManager.with_sqlite(base_dir=tmp_path / "memory")
         result = await import_memories("directory", mm, directory=str(src))
         assert result.imported >= 3  # 3 sections
 
