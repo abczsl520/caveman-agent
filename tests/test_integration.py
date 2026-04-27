@@ -68,12 +68,16 @@ async def test_memory_persists():
     from caveman.memory.manager import MemoryManager
 
     with tempfile.TemporaryDirectory() as td:
-        mem = MemoryManager(base_dir=td)
-        loop = AgentLoop(model="mock", provider=ToolTestProvider(), memory_manager=mem)
-        await loop.run("test task")
-        # Memory should have stored the episode
-        entries = await mem.recall("test task")
-        assert len(entries) >= 1
+        mem = MemoryManager.with_sqlite(base_dir=td)
+        try:
+            loop = AgentLoop(model="mock", provider=ToolTestProvider(), memory_manager=mem)
+            await loop.run("test task")
+            # Memory should have stored the episode
+            entries = await mem.recall("test task")
+            assert len(entries) >= 1
+        finally:
+            if mem.backend:
+                mem.backend.close()
 
 
 @pytest.mark.asyncio
