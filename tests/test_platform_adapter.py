@@ -66,6 +66,14 @@ def _make_event(text="hello", chat_id="123", user_id="u1", platform=Platform.DIS
     )
 
 
+async def _drain_adapter_tasks(adapter: MockAdapter) -> None:
+    """Wait for adapter background tasks to finish so tests don't leak coroutines."""
+    pending = [task for task in adapter._background_tasks if not task.done()]
+    if pending:
+        await asyncio.wait_for(asyncio.gather(*pending), timeout=1.0)
+    await adapter.cancel_background_tasks()
+
+
 # ── Platform Types Tests ────────────────────────────────────────────────────
 
 class TestSessionSource:
@@ -216,10 +224,14 @@ class TestHandleMessage:
     @pytest.mark.asyncio
     async def test_command_bypass_during_active_session(self):
         adapter = MockAdapter()
-        handler = AsyncMock(side_effect=[
-            asyncio.sleep(1),  # First message takes long
-            "stopped",         # /stop response
-        ])
+        gate = asyncio.Event()
+
+        async def handler(event):
+            if event.text == "do something long":
+                await gate.wait()
+                return "done"
+            return "stopped"
+
         adapter.set_message_handler(handler)
 
         # Start a long-running message
@@ -234,6 +246,9 @@ class TestHandleMessage:
 
         # /stop should have been processed immediately
         assert any("stopped" in m["content"] for m in adapter.sent_messages)
+
+        gate.set()
+        await _drain_adapter_tasks(adapter)
 
     @pytest.mark.asyncio
     async def test_interrupt_queues_message(self):
@@ -266,7 +281,7 @@ class TestHandleMessage:
         assert len(adapter._pending_messages) == 0
 
         gate.set()
-        await asyncio.sleep(0.05)
+        await _drain_adapter_tasks(adapter)
         assert any("first response" in m["content"] for m in adapter.sent_messages)
         assert any("second response" in m["content"] for m in adapter.sent_messages)
 
