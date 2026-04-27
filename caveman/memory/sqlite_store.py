@@ -415,7 +415,13 @@ class SQLiteMemoryStore:
             self._conn = None
 
     def __del__(self):
-        self.close()
+        try:
+            self.close()
+        except Exception:
+            # Destructors may run during interpreter shutdown or in a different
+            # thread than the sqlite connection creator. Never surface cleanup
+            # failures as unraisable warnings; explicit close() remains strict.
+            pass
 
     async def __aenter__(self):
         return self
