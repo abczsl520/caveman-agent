@@ -22,7 +22,12 @@ def registry():
 
 @pytest.fixture
 def memory_manager(tmp_path):
-    return MemoryManager(base_dir=tmp_path / "memory")
+    mgr = MemoryManager.with_sqlite(base_dir=tmp_path / "memory")
+    try:
+        yield mgr
+    finally:
+        if mgr.backend:
+            mgr.backend.close()
 
 
 @pytest.mark.asyncio
