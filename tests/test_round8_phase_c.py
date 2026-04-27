@@ -145,7 +145,7 @@ class TestRecallEngine:
         _run(shield.save())
 
         # Store a memory
-        manager = MemoryManager(base_dir=tmp_memory)
+        manager = MemoryManager.with_sqlite(base_dir=tmp_memory)
         _run(manager.store("Server runs on port 8080", MemoryType.SEMANTIC))
 
         recall = RecallEngine(sessions_dir=tmp_sessions, memory_manager=manager)

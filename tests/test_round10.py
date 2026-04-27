@@ -16,17 +16,35 @@ from caveman.memory.types import MemoryEntry, MemoryType
 class TestRippleEngine:
     """FR-105: Knowledge propagation on memory write."""
 
+    def _seed_memory_rows(self, mm, entries):
+        conn = mm.backend._get_conn()
+        for entry in entries:
+            conn.execute(
+                "INSERT INTO memories (id, content, type, created_at, metadata_json, trust_score, entities_json) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    entry.id,
+                    entry.content,
+                    entry.memory_type.value,
+                    entry.created_at.isoformat(),
+                    json.dumps(entry.metadata or {}),
+                    0.5,
+                    "[]",
+                ),
+            )
+        conn.commit()
+
     @pytest.fixture
     def memory_with_ip(self, tmp_path):
         from caveman.memory.manager import MemoryManager
-        mm = MemoryManager(base_dir=tmp_path)
+        mm = MemoryManager.with_sqlite(base_dir=tmp_path)
         now = datetime.now()
-        mm._memories[MemoryType.SEMANTIC] = [
+        self._seed_memory_rows(mm, [
             MemoryEntry(id="old1", content="Server IP is 203.0.113.10",
                        memory_type=MemoryType.SEMANTIC, created_at=now),
             MemoryEntry(id="old2", content="Database runs on port 5432",
                        memory_type=MemoryType.SEMANTIC, created_at=now),
-        ]
+        ])
         return mm
 
     @pytest.mark.asyncio
@@ -120,7 +138,7 @@ class TestRippleEngine:
     async def test_ripple_empty_memory(self, tmp_path):
         from caveman.memory.manager import MemoryManager
         from caveman.engines.ripple import RippleEngine
-        mm = MemoryManager(base_dir=tmp_path)
+        mm = MemoryManager.with_sqlite(base_dir=tmp_path)
         ripple = RippleEngine(mm)
         new_entry = MemoryEntry(
             id="new1", content="First memory ever",
@@ -226,16 +244,22 @@ class TestObsidianExport:
     @pytest.fixture
     def memory_with_data(self, tmp_path):
         from caveman.memory.manager import MemoryManager
-        mm = MemoryManager(base_dir=tmp_path / "mem")
+        mm = MemoryManager.with_sqlite(base_dir=tmp_path / "mem")
         now = datetime.now()
-        mm._memories[MemoryType.SEMANTIC] = [
+        entries = [
             MemoryEntry(id="s1", content="Server IP is 203.0.113.10",
                        memory_type=MemoryType.SEMANTIC, created_at=now),
-        ]
-        mm._memories[MemoryType.PROCEDURAL] = [
             MemoryEntry(id="p1", content="How to install pyenv: brew install pyenv",
                        memory_type=MemoryType.PROCEDURAL, created_at=now),
         ]
+        conn = mm.backend._get_conn()
+        for e in entries:
+            conn.execute(
+                "INSERT INTO memories (id, content, type, created_at, metadata_json, trust_score, entities_json) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (e.id, e.content, e.memory_type.value, e.created_at.isoformat(), "{}", 0.5, "[]"),
+            )
+        conn.commit()
         return mm
 
     def test_export_creates_files(self, memory_with_data, tmp_path):
@@ -280,7 +304,7 @@ class TestObsidianExport:
     def test_export_empty_memory(self, tmp_path):
         from caveman.memory.manager import MemoryManager
         from caveman.memory.obsidian import export_to_obsidian
-        mm = MemoryManager(base_dir=tmp_path / "mem")
+        mm = MemoryManager.with_sqlite(base_dir=tmp_path / "mem")
         out = tmp_path / "vault"
         result = export_to_obsidian(mm, out)
         assert result["exported"] == 0

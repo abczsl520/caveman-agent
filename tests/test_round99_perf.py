@@ -16,7 +16,7 @@ from pathlib import Path
 @pytest.fixture
 def memory_manager(tmp_path):
     from caveman.memory.manager import MemoryManager
-    return MemoryManager(base_dir=tmp_path)
+    return MemoryManager.with_sqlite(base_dir=tmp_path)
 
 
 @pytest.mark.asyncio
