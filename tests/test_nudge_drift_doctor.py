@@ -33,7 +33,7 @@ def test_supersede_detection():
 def test_drift_check():
     async def _run():
         with tempfile.TemporaryDirectory() as td:
-            mm = MemoryManager(base_dir=td)
+            mm = MemoryManager.with_sqlite(base_dir=td)
             await mm.store("user prefers dark mode", MemoryType.WORKING)
 
             drift = DriftDetector(mm)
@@ -55,7 +55,7 @@ def test_drift_check():
 def test_drift_scan_stale():
     async def _run():
         with tempfile.TemporaryDirectory() as td:
-            mm = MemoryManager(base_dir=td)
+            mm = MemoryManager.with_sqlite(base_dir=td)
             # Store a memory (it's new, so not stale)
             await mm.store("test memory", MemoryType.EPISODIC)
 
@@ -74,7 +74,7 @@ def test_drift_scan_stale():
 def test_drift_gc_dry_run():
     async def _run():
         with tempfile.TemporaryDirectory() as td:
-            mm = MemoryManager(base_dir=td)
+            mm = MemoryManager.with_sqlite(base_dir=td)
             await mm.store("old memory", MemoryType.SEMANTIC)
 
             drift = DriftDetector(mm)
@@ -91,7 +91,7 @@ def test_drift_gc_dry_run():
 def test_nudge_should_nudge():
     async def _run():
         with tempfile.TemporaryDirectory() as td:
-            mm = MemoryManager(base_dir=td)
+            mm = MemoryManager.with_sqlite(base_dir=td)
             nudge = MemoryNudge(mm, interval=10, first_nudge=3)
 
             assert not nudge.should_nudge(0)
@@ -105,7 +105,7 @@ def test_nudge_should_nudge():
 def test_nudge_heuristic_extraction():
     async def _run():
         with tempfile.TemporaryDirectory() as td:
-            mm = MemoryManager(base_dir=td)
+            mm = MemoryManager.with_sqlite(base_dir=td)
             nudge = MemoryNudge(mm)
 
             turns = [
@@ -132,7 +132,7 @@ def test_nudge_with_mock_llm():
             ])
 
         with tempfile.TemporaryDirectory() as td:
-            mm = MemoryManager(base_dir=td)
+            mm = MemoryManager.with_sqlite(base_dir=td)
             nudge = MemoryNudge(mm, llm_fn=mock_llm)
 
             turns = [{"role": "user", "content": "test"}]
@@ -147,7 +147,7 @@ def test_nudge_with_mock_llm():
 def test_nudge_stats():
     async def _run():
         with tempfile.TemporaryDirectory() as td:
-            mm = MemoryManager(base_dir=td)
+            mm = MemoryManager.with_sqlite(base_dir=td)
             nudge = MemoryNudge(mm)
 
             await nudge.run([{"role": "user", "content": "hi"}], task="test")
