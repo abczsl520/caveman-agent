@@ -24,11 +24,13 @@ def register_utility_commands(app: typer.Typer) -> None:
         typer.echo(f"\u2705 Exported {result['exported']} memories to {result['output_dir']}")
 
     @app.command()
-    def status() -> None:
+    def status(
+        gateway: bool = typer.Option(False, "--gateway", help="Include current gateway process/log diagnostics"),
+    ) -> None:
         """Show Caveman status dashboard + project stats."""
         from caveman.cli.status import status_text
         from caveman.cli.stats import get_stats
-        typer.echo(status_text())
+        typer.echo(status_text(include_gateway=gateway))
         typer.echo(get_stats())
 
     @app.command()

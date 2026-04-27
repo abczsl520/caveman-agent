@@ -91,7 +91,27 @@ def _get_model_info() -> tuple[str, str]:
         return "unknown", "Unknown"
 
 
-def status_text() -> str:
+def _format_gateway_status() -> list[str]:
+    """Return current gateway status lines bounded to the active PID window."""
+    from caveman.gateway.status import get_running_pid
+    from caveman.gateway.log_diagnostics import scan_current_startup_log
+
+    pid = get_running_pid()
+    report = scan_current_startup_log(expected_pid=pid)
+    lines = [f"  Gateway: {'running (PID ' + str(pid) + ')' if pid else 'stopped'}"]
+    lines.append(f"  Gateway log window: {'bounded' if report['bounded'] else 'unbounded'} via {report['boundary']} ({report['line_count']} lines)")
+    alert_parts = []
+    for pattern, data in report["patterns"].items():
+        if data["count"]:
+            alert_parts.append(f"{pattern}={data['count']}")
+    lines.append("  Gateway log alerts: " + (", ".join(alert_parts) if alert_parts else "none"))
+    markers = report["healthy_markers"]
+    lines.append(f"  Discord connected {'✅' if markers['discord_connected'] else '❌'}")
+    lines.append(f"  Slash commands synced {'✅' if markers['slash_commands_synced'] else '❌'}")
+    return lines
+
+
+def status_text(include_gateway: bool = False) -> str:
     """Generate status dashboard text."""
     model, provider = _get_model_info()
     mem_counts = _count_memories()
@@ -117,12 +137,14 @@ def status_text() -> str:
         f"  Engines: {engine_str}",
         f"  Home: {CAVEMAN_HOME}",
     ]
+    if include_gateway:
+        lines.extend(_format_gateway_status())
     return "\n".join(lines)
 
 
-def main() -> None:
+def main(include_gateway: bool = False) -> None:
     """Print status dashboard."""
-    print(status_text())
+    print(status_text(include_gateway=include_gateway))
 
 
 if __name__ == "__main__":
