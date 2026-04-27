@@ -122,18 +122,21 @@ def test_memory_concurrent_store():
         from caveman.memory.types import MemoryType
 
         with tempfile.TemporaryDirectory() as td:
-            mm = MemoryManager(base_dir=td)
+            mm = MemoryManager.with_sqlite(base_dir=td)
+            try:
+                # Store 10 memories concurrently
+                tasks = [
+                    mm.store(f"memory {i}", MemoryType.EPISODIC)
+                    for i in range(10)
+                ]
+                ids = await asyncio.gather(*tasks)
 
-            # Store 10 memories concurrently
-            tasks = [
-                mm.store(f"memory {i}", MemoryType.EPISODIC)
-                for i in range(10)
-            ]
-            ids = await asyncio.gather(*tasks)
-
-            assert len(ids) == 10
-            assert len(set(ids)) == 10  # All unique IDs
-            assert mm.total_count == 10
+                assert len(ids) == 10
+                assert len(set(ids)) == 10  # All unique IDs
+                assert mm.total_count == 10
+            finally:
+                if mm.backend:
+                    mm.backend.close()
 
     asyncio.run(_run())
 
