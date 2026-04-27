@@ -17,7 +17,7 @@ from caveman.engines.recall import RecallEngine
 
 @pytest.fixture
 def memory_manager(tmp_path):
-    return MemoryManager(base_dir=tmp_path / "memory")
+    return MemoryManager.with_sqlite(base_dir=tmp_path / "memory")
 
 
 @pytest.fixture
@@ -75,7 +75,7 @@ async def test_store_persist_and_reload(memory_manager, tmp_path):
     assert memory_manager.total_count == 5
 
     # Create a new manager pointing at the same dir
-    mgr2 = MemoryManager(base_dir=tmp_path / "memory")
+    mgr2 = MemoryManager.with_sqlite(base_dir=tmp_path / "memory")
     await mgr2.load()
     assert mgr2.total_count == 5
 
