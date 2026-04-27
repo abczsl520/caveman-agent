@@ -133,7 +133,7 @@ class ACPEventEmitter:
     async def on_tool_complete(
         self, tool_name: str, result: Optional[str] = None,
     ) -> None:
-        """Emit tool call completion."""
+        """Emit a neutral tool result event without completion wording."""
         ids = self._tool_call_ids.get(tool_name, [])
         tc_id = ids.pop(0) if ids else make_tool_call_id()
         if not ids:
@@ -143,11 +143,11 @@ class ACPEventEmitter:
         if len(display) > 5000:
             display = display[:4900] + f"\n... ({len(result)} chars, truncated)"
 
-        await self._emit(ACPEvent("tool_call_complete", {
+        await self._emit(ACPEvent("tool_call_result", {
             "tool_call_id": tc_id,
             "tool_name": tool_name,
             "kind": get_tool_kind(tool_name),
-            "status": "completed",
+            "phase": "result",
             "result": display,
         }))
 

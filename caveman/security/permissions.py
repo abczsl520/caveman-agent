@@ -39,11 +39,29 @@ class PermissionManager:
         self._approval_callback: Callable | None = None
         self._bus = bus
 
+    @staticmethod
+    def _normalize_level(level) -> PermissionLevel:
+        """Normalize permission levels across config strings and hot-reloaded Enums.
+
+        SIGUSR2 can reload caveman.security.permissions while existing gateway
+        sessions still hold old PermissionLevel enum instances. Comparing enum
+        identity then misclassifies old AUTO as ASK. Normalize by semantic value.
+        """
+        if isinstance(level, PermissionLevel):
+            return level
+        raw = getattr(level, "value", level)
+        if isinstance(raw, str):
+            try:
+                return PermissionLevel(raw.lower())
+            except ValueError:
+                logger.warning("Unknown permission level %r; defaulting to ASK", raw)
+        return PermissionLevel.ASK
+
     def set_approval_callback(self, callback: Callable) -> None:
         self._approval_callback = callback
 
     def check(self, action: str) -> PermissionLevel:
-        return self._permissions.get(action, PermissionLevel.ASK)
+        return self._normalize_level(self._permissions.get(action, PermissionLevel.ASK))
 
     async def request(self, action: str, description: str) -> bool:
         from caveman.events import EventType

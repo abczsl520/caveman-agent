@@ -38,13 +38,14 @@ def register_utility_commands(app: typer.Typer) -> None:
         parallel: Optional[list[str]] = typer.Option(None, "--parallel", "-p", help="Audit multiple subsystems in parallel"),
         rounds: int = typer.Option(5, help="Number of flywheel rounds"),
         max_iter: int = typer.Option(50, "--max-iter", help="Max LLM iterations per round (raise freely for long-compounding audits)"),
+        round_timeout: float = typer.Option(900.0, "--round-timeout", help="Wall-clock timeout in seconds per flywheel round"),
         stats: bool = typer.Option(False, "--stats", help="Show flywheel statistics"),
     ) -> None:
         """Run the meta-flywheel: Caveman audits and fixes itself."""
         from caveman.cli.flywheel import flywheel_cli
         flywheel_cli(
             target=target, all_=all_, parallel=parallel,
-            rounds=rounds, max_iter=max_iter, stats=stats,
+            rounds=rounds, max_iter=max_iter, round_timeout_s=round_timeout, stats=stats,
         )
 
     @app.command()

@@ -24,6 +24,7 @@ async def drain_active_sessions(
     sessions: dict[str, dict],
     session_locks: dict[str, asyncio.Lock],
     timeout: float,
+    force_stop: callable | None = None,
 ) -> tuple[int, bool]:
     """Wait for active sessions to finish before restart.
 
@@ -31,6 +32,9 @@ async def drain_active_sessions(
         sessions: The runner's session dict.
         session_locks: The runner's per-session lock dict.
         timeout: Max seconds to wait.
+        force_stop: Optional predicate checked while draining. When it returns
+            true, drain exits immediately so a second restart signal can force
+            re-exec even if the active session is the one requesting restart.
 
     Returns:
         (active_count_at_start, timed_out)
@@ -44,6 +48,9 @@ async def drain_active_sessions(
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout
     while loop.time() < deadline:
+        if force_stop and force_stop():
+            logger.warning("Drain interrupted by force restart request")
+            return len(active), True
         still_active = [k for k in active if
                         session_locks.get(k) and session_locks[k].locked()]
         if not still_active:
@@ -151,23 +158,15 @@ async def run_gateway_forever(config_path: str | None = None, max_restarts: int 
         logger.info("SIGUSR1 received — initiating graceful restart")
 
     def _sigusr2_handler():
-        """Hot-reload changed modules without restarting gateway."""
-        import importlib
-        # Reload all loaded caveman modules (dynamic discovery)
-        _hot_reload_targets = sorted(
-            name for name in sys.modules
-            if name.startswith('caveman.') and not name.startswith('caveman.gateway.gateway_lifecycle')
-        )
-        reloaded = []
-        for mod_name in _hot_reload_targets:
-            mod = sys.modules.get(mod_name)
-            if mod:
-                try:
-                    importlib.reload(mod)
-                    reloaded.append(mod_name)
-                except Exception as e:
-                    logger.error("Hot-reload failed for %s: %s", mod_name, e)
-        logger.info("SIGUSR2 hot-reload: %s", reloaded or "no modules loaded yet")
+        """Treat SIGUSR2 as a full restart request, not in-process hot reload.
+
+        Broad importlib.reload of caveman.* is unsafe in this gateway: long-lived
+        sessions, registries, callbacks, and Enum instances survive while module
+        classes are replaced, creating half-old/half-new process state.  A full
+        re-exec is the stable boundary for loading code changes.
+        """
+        _sigusr1_handler()
+        logger.info("SIGUSR2 received — requesting full restart; in-process hot-reload disabled")
 
     loop = asyncio.get_running_loop()
     if hasattr(_signal, "SIGUSR1"):
@@ -179,7 +178,7 @@ async def run_gateway_forever(config_path: str | None = None, max_restarts: int 
     if hasattr(_signal, "SIGUSR2"):
         try:
             loop.add_signal_handler(_signal.SIGUSR2, _sigusr2_handler)
-            logger.info("SIGUSR2 handler installed for hot-reload")
+            logger.info("SIGUSR2 handler installed for full restart")
         except NotImplementedError as exc:
             logger.debug("_sigusr2_handler: suppressed %s", exc)
 
@@ -254,6 +253,7 @@ async def run_gateway_forever(config_path: str | None = None, max_restarts: int 
                             srv = _get_server()
                             active, timed_out = await drain_active_sessions(
                                 srv.sessions, srv.session_locks, DEFAULT_DRAIN_TIMEOUT,
+                                force_stop=lambda: _sigusr1_force,
                             )
                             if timed_out:
                                 logger.warning("Drain timed out with active sessions")

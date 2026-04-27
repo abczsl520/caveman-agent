@@ -63,23 +63,21 @@ class TelegramGateway(Gateway):
 
             ctx = {
                 "chat_id": update.message.chat_id,
+                "channel_id": update.message.chat_id,
                 "user_id": user_id,
                 "username": update.message.from_user.username or str(user_id),
                 "message_id": update.message.message_id,
+                "gateway_name": "telegram",
             }
 
             # Send typing action
             await update.message.chat.send_action("typing")
 
             try:
-                result = await asyncio.wait_for(
-                    self._task_handler(task, ctx), timeout=300.0,
-                )
-            except asyncio.TimeoutError:
-                result = "⏰ Timed out."
+                result = await self._task_handler(task, ctx)
             except Exception as e:
                 logger.exception("Task handler failed: %s", e)
-                result = "❌ Something went wrong. Please try again."
+                result = f"❌ 任务处理链路异常：{type(e).__name__}: {str(e)[:300]}。已记录日志；这不是任务完成信号。"
 
             # Split long messages
             for chunk in split_message(result, self.max_message_len):

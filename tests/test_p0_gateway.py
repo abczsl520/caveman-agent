@@ -240,6 +240,28 @@ class TestExecution:
         assert result.success
         assert result.fallback_used
 
+    def test_execution_engine_has_no_default_hard_total_timeout(self):
+        """Default gateway execution must not cancel healthy long auto-flywheel work."""
+        from caveman.gateway.execution import ExecutionConfig
+        assert ExecutionConfig().total_timeout is None
+
+    @pytest.mark.asyncio
+    async def test_execution_engine_timeout_is_opt_in(self):
+        """Timeout behavior remains available only when explicitly configured."""
+        from caveman.gateway.execution import AgentExecutionEngine, ExecutionConfig
+
+        async def slow_fn(*a, **kw):
+            await asyncio.sleep(1)
+            return "late"
+
+        engine = AgentExecutionEngine(
+            agent_fn=slow_fn,
+            config=ExecutionConfig(total_timeout=0.01, max_retries=0),
+        )
+        result = await engine.execute("test")
+        assert not result.success
+        assert "timeout" in result.error.lower()
+
 
 # ── Session Manager Tests ──
 

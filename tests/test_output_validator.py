@@ -6,6 +6,8 @@ from caveman.agent.output_validator import (
     final_sentence_is_question,
     final_text_looks_truncated,
     should_use_closing_marker,
+    is_continuation_task,
+    suppress_continuation_terminality,
 )
 
 
@@ -58,6 +60,50 @@ class TestEnforceClosingFormat:
         # a terminal completion signal from ordinary content.
         assert result == text
         assert CLOSING_LINE not in result
+
+    def test_continuation_task_neutralizes_terminal_sentence(self):
+        task = "继续飞轮 (自动第 7/20 轮)"
+        text = "本轮已修复 gateway final 泄漏，测试通过。全部修复完毕。"
+        result = enforce_closing_format(text, True, surface="discord", task=task)
+        assert "全部修复完毕" not in result
+        assert "阶段性推进" in result
+
+    def test_continuation_task_removes_standalone_done_line(self):
+        task = "继续飞轮 (自动第 9/20 轮)"
+        text = "已改 output_validator，并补了测试。\n\nDone."
+        result = enforce_closing_format(text, False, surface="discord", task=task)
+        assert "Done" not in result
+        assert "已改 output_validator" in result
+        assert "连续任务保持推进" in result
+
+    def test_normal_task_can_report_finished_naturally(self):
+        task = "修复 README 里的错别字"
+        text = "已完成 README 错别字修复。"
+        result = enforce_closing_format(text, False, surface="discord", task=task)
+        assert result == text
+
+
+class TestContinuationTaskDetection:
+    def test_detects_real_auto_flywheel_format(self):
+        assert is_continuation_task("继续飞轮 (自动第 7/20 轮)") is True
+
+    def test_detects_gateway_auto_continue_prompt_with_previous_summary(self):
+        task = "继续飞轮 (自动第 9/20 轮)。上一轮结果摘要：修了 gateway。继续下一个最高复利的改进；如果还在排查或修复中，只汇报进展和证据，不要输出终止性收尾。"
+        assert is_continuation_task(task) is True
+        result = suppress_continuation_terminality("本轮已完成修复。\n\nFlywheel completed", task=task)
+        assert "Flywheel completed" not in result
+        assert "已完成" not in result
+        assert "连续任务保持推进" in result
+
+    def test_detects_keep_going_language(self):
+        assert is_continuation_task("keep going, don't stop; 继续排查下一个问题") is True
+
+    def test_does_not_flag_one_shot_task(self):
+        assert is_continuation_task("修复 README 里的错别字") is False
+
+    def test_suppress_continuation_empty_terminal_output_has_safe_progress_text(self):
+        result = suppress_continuation_terminality("✅---本轮已完成---✅", task="继续飞轮 (自动第 2/20 轮)")
+        assert result == "本轮有进展记录；连续任务保持推进。"
 
 
 class TestTruncatedFinalDetection:

@@ -91,6 +91,34 @@ class TestSmartBuffer:
         await buf.flush()
         assert buf.sent_any
 
+    @pytest.mark.asyncio
+    async def test_flush_can_suppress_user_send_for_auto_continue(self, buf, mock_router):
+        # Explicit result flush suppression still works even for a normally
+        # send-enabled buffer.
+        await buf.add("this looks like a final report")
+        await buf.flush(send=False)
+        mock_router.send.assert_not_called()
+        assert not buf.sent_any
+        assert buf._buf == ""
+
+    @pytest.mark.asyncio
+    async def test_auto_continue_send_disabled_blocks_char_limit_flush(self, mock_router):
+        buf = _SmartBuffer(mock_router, gw="test", ch="ch1", send_enabled=False)
+        buf.CHAR_LIMIT = 10
+        await buf.add("x" * 12)
+        mock_router.send.assert_not_called()
+        assert not buf.sent_any
+        assert buf._buf == ""
+
+    @pytest.mark.asyncio
+    async def test_auto_continue_send_disabled_blocks_interim_flush(self, mock_router):
+        buf = _SmartBuffer(mock_router, gw="test", ch="ch1", send_enabled=False)
+        await buf.add("interim evidence-looking text")
+        result = await buf.flush_interim()
+        assert result == "interim evidence-looking text"
+        mock_router.send.assert_not_called()
+        assert not buf.sent_any
+
     def test_is_pure_monologue(self, buf):
         assert buf._is_pure_monologue("Let me check that")
         assert buf._is_pure_monologue("OK, I'll look into it")

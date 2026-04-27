@@ -199,7 +199,7 @@ def serve(
     if existing:
         typer.echo(f"⚠️ Gateway already running (PID {existing}). Use /restart.")
         raise typer.Exit(1)
-    setup_logging(level="INFO", log_file=str(Path.home() / ".caveman" / "logs" / "gateway.log"))
+    setup_logging(level="INFO", log_file=str(Path.home() / ".caveman" / "logs" / "gateway.log"), console=False)
     show_banner()
     typer.echo("🌐 Starting gateway service...")
     try:

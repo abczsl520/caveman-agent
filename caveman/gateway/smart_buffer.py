@@ -37,7 +37,7 @@ class _SmartBuffer:
         re.MULTILINE,
     )
 
-    def __init__(self, router: GatewayRouter, gw: str, ch: str, interim_enabled: bool = True):
+    def __init__(self, router: GatewayRouter, gw: str, ch: str, interim_enabled: bool = True, send_enabled: bool = True):
         # Platform-aware char limit
         try:
             from caveman.gateway.display_config import get_display_config
@@ -53,6 +53,7 @@ class _SmartBuffer:
         self._sent_text = ""       # Text actually sent to user (interim + final)
         self._sent_count = 0
         self._interim_enabled = interim_enabled
+        self._send_enabled = send_enabled
         self._already_sent: set[str] = set()  # Dedup: content hashes of sent text
         self._timer: asyncio.TimerHandle | None = None
 
@@ -61,7 +62,7 @@ class _SmartBuffer:
         self._full_text += text
         self._reset_timer()
         if len(self._buf) >= self.CHAR_LIMIT:
-            await self.flush()
+            await self.flush(send=self._send_enabled)
 
     def _reset_timer(self) -> None:
         if self._timer:
@@ -69,7 +70,7 @@ class _SmartBuffer:
         try:
             loop = asyncio.get_running_loop()
             self._timer = loop.call_later(
-                self.SILENCE_TIMEOUT, lambda: loop.create_task(self.flush())
+                self.SILENCE_TIMEOUT, lambda: loop.create_task(self.flush(send=self._send_enabled))
             )
         except RuntimeError as exc:
             logger.debug("_reset_timer: suppressed %s", exc)
@@ -125,7 +126,7 @@ class _SmartBuffer:
             return text
 
         # Send as interim message (if enabled)
-        if self._interim_enabled:
+        if self._interim_enabled and self._send_enabled:
             try:
                 await self._router.send(self._gw, self._ch, text)
                 self._sent_text += text + "\n"
@@ -137,8 +138,14 @@ class _SmartBuffer:
 
         return text
 
-    async def flush(self) -> None:
-        """Flush buffer as final message (Layer 3)."""
+    async def flush(self, *, send: bool = True) -> None:
+        """Flush buffer as final message (Layer 3).
+
+        When ``send`` is false we still clear/deduplicate buffered final text, but
+        do not emit it to the user. This is used for auto-continuation work where
+        progress messages carry evidence and a normal final paragraph would look
+        like a terminal stop.
+        """
         if self._timer:
             self._timer.cancel()
             self._timer = None
@@ -151,6 +158,11 @@ class _SmartBuffer:
         h = self._content_hash(text)
         if h in self._already_sent:
             logger.debug("Dedup: skipping already-sent final text")
+            return
+
+        if not send or not self._send_enabled:
+            self._already_sent.add(h)
+            logger.info("Final flush suppressed for auto-continuation (%d chars): %s", len(text), text[:80])
             return
 
         try:

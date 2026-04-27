@@ -59,7 +59,9 @@ class TestACPEvents:
         await emitter.on_tool_complete("bash", "hi")
         assert len(emitter.events) == 2
         assert emitter.events[0].event_type == "tool_call_start"
-        assert emitter.events[1].event_type == "tool_call_complete"
+        assert emitter.events[1].event_type == "tool_call_result"
+        assert "status" not in emitter.events[1].data
+        assert emitter.events[1].data["phase"] == "result"
 
     @pytest.mark.asyncio
     async def test_emitter_message_events(self):
@@ -93,6 +95,8 @@ class TestACPEvents:
         long_result = "x" * 10000
         await emitter.on_tool_complete("bash", long_result)
         evt = emitter.events[1]
+        assert evt.event_type == "tool_call_result"
+        assert "status" not in evt.data
         assert len(evt.data["result"]) < 6000
     @pytest.mark.asyncio
     async def test_emitter_task_result_uses_neutral_event_type(self):

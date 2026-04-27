@@ -14,6 +14,7 @@ from typing import Any
 
 
 from caveman.agent.stream import is_result_event_type
+from caveman.agent.output_validator import suppress_continuation_terminality, is_continuation_task
 from caveman.gateway.router import GatewayRouter
 from caveman.gateway.smart_buffer import _SmartBuffer
 from caveman.gateway.task_runner_helpers import _activity_monitor, _handle_tool_call, _persist_result, _spawn_post_task_review
@@ -82,7 +83,7 @@ class _TaskContext:
         "last_event_time", "last_user_visible_time", "task_start_time",
         "recent_tool_calls", "child_tasks", "tool_heartbeat",
         "_hb_msg_id", "_hb_counts", "iteration", "max_iterations",
-        "pressure_warned", "stuck_warnings",
+        "pressure_warned", "stuck_warnings", "visible_message_count",
     )
 
     def __init__(self, gw_name: str, channel_id: str, router: GatewayRouter,
@@ -107,6 +108,7 @@ class _TaskContext:
         self.max_iterations = 0
         self.pressure_warned = False
         self.stuck_warnings = 0
+        self.visible_message_count = 0
         self._hb_msg_id: int | None = None  # Discord message ID for heartbeat edits
         self._hb_counts: dict[str, int] = {}  # tool_name → count for heartbeat display
 
@@ -195,7 +197,10 @@ class _TaskContext:
     async def send(self, message: str) -> dict | None:
         """Send a message to the channel, swallowing non-critical errors."""
         try:
-            return await self.router.send(self.gw_name, self.channel_id, message)
+            result = await self.router.send(self.gw_name, self.channel_id, message)
+            self.visible_message_count += 1
+            self.last_user_visible_time = asyncio.get_running_loop().time()
+            return result
         except Exception as e:
             logger.debug("Non-critical send error: %s", e)
 
@@ -207,18 +212,37 @@ async def run_single_task(
     attachments: list[dict[str, str]] | None = None,
 ) -> str:
     """Execute a single task and return the result text."""
-    loop = session["loop"]
+    loop = session.get("loop") or session.get("agent_loop")
+    if loop is None:
+        raise AgentTaskError("Gateway session missing agent loop")
     timeouts = _resolve_timeouts(config)
 
-    # Reset iteration budget for each new task
-    loop.budget.reset()
-    loop.tool_registry.set_context("source_channel", source_channel)
-    loop.tool_registry.set_context("gateway_router", router)
-    store.append_turn(session["meta"].session_id, "user", task)
+    # Reset iteration budget for each new task when running a real AgentLoop.
+    # Older restored sessions and lightweight test doubles may not expose the
+    # newer budget/tool_registry attributes; don't turn that into a user-visible
+    # generic gateway failure.
+    budget = getattr(loop, "budget", None)
+    if budget is not None and hasattr(budget, "reset"):
+        budget.reset()
+    tool_registry = getattr(loop, "tool_registry", None)
+    if tool_registry is not None and hasattr(tool_registry, "set_context"):
+        tool_registry.set_context("source_channel", source_channel)
+        tool_registry.set_context("gateway_router", router)
+    meta = session.get("meta")
+    session_id = getattr(meta, "session_id", None)
+    if session_id is not None:
+        store.append_turn(session_id, "user", task)
 
     ctx = _TaskContext(gw_name, channel_id, router, timeouts)
     session["_task_ctx"] = ctx  # For interrupt support
-    buf = _SmartBuffer(router, gw_name, channel_id)
+    continuation_task = bool(source_channel.get("_auto_continue")) or is_continuation_task(task)
+    # In automatic continuation mode the model's result paragraph is control-plane
+    # input for the next round, not a user-visible final answer. Progress/tool
+    # messages remain visible through progress/router sends; suppressing the final
+    # paragraph avoids the repeated "done/收尾" illusion that made the flywheel look
+    # stopped after every round.
+    suppress_final_text = continuation_task
+    buf = _SmartBuffer(router, gw_name, channel_id, send_enabled=not suppress_final_text)
     final_text = ""
 
     ctx.spawn_task(lambda: _activity_monitor(ctx), name="activity_monitor", critical=True)
@@ -232,7 +256,8 @@ async def run_single_task(
         logger.error("🚨 System prompt critically short (%d chars)! Session may have lost its prompt.", prompt_len)
 
     try:
-        async for event in loop.run_stream(task, attachments=attachments):
+        stream = loop.run_stream(task, attachments=attachments) if attachments else loop.run_stream(task)
+        async for event in stream:
             if ctx.shutdown_flag:
                 logger.info("Graceful shutdown: stopping stream processing")
                 break
@@ -281,7 +306,29 @@ async def run_single_task(
 
             elif is_result_event_type(event.type):
                 final_text = str(event.data) if event.data else ""
-                await buf.flush()
+                if continuation_task:
+                    final_text = suppress_continuation_terminality(
+                        final_text, task=task, surface=gw_name
+                    )
+                await buf.flush(send=not suppress_final_text)
+                if (
+                    final_text
+                    and not suppress_final_text
+                    and not getattr(buf, "_sent_text", "").strip()
+                ):
+                    await ctx.send(final_text)
+                elif suppress_final_text:
+                    # Suppressing terminal-looking final paragraphs is necessary
+                    # for auto flywheel, but a totally quiet round feels like the
+                    # system stopped. If no progress/tool heartbeat/user-visible
+                    # output happened in this round, emit one explicit non-final
+                    # pulse so the control loop remains observable.
+                    progress_count = int(source_channel.get("_progress_sent", 0) or 0)
+                    if progress_count <= 0 and ctx.visible_message_count <= 0 and not ctx._hb_msg_id:
+                        await ctx.send(
+                            "🔄 自动续轮仍在推进；本轮没有产生可展示的最终文本，"
+                            "不代表已完成或停止，继续进入下一步排查。"
+                        )
                 # Terminal completion markers are disabled by default. Do not
                 # send a marker-only message; it causes gateway/flywheel to
                 # treat partially verified work as complete.
@@ -289,14 +336,18 @@ async def run_single_task(
         buf.cancel()
         await ctx.cancel_all()
         session.pop("_task_ctx", None)  # Clear interrupt reference
-        # Clean up heartbeat status message
+        # Clean up heartbeat status message. For continuation workflows, avoid
+        # editing the visible heartbeat into a stop-looking terminal status;
+        # the next progress/auto-round message is the source of truth.
         if ctx._hb_msg_id:
+            source_channel["_hb_msg_id"] = ctx._hb_msg_id
+        if ctx._hb_msg_id and not continuation_task:
             try:
                 await ctx.router.edit(ctx.gw_name, ctx.channel_id, ctx._hb_msg_id,
                                       f"📌 响应流已停止（{ctx.tool_call_count} 个工具调用；不代表任务已验证完成，结果以最终消息/后续继续为准）")
             except Exception as exc:
                 logger.debug("unknown: suppressed %s", exc)
-        _persist_result(buf, final_text, session, store)
+        _persist_result(buf, final_text, session, store, continuation_task=continuation_task)
 
         # Background review: extract memories from this task
         _spawn_post_task_review(session, ctx.tool_call_count)
@@ -304,6 +355,8 @@ async def run_single_task(
         # Do not fabricate "Done." when the agent produced no final text.
         # Returning an empty string lets callers distinguish "ended" from
         # "verified complete" and prevents flywheel/gateway false positives.
+        # For auto/continuation work, return the sanitized non-terminal summary;
+        # the raw final paragraph must not be fed back into the next auto round.
         return final_text or ""
 
     except Exception:

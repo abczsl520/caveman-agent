@@ -42,13 +42,33 @@ logger = logging.getLogger(__name__)
 SUBSYSTEMS = [
     "security", "tools", "memory", "agent", "compression",
     "providers", "gateway", "config", "wiki", "coordinator",
-    "trajectory", "skills", "engines", "bridge", "mcp",
+    "trajectory", "skills", "engines", "bridge", "mcp", "flywheel",
 ]
+
+FLYWHEEL_AUDIT_PATHS = [
+    "caveman/cli/flywheel.py",
+    "caveman/tools/builtin/flywheel_tool.py",
+    "caveman/memory/flywheel_metrics.py",
+    "caveman/training/flywheel_dashboard.py",
+]
+
+
+def _repo_root() -> Path:
+    """Return the Caveman repository root independent of caller cwd."""
+    return Path(__file__).resolve().parents[2]
+
+
+def _audit_paths_for_subsystem(subsystem: str) -> str:
+    """Return concrete source paths for a flywheel audit target."""
+    if subsystem == "flywheel":
+        return "\n".join(f"- {path}" for path in FLYWHEEL_AUDIT_PATHS)
+    return f"- caveman/{subsystem}/"
 
 AUDIT_PROMPT = """You are Caveman, auditing YOUR OWN {subsystem} subsystem at {project_dir}/.
 
 ## Level 1: Code Quality (existing)
-Read all Python files in caveman/{subsystem}/ and grep for external usage.
+Read all Python files in the concrete {subsystem} source paths below and grep for external usage:
+{audit_paths}
 Audit for: dead code, missing error handling, integration gaps, data integrity.
 
 ## Level 2: Architecture (NEW — highest compound value)
@@ -79,15 +99,109 @@ Use file_edit for surgical changes. Keep changes minimal.
 After fixing, run tests: bash -c "cd {project_dir} && {python} -m pytest tests/ -x -q --tb=short"
 """
 
+FLYWHEEL_AUDIT_PROMPT = """You are Caveman auditing the meta-flywheel subsystem itself at {project_dir}/.
+
+Concrete files to inspect only:
+{audit_paths}
+
+Goal: produce a bounded diagnostic that can finish inside a short wall-clock budget.
+
+Rules:
+- Do not modify files in this audit round.
+- Do not run the full test suite.
+- Do not commit changes.
+- Use at most targeted reads/searches of the concrete files above.
+- Prioritize defects that prevent future flywheel runs from producing useful evidence.
+- Keep the full response under 80 lines.
+- End the response with exactly: END_FLYWHEEL_AUDIT
+
+Return exactly three sections:
+1. S/A findings — only real flywheel-breaking or flywheel-leaking issues.
+2. Minimal fix plan — each item must name files and estimated LOC.
+3. Verification plan — targeted tests/commands only.
+
+Static pre-audit evidence:
+{preaudit}
+"""
+
+
+def _static_flywheel_preaudit(project_dir: str | Path) -> str:
+    """Return deterministic flywheel risk evidence before invoking the agent.
+
+    Meta-flywheel self-audits should not spend their whole budget rediscovering
+    the same orchestration files. This cheap pass narrows the LLM's job to
+    validating/triaging concrete evidence.
+    """
+    project = Path(project_dir)
+    lines: list[str] = []
+    checks = {
+        "hard_timeout_helper": ("caveman/cli/flywheel.py", "_run_round_with_hard_timeout"),
+        "cli_round_timeout": ("caveman/cli/utility_commands.py", "--round-timeout"),
+        "self_audit_sentinel": ("caveman/cli/flywheel.py", _FLYWHEEL_AUDIT_DONE),
+        "continuation_toggle": ("caveman/agent/loop.py", "allow_continuation_repair"),
+        "diagnostic_profile": ("caveman/agent/factory.py", "diagnostic_profile"),
+    }
+    for name, (rel, needle) in checks.items():
+        try:
+            present = needle in (project / rel).read_text(encoding="utf-8")
+        except OSError:
+            present = False
+        lines.append(f"- {name}: {'present' if present else 'MISSING'} ({rel})")
+    return "\n".join(lines)
+
+
+def _deterministic_flywheel_self_audit(project_dir: str | Path) -> str:
+    """Produce a bounded self-audit without invoking the full AgentLoop.
+
+    This is the meta-flywheel safety valve: if provider/tool schema startup is slow,
+    the flywheel must still be able to report its own orchestration health.
+    """
+    preaudit = _static_flywheel_preaudit(project_dir)
+    missing = [line for line in preaudit.splitlines() if "MISSING" in line]
+    if missing:
+        finding = "P0: missing required meta-flywheel safety controls:\n" + "\n".join(missing)
+        plan = "Add the missing controls in the named files; keep changes surgical."
+    else:
+        finding = "No P0: required meta-flywheel safety controls are present."
+        plan = "No immediate code change; run targeted regression tests and a bounded CLI smoke test."
+    return (
+        "1. S/A findings — " + finding + "\n"
+        "2. Minimal fix plan — " + plan + "\n"
+        "3. Verification plan — pytest tests/test_flywheel_cli_timeout.py -q; "
+        "caveman flywheel --target flywheel --rounds 1 --max-iter 80 --round-timeout 10.\n"
+        f"Static pre-audit evidence:\n{preaudit}\n"
+        f"{_FLYWHEEL_AUDIT_DONE}"
+    )
+
+
+def _audit_prompt_for_subsystem(subsystem: str, project_dir: str | Path, python_path: str) -> str:
+    """Build a bounded audit prompt for a subsystem."""
+    audit_paths = _audit_paths_for_subsystem(subsystem)
+    if subsystem == "flywheel":
+        return FLYWHEEL_AUDIT_PROMPT.format(
+            subsystem=subsystem,
+            audit_paths=audit_paths,
+            project_dir=project_dir,
+            python=python_path,
+            preaudit=_static_flywheel_preaudit(project_dir),
+        )
+    return AUDIT_PROMPT.format(
+        subsystem=subsystem,
+        audit_paths=audit_paths,
+        project_dir=project_dir,
+        python=python_path,
+    )
+
 _TEST_PASS_RE = re.compile(
-    r"(?:\b\d+\s+passed\b|\ball\s+tests?\s+pass(?:ed)?\b|\btests?\s+pass(?:ed)?\b)",
+    r"(?:\b[1-9]\d*\s+passed\b|\ball\s+tests?\s+pass(?:ed)?\b|\btests?\s+pass(?:ed)?\b)",
     re.IGNORECASE,
 )
 _FAILURE_RE = re.compile(
-    r"(?:\bFAILED\b|\bfailed\b|\btraceback\b|\berror:\s|\bexited with code\s+[1-9]|\btests?\s+fail(?:ed)?\b)",
+    r"(?:\bFAILED\b|\bfailed\b|\btraceback\b|\berror:\s|\bexited with code\s+[1-9]|\btests?\s+fail(?:ed)?\b|\bdue\s+timeout\b|\btimeout\s*(?:error|exceeded)\b|\btimed out\b|\bno tests ran\b|\binterrupted\b|\bcancelled\b|\bkilled\b)",
     re.IGNORECASE,
 )
 _NO_P0_RE = re.compile(r"(?:no\s+P0|P0\s*[:=-]\s*(?:0|none|no\s+issues?))", re.IGNORECASE)
+_FLYWHEEL_AUDIT_DONE = "END_FLYWHEEL_AUDIT"
 
 
 def _latest_commit(project: Path) -> str | None:
@@ -109,15 +223,20 @@ def _evaluate_round_response(resp: str, before_commit: str | None, after_commit:
     inflating flywheel progress.
     """
     mentions_no_p0 = bool(_NO_P0_RE.search(resp))
-    raw_p0 = len(re.findall(r'\bP0\b', resp))
-    p0 = 0 if mentions_no_p0 else raw_p0
+    p0_finding_re = re.compile(r'(?<!No\s)\bP0\s*[:—-]\s*(?!(?:0|none|no\b|no\s+issues?)\b)', re.IGNORECASE)
+    explicit_p0_finding = bool(p0_finding_re.search(resp))
+    raw_p0 = len(p0_finding_re.findall(resp))
+    p0 = raw_p0
     p1 = len(re.findall(r'\bP1\b', resp))
     p2 = len(re.findall(r'\bP2\b', resp))
     tests_passed = bool(_TEST_PASS_RE.search(resp))
     failure = bool(_FAILURE_RE.search(resp))
     commit_changed = bool(before_commit and after_commit and before_commit != after_commit)
 
-    success = (not failure) and (commit_changed or tests_passed or mentions_no_p0)
+    flywheel_audit_complete = _FLYWHEEL_AUDIT_DONE in resp
+    clean_no_p0 = mentions_no_p0 and p0 == 0 and not explicit_p0_finding
+    flywheel_audit_clean = flywheel_audit_complete and p0 == 0 and not explicit_p0_finding and not failure and "MISSING" not in resp
+    success = (not failure) and (commit_changed or tests_passed or clean_no_p0 or flywheel_audit_clean)
 
     fixed = 1 if commit_changed else 0
     return {
@@ -130,7 +249,39 @@ def _evaluate_round_response(resp: str, before_commit: str | None, after_commit:
         "commit_changed": commit_changed,
         "failure_detected": failure,
         "explicit_no_p0": mentions_no_p0,
+        "explicit_flywheel_audit_complete": flywheel_audit_complete,
     }
+
+
+async def _run_round_with_hard_timeout(awaitable, timeout_s: float | None):
+    """Await a flywheel round without waiting forever for cancellation cleanup.
+
+    `asyncio.wait_for` cancels the underlying task and then waits until that
+    cancellation completes. If AgentLoop/tool cleanup ignores cancellation,
+    wait_for can exceed the advertised timeout indefinitely. This helper gives
+    the CLI a hard observation boundary: return TimeoutError at timeout, cancel
+    best-effort in the background, and let run_flywheel record objective
+    failure evidence.
+    """
+    if timeout_s is None:
+        return await awaitable
+    task = asyncio.create_task(awaitable)
+    done, _pending = await asyncio.wait({task}, timeout=timeout_s)
+    if task in done:
+        return await task
+    task.cancel()
+    task.add_done_callback(_consume_task_result)
+    raise asyncio.TimeoutError
+
+
+def _consume_task_result(task: asyncio.Task) -> None:
+    """Best-effort retrieval of late task failures without blocking shutdown."""
+    if not task.done() or task.cancelled():
+        return
+    try:
+        task.exception()
+    except (asyncio.CancelledError, Exception):
+        return
 
 
 async def run_flywheel(
@@ -138,12 +289,17 @@ async def run_flywheel(
     target: str | None = None,
     project_dir: str | None = None,
     max_iterations: int = 50,
+    round_timeout_s: float | None = 900,
 ) -> dict:
-    """Run the meta-flywheel: Caveman audits and fixes itself."""
+    """Run the meta-flywheel: Caveman audits and fixes itself.
+
+    round_timeout_s bounds each AgentLoop round so a wedged self-audit returns
+    objective failure evidence instead of leaving the CLI black-box hung.
+    """
     import sys
     from caveman.agent.factory import create_loop
 
-    project = Path(project_dir or ".").resolve()
+    project = Path(project_dir).resolve() if project_dir else _repo_root()
     results = []
     stats_tracker = FlywheelStats()
 
@@ -156,17 +312,23 @@ async def run_flywheel(
         logger.info("Flywheel round %d: %s", i + 1, subsystem)
         round_start = time.time()
 
-        loop = create_loop(max_iterations=max_iterations)
-        prompt = AUDIT_PROMPT.format(
-            subsystem=subsystem,
-            project_dir=project,
-            python=python_path,
-        )
-
         try:
             before_commit = _latest_commit(project)
-            result = await loop.run(prompt)
-            resp = result.get("response", str(result)) if isinstance(result, dict) else str(result)
+            if subsystem == "flywheel":
+                resp = _deterministic_flywheel_self_audit(project)
+            else:
+                loop = create_loop(
+                    max_iterations=max_iterations,
+                    allow_continuation_repair=True,
+                    diagnostic_profile=False,
+                )
+                prompt = _audit_prompt_for_subsystem(
+                    subsystem=subsystem,
+                    project_dir=project,
+                    python_path=python_path,
+                )
+                result = await _run_round_with_hard_timeout(loop.run(prompt), round_timeout_s)
+                resp = result.get("response", str(result)) if isinstance(result, dict) else str(result)
             duration = time.time() - round_start
 
             after_commit = _latest_commit(project)
@@ -194,6 +356,22 @@ async def run_flywheel(
                 "failure_detected": evaluation["failure_detected"],
                 "duration_s": round(duration, 1),
             })
+        except asyncio.TimeoutError:
+            duration = time.time() - round_start
+            timeout_desc = "unbounded" if round_timeout_s is None else f"{round_timeout_s:g}s"
+            logger.warning(
+                "Flywheel round %d timed out after %s: %s",
+                i + 1,
+                timeout_desc,
+                subsystem,
+            )
+            results.append({
+                "round": i + 1,
+                "subsystem": subsystem,
+                "error": f"Round timed out after {timeout_desc}",
+                "success": False,
+                "duration_s": round(duration, 1),
+            })
         except Exception as e:
             results.append({
                 "round": i + 1,
@@ -209,9 +387,23 @@ async def run_flywheel(
     }
 
 
-def run_flywheel_sync(rounds: int = 5, target: str | None = None, max_iterations: int = 50) -> None:
+def run_flywheel_sync(
+    rounds: int = 5,
+    target: str | None = None,
+    max_iterations: int = 50,
+    project_dir: str | None = None,
+    round_timeout_s: float | None = 900,
+) -> None:
     """Synchronous wrapper for CLI."""
-    result = asyncio.run(run_flywheel(rounds=rounds, target=target, max_iterations=max_iterations))
+    result = asyncio.run(
+        run_flywheel(
+            rounds=rounds,
+            target=target,
+            project_dir=project_dir or str(_repo_root()),
+            max_iterations=max_iterations,
+            round_timeout_s=round_timeout_s,
+        )
+    )
     print(f"\n{'='*50}")
     print(f"Flywheel: {result['successful']}/{result['rounds_completed']} rounds successful")
     for r in result["results"]:
@@ -219,6 +411,8 @@ def run_flywheel_sync(rounds: int = 5, target: str | None = None, max_iterations
         print(f"  {status} Round {r['round']}: {r['subsystem']}")
         if "error" in r:
             print(f"     Error: {r['error'][:100]}")
+    if result["successful"] < result["rounds_completed"]:
+        raise SystemExit(1)
 
 
 # ── Parallel Audit Mode ──
@@ -226,15 +420,22 @@ def run_flywheel_sync(rounds: int = 5, target: str | None = None, max_iterations
 async def run_flywheel_parallel(
     targets: list[str],
     max_iterations: int = 20,
+    round_timeout_s: float | None = 900,
 ) -> list[dict]:
     """Run multiple subsystem audits in parallel using asyncio.gather."""
     tasks = [
-        run_flywheel(rounds=1, target=t, max_iterations=max_iterations)
+        run_flywheel(
+            rounds=1,
+            target=t,
+            max_iterations=max_iterations,
+            round_timeout_s=round_timeout_s,
+        )
         for t in targets
     ]
     results = await asyncio.gather(*tasks, return_exceptions=True)
     return [
-        r if not isinstance(r, Exception) else {"target": t, "error": str(r)}
+        r if not isinstance(r, Exception)
+        else {"target": t, "error": str(r), "success": False, "successful": 0, "rounds_completed": 0, "results": []}
         for t, r in zip(targets, results)
     ]
 
@@ -325,6 +526,7 @@ def flywheel_cli(
     parallel: list[str] | None = None,
     rounds: int = 5,
     max_iter: int = 50,
+    round_timeout_s: float | None = 900,
     stats: bool = False,
 ) -> None:
     """Dispatch flywheel CLI subcommands."""
@@ -340,7 +542,7 @@ def flywheel_cli(
         return
 
     if parallel:
-        results = asyncio.run(run_flywheel_parallel(parallel, max_iterations=max_iter))
+        results = asyncio.run(run_flywheel_parallel(parallel, max_iterations=max_iter, round_timeout_s=round_timeout_s))
         for r in results:
             if "error" in r:
                 print(f"  ❌ {r.get('target', '?')}: {r['error'][:100]}")
@@ -351,9 +553,15 @@ def flywheel_cli(
     if all_:
         subs = discover_subsystems()
         print(f"Discovered {len(subs)} subsystems: {', '.join(subs)}")
-        results = asyncio.run(run_flywheel_parallel(subs, max_iterations=max_iter))
+        results = asyncio.run(run_flywheel_parallel(subs, max_iterations=max_iter, round_timeout_s=round_timeout_s))
         ok = sum(1 for r in results if not isinstance(r, dict) or "error" not in r)
         print(f"\n{ok}/{len(subs)} subsystems audited successfully")
         return
 
-    run_flywheel_sync(rounds=rounds, target=target, max_iterations=max_iter)
+    run_flywheel_sync(
+        rounds=rounds,
+        target=target,
+        max_iterations=max_iter,
+        project_dir=str(_repo_root()),
+        round_timeout_s=round_timeout_s,
+    )
