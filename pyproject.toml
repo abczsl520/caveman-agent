@@ -99,6 +99,12 @@ exclude = ["tests*", "scripts*", "docs*", "hermes-src*", "openclaw-src*"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+filterwarnings = [
+    # discord.py 2.7.1 imports stdlib audioop on Python 3.12; audioop is
+    # deprecated for Python 3.13 removal. Keep this scoped to the external
+    # module so project deprecations still surface in the warning gate.
+    "ignore:'audioop' is deprecated and slated for removal in Python 3.13:DeprecationWarning:discord\\.player",
+]
 
 [tool.black]
 line-length = 100
