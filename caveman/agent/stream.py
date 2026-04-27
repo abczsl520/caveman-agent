@@ -27,12 +27,17 @@ STREAM_TOOL_RESULT = "tool_result"
 STREAM_THINKING = "thinking"
 STREAM_RESULT = "result"
 STREAM_ERROR = "error"
-_LEGACY_RESULT_EVENT = "do" "ne"
+_FORBIDDEN_LEGACY_RESULT_EVENT = "do" "ne"
 
 
 def is_result_event_type(event_type: str) -> bool:
-    """Return True for the canonical result event or its legacy alias."""
-    return event_type in {STREAM_RESULT, _LEGACY_RESULT_EVENT}
+    """Return True only for the canonical result event.
+
+    The old internal stream event name ``done`` is deliberately *not* accepted
+    anymore. Treating an agent turn boundary as a "done" event leaked through
+    gateway/API consumers as a false completion signal.
+    """
+    return event_type == STREAM_RESULT
 
 
 @dataclass
@@ -44,8 +49,11 @@ class StreamEvent:
     timestamp: float = field(default_factory=time.time)
 
     def __post_init__(self) -> None:
-        if self.type == _LEGACY_RESULT_EVENT:
-            self.type = STREAM_RESULT
+        if self.type == _FORBIDDEN_LEGACY_RESULT_EVENT:
+            raise ValueError(
+                "legacy stream event type 'done' is forbidden; use 'result' "
+                "for internal turn results and keep completion semantics explicit"
+            )
 
     def to_dict(self) -> dict:
         return {"type": self.type, "data": self.data, "ts": self.timestamp}

@@ -17,7 +17,6 @@ from typing import Callable, Awaitable
 from .base import Gateway
 from caveman.gateway.mock_agent import GatewayMockAgent as _GatewayMockAgent
 from caveman.utils import split_message
-from caveman.timeouts import DISCORD_HEARTBEAT
 
 logger = logging.getLogger("caveman.gateway.discord")
 
@@ -399,12 +398,7 @@ class DiscordGateway(Gateway):
         """Run a task with typing indicator and send the result."""
         typing_task = asyncio.create_task(self._keep_typing(message.channel))
         try:
-            result = await asyncio.wait_for(
-                self._task_handler(task, context),
-                timeout=DISCORD_HEARTBEAT,
-            )
-        except asyncio.TimeoutError:
-            result = "⏸️ 任务超过 35 分钟，进度已保存。发消息可继续。"
+            result = await self._task_handler(task, context)
         except Exception as e:
             logger.exception("Task handler failed: %s", e)
             result = "⚠️ 出了点问题，请重试。"

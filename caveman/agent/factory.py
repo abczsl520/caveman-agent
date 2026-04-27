@@ -36,6 +36,8 @@ def create_loop(
     config_path: str | None = None,
     max_iterations: int | None = None,
     surface: str = "cli",
+    allow_continuation_repair: bool = True,
+    diagnostic_profile: bool = False,
 ) -> AgentLoop:
     """Create an AgentLoop from config. Resolves provider, memory, skills from config."""
     config = load_config(config_path)
@@ -100,6 +102,9 @@ def create_loop(
 
     # Engine flags
     engine_flags = EngineFlags(config)
+    if diagnostic_profile:
+        for engine in ("nudge", "ripple", "lint", "recall", "scheduler", "verification", "reflect"):
+            engine_flags.disable(engine)
 
     # LLM function for engines (nudge, shield)
     llm_fn = _make_llm_fn(provider)
@@ -172,6 +177,7 @@ def create_loop(
         nudge_engine=engines.nudge,
         reflect_engine=engines.reflect,
         surface=surface,
+        allow_continuation_repair=allow_continuation_repair,
     )
 
     # Wire engines that need loop-level access

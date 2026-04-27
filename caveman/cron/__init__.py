@@ -143,7 +143,11 @@ class CronStore:
         return [self._row_to_job(r) for r in self._conn.execute(q).fetchall()]
 
     def update_job(self, job_id: str, **kwargs) -> bool:
-        _ALLOWED = {"name", "schedule", "task", "delivery", "enabled", "extra", "next_run"}
+        _ALLOWED = {
+            "name", "schedule", "task", "channel", "channel_id", "enabled",
+            "max_runtime", "created_at", "updated_at", "last_run_at", "last_result",
+            "run_count", "error_count", "extra",
+        }
         bad = set(kwargs) - _ALLOWED
         if bad:
             raise ValueError(f"Invalid cron_jobs columns: {bad}")
@@ -181,7 +185,7 @@ class CronStore:
         self._conn.commit()
 
     def update_run(self, run_id: str, **kwargs) -> None:
-        _ALLOWED = {"status", "output", "error", "ended_at", "result"}
+        _ALLOWED = {"status", "finished_at", "result", "tokens_used", "duration_s"}
         bad = set(kwargs) - _ALLOWED
         if bad:
             raise ValueError(f"Invalid cron_runs columns: {bad}")

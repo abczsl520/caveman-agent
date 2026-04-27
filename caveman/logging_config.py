@@ -42,8 +42,14 @@ def setup_logging(
     level: str = "INFO",
     format: str = "text",
     log_file: str | None = None,
+    console: bool = True,
 ) -> None:
-    """Configure logging for the gateway."""
+    """Configure logging for the gateway.
+
+    When a daemon supervisor already redirects stderr/stdout to the same log
+    file, adding both a StreamHandler and FileHandler produces duplicate lines.
+    Gateway service startup should pass ``console=False`` with ``log_file``.
+    """
     root = logging.getLogger()
     root.setLevel(getattr(logging, level.upper(), logging.INFO))
 
@@ -59,9 +65,10 @@ def setup_logging(
         )
 
     # Console handler
-    console = logging.StreamHandler()
-    console.setFormatter(formatter)
-    root.addHandler(console)
+    if console:
+        console_handler = logging.StreamHandler()
+        console_handler.setFormatter(formatter)
+        root.addHandler(console_handler)
 
     # File handler (optional)
     if log_file:

@@ -1,6 +1,6 @@
 """Core agent loop v3 — thin orchestrator over decomposed phases."""
 from __future__ import annotations
-import asyncio, logging, time as _time
+import logging, time as _time
 from collections.abc import AsyncIterator
 logger = logging.getLogger(__name__)
 
@@ -10,7 +10,6 @@ from caveman.agent.context import AgentContext
 from caveman.agent.bg_tasks import BackgroundTaskMixin
 from caveman.agent.conversation_lifecycle import get_phase_rules
 from caveman.providers.llm import LLMProvider
-from caveman.providers.anthropic_adapter import CACHE_BOUNDARY
 from caveman.compression.pipeline import CompressionPipeline
 from caveman.tools.registry import ToolRegistry
 from caveman.memory.manager import MemoryManager
@@ -19,19 +18,22 @@ from caveman.skills.executor import SkillExecutor
 from caveman.trajectory.recorder import TrajectoryRecorder
 from caveman.security.permissions import PermissionManager
 from caveman.events import EventBus, EventType, create_default_bus
-from caveman.paths import DEFAULT_LLM_IDLE_TIMEOUT
 from caveman.engines.flags import EngineFlags
 from caveman.engines.manager import EngineManager
-from caveman.agent.output_validator import CLOSING_LINE, final_text_looks_truncated
+from caveman.agent.output_validator import CLOSING_LINE
+from caveman.agent.display import show_error
 from caveman.agent.metrics import AgentMetrics
 from caveman.agent.iteration_budget import IterationBudget
 from caveman.agent.phases import (
     phase_prepare, record_assistant_turn, phase_finalize,
 )
-from caveman.agent.tools_exec import phase_tool_execution
+from caveman.agent.llm_turn import (
+    execute_tool_phase, request_continuation_if_needed, stream_llm_turn,
+)
 from caveman.agent.loop_init import (
     build_fallback_chain, ensure_memory_manager, ensure_provider, set_default_permissions,
 )
+from caveman.paths import DEFAULT_LLM_IDLE_TIMEOUT
 class AgentLoop(BackgroundTaskMixin):
     """Core agent execution loop — manages tool calls, LLM turns, and phase transitions."""
     def __init__(
@@ -43,7 +45,7 @@ class AgentLoop(BackgroundTaskMixin):
         event_bus: EventBus | None = None, engine_flags: EngineFlags | None = None,
         llm_fn=None, lint_engine=None,
         shield=None, recall_engine=None, nudge_engine=None, reflect_engine=None,
-        surface: str = "cli",
+        surface: str = "cli", allow_continuation_repair: bool = True,
     ):
         from caveman.paths import DEFAULT_MODEL, DEFAULT_MAX_ITERATIONS
         self.model = model or DEFAULT_MODEL
@@ -100,12 +102,13 @@ class AgentLoop(BackgroundTaskMixin):
         self._outcome = _es.outcome
         self._skill_executor = SkillExecutor(tool_dispatch_fn=self._dispatch_skill_tool)
         self._nudge_task_ref = ""
-        self._persistent_context: AgentContext | None = None
-        self._system_prompt_cache: str | None = None
-        self._bg_tasks: set[asyncio.Task] = set()
+        self._bg_tasks: set[Any] = set()
         self._last_activity_ts = 0.0
         self._last_activity_desc = ""
         self._current_tool = ""
+        self._persistent_context: AgentContext | None = None
+        self._system_prompt_cache: str | None = None
+        self.allow_continuation_repair = allow_continuation_repair
         self._wire_flywheel()
     def _wire_flywheel(self):
         from caveman.engines.event_chain import wire_inner_flywheel
@@ -171,28 +174,18 @@ class AgentLoop(BackgroundTaskMixin):
     def get_activity_summary(self) -> dict:
         import time as _t
         elapsed = _t.time() - self._last_activity_ts if self._last_activity_ts else 0
-        return {
-            "last_activity_desc": self._last_activity_desc,
-            "seconds_since_activity": round(elapsed, 1),
-            "current_tool": self._current_tool,
-            "budget_used": self.budget.used,
-            "budget_max": self.budget.max_total,
-            "turn_count": self._turn_count,
-            "tool_call_count": self._tool_call_count,
-        }
+        return {"last_activity_desc": self._last_activity_desc,
+                "seconds_since_activity": round(elapsed, 1), "current_tool": self._current_tool,
+                "budget_used": self.budget.used, "budget_max": self.budget.max_total,
+                "turn_count": self._turn_count, "tool_call_count": self._tool_call_count}
     def snapshot(self) -> dict:
         import hashlib
         if "_state" not in self.__dict__:
             self.__dict__["_state"] = LoopState()
         prompt = self._system_prompt_cache or ""
         state = self._state.snapshot()
-        state.update({
-            "system_prompt_len": len(prompt),
-            "system_prompt_hash": hashlib.sha256(prompt.encode()).hexdigest()[:16],
-            "system_prompt": prompt,
-            "budget_used": self.budget.used,
-            "budget_max": self.budget.max_total,
-        })
+        state.update({"system_prompt_len": len(prompt), "system_prompt_hash": hashlib.sha256(prompt.encode()).hexdigest()[:16],
+                      "system_prompt": prompt, "budget_used": self.budget.used, "budget_max": self.budget.max_total})
         return state
     @property
     def _conversation_state(self):
@@ -220,6 +213,8 @@ class AgentLoop(BackgroundTaskMixin):
     async def _post_task_engines(self, context, task, result, matched_skills):
         from caveman.agent.loop_engines import post_task_engines
         await post_task_engines(self, context, task, result, matched_skills)
+    def _get_phase_rules(self) -> str:
+        return get_phase_rules(self.surface, self._conversation_state)
     def _record_turn_metrics(self, turn_start, recalled_ids, matched_skills, result):
         from caveman.agent.loop_engines import record_turn_metrics
         record_turn_metrics(self, turn_start, recalled_ids, matched_skills, result)
@@ -282,86 +277,26 @@ class AgentLoop(BackgroundTaskMixin):
             self._last_activity_ts = _time.time()
             self._last_activity_desc = "LLM call"
             self._current_tool = ""
-            text_parts: list[str] = []
+            text = ""
             tool_calls: list = []
             stop = "end_turn"
             try:
-                messages = context.to_api_format()
-                _phase_rules = get_phase_rules(self.surface, self._conversation_state)
-                _effective_system = system
-                if _phase_rules:
-                    _effective_system = (
-                        (system or "") +
-                        CACHE_BOUNDARY +
-                        f"## Active Work State\n{_phase_rules}"
-                    )
-                    logger.debug("Phase rules injected (surface=%s, complexity=%s): %s",
-                                 self.surface, self._conversation_state.complexity.value, _phase_rules[:80])
-                tool_defs = self.tool_registry.get_schemas() if self.tool_registry else []
-                _last_token_ts = _time.monotonic()
-                _llm_stream = self.provider.safe_complete(
-                    messages=messages, system=_effective_system, tools=tool_defs or None, stream=True,
-                ).__aiter__()
-                _PROVIDER_FINISH = {"message_stop", "do" "ne"}
-                while True:
-                    try:
-                        ev = await asyncio.wait_for(_llm_stream.__anext__(), timeout=DEFAULT_LLM_IDLE_TIMEOUT)
-                    except StopAsyncIteration:
-                        break
-                    except asyncio.TimeoutError:
-                        logger.warning("LLM idle timeout: %ds without token", DEFAULT_LLM_IDLE_TIMEOUT)
-                        yield StreamEvent(
-                            type="error",
-                            data=(
-                                f"LLM 无响应超时 ({DEFAULT_LLM_IDLE_TIMEOUT}s)。"
-                                "任务未完成，请重试或切换模型。"
-                            ),
-                        )
-                        return
-                    etype = ev.get("type")
-                    if etype == "delta":
-                        text_parts.append(ev["text"])
-                        await self.bus.emit(EventType.LLM_STREAM_DELTA, {"text": ev["text"]})
-                        yield StreamEvent(type="token", data=ev["text"])
-                    elif etype == "thinking":
-                        # Emit thinking event so task_runner touch_activity()
-                        # fires during long reasoning — prevents idle misfire
-                        yield StreamEvent(type="thinking", data=ev.get("text", ""))
-                    elif etype == "tool_call":
-                        tool_calls.append(ev)
-                        yield StreamEvent(type="tool_call", data=ev)
-                    elif etype in _PROVIDER_FINISH:
-                        stop = ev.get("stop_reason", "end_turn")
-                    elif etype == "error" and ev.get("action") == "abort":
-                        if self._fallback_chain and self._fallback_chain.has_fallbacks:
-                            new_provider = self._fallback_chain.try_activate_next()
-                            if new_provider:
-                                self.provider = new_provider
-                                yield StreamEvent(type="token", data=f"\n⚠️ 主模型失败，切换到备用模型...")
-                                continue  # retry this iteration
-                        yield StreamEvent(type="error", data=ev.get("error", "Unknown error"))
-                        return
-                text = "".join(text_parts)
-                from caveman.providers.message_sanitizer import strip_reasoning_tags
-                text = strip_reasoning_tags(text)
-                if stop == "max_tokens" and text:
-                    logger.warning("Final response hit max_tokens; requesting continuation instead of finalizing")
-                    context.add_message("assistant", text)
-                    context.add_message("user", "你的回复被截断了，请继续从断点续写，不要重新开始。")
-                    final = text
-                    iteration += 1
-                    self._iteration_count = iteration
+                async for ev in stream_llm_turn(self, context, system):
+                    if ev.type == "_llm_done":
+                        text, tool_calls, stop, retry_iteration = ev.data
+                    else:
+                        yield ev
+                if retry_iteration:
                     continue
-                if stop == "end_turn" and not tool_calls and final_text_looks_truncated(text):
-                    logger.warning("Final response looks truncated; requesting continuation instead of finalizing")
-                    context.add_message("assistant", text)
-                    context.add_message("user", "你的最终回复看起来被截断了，请从断点续写并完整收尾，不要重新开始。")
+                if request_continuation_if_needed(self, context, text, tool_calls, stop):
                     final = text
                     iteration += 1
                     self._iteration_count = iteration
                     continue
             except Exception as e:
                 yield StreamEvent(type="error", data=str(e))
+                return
+            if not text and not tool_calls and stop == "end_turn":
                 return
             self.metrics.record_timing("llm_call_duration", _time.monotonic() - _llm_start)
             if text: final = text
@@ -379,28 +314,16 @@ class AgentLoop(BackgroundTaskMixin):
                 text = text.replace(CLOSING_LINE, "").rstrip()
                 final = text or final
             if tool_calls:
-                _tool_start = _time.monotonic()
-                tool_names = [tc.get("name", "?") for tc in tool_calls]
-                self._last_activity_ts = _time.time()
-                self._last_activity_desc = f"Tools: {', '.join(tool_names)}"
-                self._current_tool = tool_names[0] if tool_names else ""
-                self._tool_call_count = await phase_tool_execution(
-                    context, tool_calls, self.tool_registry,
-                    self.permission_manager, self.trajectory_recorder,
-                    self.bus, self._tool_call_count, self._bg_skill_nudge,
-                )
-                self.metrics.record_timing("tool_dispatch_duration", _time.monotonic() - _tool_start)
-                await self._offer_matching_skill(task)
-                if self._tool_call_count % 10 == 0:
-                    self._safe_bg(self._bg_skill_nudge())
-                for tc in tool_calls:
-                    yield StreamEvent(type="tool_result", data={"name": tc.get("name", "?")})
+                async for ev in execute_tool_phase(self, context, tool_calls):
+                    yield ev
             should_break = await self._check_termination(stop, tool_calls, task, text=text)
             await self.bus.emit(EventType.ITERATION_END, {"iteration": iteration, "stop": stop, "tool_calls": len(tool_calls), "text_len": len(text)}, source="loop")
+            exhausted = False
             if should_break: break
             iteration += 1
             self._iteration_count = iteration
         else:
+            exhausted = True
             show_error(f"Max iterations ({self.max_iterations}) reached — budget exhausted")
         result = await phase_finalize(
             task, final, matched_skills, self.memory_manager,
@@ -426,7 +349,12 @@ class AgentLoop(BackgroundTaskMixin):
         _surface = getattr(getattr(self, 'session', None), 'surface', 'cli')
         _state = self._conversation_state
         _should_close = should_use_closing_marker(state=_state, final_text=result, surface=_surface)
-        result = enforce_closing_format(result, _should_close, surface=_surface)
+        result = enforce_closing_format(result, _should_close, surface=_surface, task=task)
+        if exhausted:
+            result = (
+                f"⚠️ 已达到本轮迭代上限（{self.max_iterations}），任务没有被验证为完成。\n\n"
+                f"{result}" if result else f"⚠️ 已达到本轮迭代上限（{self.max_iterations}），任务没有被验证为完成。"
+            )
         yield StreamEvent(type="result", data=result)
     async def _dispatch_skill_tool(self, name: str, args: dict) -> str:
         r = await self.tool_registry.dispatch(name, args)

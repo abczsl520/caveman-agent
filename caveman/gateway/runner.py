@@ -8,9 +8,8 @@ from caveman.agent.factory import create_loop
 from caveman.agent.session_store import SessionMeta
 from caveman.agent.session_db import SessionDB
 from caveman.config.loader import load_config
-from caveman.timeouts import TASK_DEFAULT, TASK_SHORT
+from caveman.timeouts import TASK_SHORT
 from caveman.gateway.router import GatewayRouter
-from caveman.gateway.task_runner import run_single_task, AgentTaskError
 from caveman.gateway.infra import GatewayInfra
 from caveman.gateway.session_context import set_session_context, clear_session_context
 from caveman.gateway.message_pipeline import (
@@ -20,16 +19,50 @@ from caveman.gateway.reply_queue import QueueManager
 from caveman.gateway.routing import resolve_route
 from caveman.paths import CAVEMAN_HOME
 from caveman.gateway.transcript_cleaner import clean_transcript_message as _clean_transcript_message
+from caveman.gateway.task_runner import AgentTaskError, run_single_task
 __all__ = ["SESSION_TTL", "GatewayServer", "run_gateway", "run_gateway_forever"]
 
 logger = logging.getLogger("caveman.gateway")
+
+
+def _looks_like_iteration_budget_exhaustion(text: str) -> bool:
+    """Return True for per-round iteration budget exhaustion, not task success.
+
+    Automatic flywheel rounds frequently hit the agent-loop iteration ceiling.
+    That is a continuable per-round budget signal; treating it like a terminal
+    AgentTaskError made the 20-round chain look stopped.
+    """
+    return any(
+        marker in text
+        for marker in ("迭代上限", "budget exhausted", "Max iterations")
+    )
+
 
 _AUTO_MAX_ROUNDS = 20
 _AUTO_PATTERNS = re.compile(
     r'继续\s*飞轮|自动第\s*\d+\s*/\s*\d+\s*轮|不要停|不间断|持续|一直|keep\s*going|don.t\s*stop|autonomous|auto.?continue',
     re.I,
 )
+_RUNNING_NUDGE_PATTERNS = re.compile(
+    r'^(?:\s|[。！？!?,，、])*('
+    r'继续(?:\s*(?:飞轮|下一步|不要停|别停|下去|推进|排查))?'
+    r'|不要停|别停|接着(?:来|做|查|跑)?|继续跑|继续查|继续做'
+    r'|怎么.*停(?:了)?|咋.*停(?:了)?|又停(?:了)?|没反应(?:了)?|是不是.*失败(?:了)?'
+    r'|keep\s*going|don.t\s*stop'
+    r')(?:\s|[。！？!?,，、])*$',
+    re.I,
+)
 SESSION_TTL = 30 * 60
+
+
+def _is_non_interrupting_running_task_nudge(task: str) -> bool:
+    """Return True when an incoming message is a status/continue nudge.
+
+    While a long flywheel is already running, impatient follow-ups like
+    "继续不要停" or "怎么又停了" must not flip the current task's shutdown flag;
+    doing so made the system stop exactly when the user asked it to continue.
+    """
+    return bool(_RUNNING_NUDGE_PATTERNS.search((task or "").strip()))
 
 class _SendResult(NamedTuple):
     id: str
@@ -60,6 +93,7 @@ class GatewayServer:
         self._dedupe_cache = DedupeCache()
         self._queue_manager = QueueManager()
         self._infra = GatewayInfra()
+        self._auto_patterns = _AUTO_PATTERNS
         self._cached_config = load_config(self.config_path)
         self._migrate_json_store()
 
@@ -174,19 +208,21 @@ class GatewayServer:
             logger.debug("Message deduplicated: %s", msg_ctx.message_id)
             return ""
 
+        key = self._session_key(context)
         set_session_context(
             platform=msg_ctx.platform,
             chat_id=msg_ctx.chat_id,
             thread_id=msg_ctx.thread_id,
             sender_id=msg_ctx.sender_id,
+            session_key=key,
         )
-
-        key = self._session_key(context)
         lock = self._get_lock(key)
 
         task = msg_ctx.body
 
-        if not msg_ctx.body.strip(): return ""
+        if not msg_ctx.body.strip():
+            clear_session_context()
+            return ""
 
         # --- Command dispatch: /commands bypass agent loop ---
         if task.startswith("/"):
@@ -196,6 +232,7 @@ class GatewayServer:
             ch = str(context.get("channel_id", ""))
             respond = lambda msg, _g=gw, _c=ch: asyncio.ensure_future(self.router.send(_g, _c, msg))
             if await cmd_dispatch(task, session["loop"], surface=gw, session_key=key, respond_fn=respond):
+                clear_session_context()
                 return ""
 
         reply_to = context.get("reply_to")
@@ -205,75 +242,32 @@ class GatewayServer:
         if lock.locked():
             session = self.sessions.get(key)
             if session:
+                gw = context.get("gateway_name", "discord")
+                ch = str(context.get("channel_id", ""))
+                if _is_non_interrupting_running_task_nudge(task):
+                    logger.info("Running-task nudge received without interrupting: %s", key)
+                    await self.router.send(
+                        gw,
+                        ch,
+                        "🔄 当前任务/自动飞轮还在运行；已收到催促，但不会中断正在执行的链路。请看后续 progress/自动续轮信号。",
+                    )
+                    clear_session_context()
+                    return ""
                 session["_interrupt"] = True
                 ctx = session.get("_task_ctx")
                 if ctx: ctx.shutdown_flag = True
                 logger.info("Interrupting running task for new message: %s", key)
                 await self.router.send(
-                    context.get("gateway_name", "discord"),
-                    str(context.get("channel_id", "")),
+                    gw,
+                    ch,
                     "⏹️ 收到新消息，正在停止当前任务...",
                 )
 
-        async with lock:
-            session = await self._get_or_create_session(key)
-            gw_name = context.get("gateway_name", "discord")
-            channel_id = str(context.get("channel_id", ""))
-
-            source_channel = {
-                "gateway": gw_name, "channel_id": channel_id,
-                "user_id": context.get("user_id"),
-                "message_id": context.get("message_id"),
-                "_progress_sent": 0,
-            }
-            session["task_count"] += 1
-            logger.info("Task #%d [%s]: %s", session["task_count"], key, task[:100])
-
-            auto_mode = bool(_AUTO_PATTERNS.search(task))
-            if auto_mode:
-                session.setdefault("auto_rounds", 0)
-
-            try:
-                result = await run_single_task(
-                    task, session, gw_name, channel_id, source_channel,
-                    self.router, self.store, self._cfg(),
-                    attachments=context.get("attachments"),
-                )
-
-                # --- Hooks: emit post-task event ---
-                await self._infra.emit_hook("agent:end", {
-                    "session_key": key, "task": task[:200],
-                    "result_length": len(result or ""),
-                })
-
-                if auto_mode:
-                    result = await self._auto_continue(
-                        result, session, gw_name, channel_id, source_channel)
-
-                # --- Reply Queue: drain queued messages ---
-                queued = self._queue_manager.drain(key)
-                for qm in queued:
-                    logger.info("Processing queued message for %s: %s", key, qm.body[:80])
-                    source_channel["_progress_sent"] = 0
-                    await run_single_task(
-                        qm.body, session, gw_name, channel_id, source_channel,
-                        self.router, self.store, self._cfg(),
-                    )
-
-                # Do not fabricate a textual completion when the agent already
-                # streamed/sent its own output, or when it produced no final text.
-                # Returning "Done." here caused Discord to show a false terminal
-                # signal for interrupted/empty/incomplete work and broke flywheel
-                # semantics. Empty result means "no extra platform reply needed".
-                return ""
-            except AgentTaskError as e:
-                logger.warning("Task aborted by agent error: %s", e)
-                return ""
-            except Exception as e:
-                logger.exception("Task failed: %s", e)
-                return "⚠️ Something went wrong. Please try again."
-            finally:
-                clear_session_context()
+        from caveman.gateway.runner_task import run_locked_gateway_task
+        try:
+            return await run_locked_gateway_task(self, task, context, key, msg_ctx)
+        finally:
+            clear_session_context()
 
     async def _auto_continue(self, result, session, gw_name, channel_id, source_channel):
         config = self._cfg()
@@ -285,21 +279,32 @@ class GatewayServer:
                          "只汇报进展和证据，不要输出终止性收尾。")
             logger.info("Auto-continue round %d/%d", rnd, _AUTO_MAX_ROUNDS)
             await self.router.send(gw_name, channel_id, f"🔄 飞轮自动继续 ({rnd}/{_AUTO_MAX_ROUNDS})...")
-            source_channel["_progress_sent"] = 0
+            source_channel["_progress_sent"] = 0; source_channel["_auto_continue"] = True
             try:
-                result = await asyncio.wait_for(
-                    run_single_task(cont_task, session, gw_name, channel_id,
-                                    source_channel, self.router, self.store, config), timeout=TASK_DEFAULT)
+                result = await run_single_task(
+                    cont_task, session, gw_name, channel_id, source_channel, self.router, self.store, config)
+                result_text = str(result or "")
+                if _looks_like_iteration_budget_exhaustion(result_text): await self.router.send(gw_name, channel_id, f"⚠️ 飞轮第 {rnd} 轮触达迭代预算上限；这不是完成或停止信号，继续下一轮排查。")
             except AgentTaskError as e:
-                logger.warning("Auto-continue round %d aborted by agent error: %s", rnd, e)
-                break
+                err_text = str(e)
+                logger.warning("Auto-continue round %d reported agent error: %s", rnd, e)
+                result = f"第 {rnd} 轮 agent 错误：{err_text[:200]}。这不是完成信号，继续下一轮排查。"
+                if _looks_like_iteration_budget_exhaustion(err_text):
+                    await self.router.send(gw_name, channel_id, f"⚠️ 飞轮第 {rnd} 轮触达迭代预算上限；这不是完成或停止信号，继续下一轮排查。")
+                else:
+                    await self.router.send(gw_name, channel_id, f"⚠️ 飞轮第 {rnd} 轮 agent 错误，已记录；不把它当完成或停止，继续下一轮排查。")
+                continue
             except asyncio.TimeoutError:
-                await self.router.send(gw_name, channel_id, f"⏰ 飞轮第 {rnd} 轮超时，暂停。")
-                break
+                result = f"第 {rnd} 轮超时。这不是完成信号，继续下一轮排查。"
+                await self.router.send(gw_name, channel_id, f"⏰ 飞轮第 {rnd} 轮超时；这不是完成或停止信号，继续下一轮排查。")
+                continue
             except Exception as e:
-                logger.warning("Auto-continue round %d failed: %s", rnd, e)
-                await self.router.send(gw_name, channel_id, f"⚠️ 飞轮第 {rnd} 轮出错：{str(e)[:200]}。暂停。")
-                break
+                logger.exception("Auto-continue round %d failed", rnd)
+                result = f"第 {rnd} 轮运行异常：{type(e).__name__}: {str(e)[:200]}。已记录日志，继续下一轮排查。"
+                await self.router.send(gw_name, channel_id, f"⚠️ 飞轮第 {rnd} 轮运行异常，已记录日志；继续下一轮排查，不把它当完成。")
+                continue
+            finally:
+                source_channel.pop("_auto_continue", None)
         else:
             await self.router.send(gw_name, channel_id, f"🔄 飞轮自动模式已跑满 {_AUTO_MAX_ROUNDS} 轮；这只是轮次上限，不代表所有问题已完成。")
         return result

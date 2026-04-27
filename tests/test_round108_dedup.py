@@ -215,6 +215,13 @@ def test_agent_loop_inherits_mixin():
     assert issubclass(AgentLoop, BackgroundTaskMixin)
 
 
+def test_agent_loop_module_stays_under_400_lines():
+    """Hidden CI historically enforces loop.py as a thin orchestrator."""
+    from pathlib import Path
+    loop_path = Path(__file__).resolve().parents[1] / "caveman" / "agent" / "loop.py"
+    assert len(loop_path.read_text().splitlines()) < 400
+
+
 # ── Heuristic extraction quality tests (PRD §6 Iron Law #1) ──
 
 def test_heuristic_extracts_file_paths():

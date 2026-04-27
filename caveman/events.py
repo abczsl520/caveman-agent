@@ -108,6 +108,17 @@ AsyncHandler = Callable[[Event], Awaitable[None]]
 Handler = Union[SyncHandler, AsyncHandler]
 
 
+def _event_key(event_type: EventType | str) -> str:
+    """Normalize event identifiers by semantic value, not Enum class identity.
+
+    Long-lived gateway objects may briefly hold enum instances from an older
+    module generation after reload/restart boundaries. Comparing by the current
+    EventType class would silently miss subscriptions; value-based keys remain
+    stable across module reloads and also support plugin-provided str enums.
+    """
+    return str(getattr(event_type, "value", event_type))
+
+
 # ── Event Bus ──
 
 class EventBus:
@@ -125,7 +136,7 @@ class EventBus:
 
     def on(self, event_type: EventType | str, handler: Handler) -> None:
         """Subscribe to a specific event type."""
-        key = event_type.value if isinstance(event_type, EventType) else event_type
+        key = _event_key(event_type)
         self._handlers.setdefault(key, []).append(handler)
 
     def on_all(self, handler: Handler) -> None:
@@ -134,7 +145,7 @@ class EventBus:
 
     def off(self, event_type: EventType | str, handler: Handler) -> None:
         """Unsubscribe from a specific event type."""
-        key = event_type.value if isinstance(event_type, EventType) else event_type
+        key = _event_key(event_type)
         handlers = self._handlers.get(key, [])
         if handler in handlers:
             handlers.remove(handler)
@@ -146,7 +157,7 @@ class EventBus:
 
     async def emit(self, event_type: EventType | str, data: dict[str, Any] | None = None, source: str = "") -> None:
         """Emit an event to all subscribers. Non-blocking, fault-tolerant."""
-        key = event_type.value if isinstance(event_type, EventType) else event_type
+        key = _event_key(event_type)
         event = Event(type=key, data=data or {}, source=source)
 
         self._metrics.events_emitted += 1

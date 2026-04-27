@@ -164,7 +164,7 @@ async def test_run_flywheel_parallel():
 @pytest.mark.asyncio
 async def test_run_flywheel_parallel_with_error():
     """Parallel flywheel captures exceptions per-target."""
-    async def mock_flywheel(rounds=1, target=None, max_iterations=50, project_dir=None):
+    async def mock_flywheel(rounds=1, target=None, max_iterations=50, project_dir=None, round_timeout_s=None):
         if target == "bad":
             raise RuntimeError("boom")
         return {"rounds_completed": 1, "successful": 1, "results": []}
@@ -176,3 +176,18 @@ async def test_run_flywheel_parallel_with_error():
     assert results[0]["successful"] == 1
     assert "error" in results[1]
     assert "boom" in results[1]["error"]
+
+
+@pytest.mark.asyncio
+async def test_run_flywheel_parallel_passes_round_timeout():
+    """Parallel flywheel preserves per-round timeout protection."""
+    seen: list[float | None] = []
+
+    async def mock_flywheel(rounds=1, target=None, max_iterations=50, project_dir=None, round_timeout_s=None):
+        seen.append(round_timeout_s)
+        return {"rounds_completed": 1, "successful": 1, "results": []}
+
+    with patch("caveman.cli.flywheel.run_flywheel", side_effect=mock_flywheel):
+        await run_flywheel_parallel(["good", "other"], max_iterations=5, round_timeout_s=12.5)
+
+    assert seen == [12.5, 12.5]

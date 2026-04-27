@@ -9,6 +9,7 @@ import logging
 from pathlib import Path
 
 from caveman.paths import CAVEMAN_HOME
+from caveman.agent.prompt_contract import PromptTopic, detect_topics
 
 __all__ = [
     "WORKSPACE_FILES",
@@ -44,6 +45,25 @@ class WorkspaceLoader:
     def __init__(self, paths: list[Path] | None = None) -> None:
         self.paths = paths or list(WORKSPACE_PATHS)
 
+    @staticmethod
+    def _strip_workspace_contract_violations(content: str, filename: str) -> str:
+        """Remove lines owned by non-workspace prompt authorities.
+
+        Workspace files are user-controlled and may contain useful notes like
+        group-chat formatting preferences.  Those rules must not be injected
+        through the workspace layer because response_style is the sole
+        authority for format/layout instructions.  Drop only the offending
+        lines instead of suppressing the contract warning globally.
+        """
+        kept: list[str] = []
+        for line in content.splitlines():
+            topics = detect_topics(line)
+            if PromptTopic.FORMAT_LAYOUT in topics:
+                logger.debug("Workspace: dropped format/layout line from %s: %s", filename, line[:120])
+                continue
+            kept.append(line)
+        return "\n".join(kept).strip()
+
     def load(self) -> dict[str, str]:
         """Scan workspace dirs, return {filename: content}.
 
@@ -68,7 +88,9 @@ class WorkspaceLoader:
                 fp = ws_dir / name
                 if fp.is_file():
                     try:
-                        found[name] = fp.read_text(encoding="utf-8")
+                        found[name] = self._strip_workspace_contract_violations(
+                            fp.read_text(encoding="utf-8"), name
+                        )
                         self._provenance[name] = str(fp)
                         logger.info("Workspace: %s → %s", name, fp)
                     except Exception:
@@ -87,7 +109,9 @@ class WorkspaceLoader:
                     key = f"memory/{md.name}"
                     if key not in found:
                         try:
-                            found[key] = md.read_text(encoding="utf-8")
+                            found[key] = self._strip_workspace_contract_violations(
+                                md.read_text(encoding="utf-8"), key
+                            )
                         except Exception:
                             logger.warning("Failed to read %s", md, exc_info=True)
         return found

@@ -37,6 +37,14 @@ class TestStreamEvent:
     def test_thinking_event(self):
         e = StreamEvent(type="thinking", data="let me think...")
         assert e.type == "thinking"
+    def test_done_event_is_forbidden(self):
+        with pytest.raises(ValueError, match="legacy stream event type"):
+            StreamEvent(type="done", data="result")
+
+    def test_done_is_not_a_result_event_type(self):
+        from caveman.agent.stream import is_result_event_type
+        assert is_result_event_type("result") is True
+        assert is_result_event_type("done") is False
 
 
 # ── StreamBuffer ────────────────────────────────────────────────────

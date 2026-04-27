@@ -31,12 +31,38 @@ logger = logging.getLogger(__name__)
     },
     required=["action"],
 )
-async def cron_tool(args: dict, source: dict | None = None) -> dict:
+async def cron_tool(
+    action: str | dict,
+    job_id: str = "",
+    name: str = "",
+    schedule: str = "",
+    task: str = "",
+    channel: str = "",
+    channel_id: str = "",
+    enabled: bool | None = None,
+    max_runtime: int | None = None,
+    source: dict | None = None,
+) -> dict:
     from caveman.cron import CronStore, CronJob
     from caveman.paths import CAVEMAN_HOME
 
+    if isinstance(action, dict):
+        args = dict(action)
+        action = str(args.get("action", "list"))
+    else:
+        args = {
+            "action": action,
+            "job_id": job_id,
+            "name": name,
+            "schedule": schedule,
+            "task": task,
+            "channel": channel,
+            "channel_id": channel_id,
+            "enabled": enabled,
+            "max_runtime": max_runtime,
+        }
+
     store = CronStore(CAVEMAN_HOME / "sessions.db")
-    action = args.get("action", "list")
 
     try:
         if action == "list":

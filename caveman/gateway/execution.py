@@ -60,7 +60,7 @@ class ExecutionConfig:
     retry_backoff: float = 2.0  # multiplier
     max_compaction_retries: int = 2
     tool_timeout: float = 300.0  # 5 minutes
-    total_timeout: float = 600.0  # 10 minutes
+    total_timeout: float | None = None  # None = do not cancel long-running agent work
     fallback_candidates: List[FallbackCandidate] = field(default_factory=list)
     stream: bool = True
 
@@ -127,7 +127,7 @@ class AgentExecutionEngine:
             retry_delay = self._config.retry_delay
 
             for attempt in range(self._config.max_retries + 1):
-                if time.monotonic() - start > self._config.total_timeout:
+                if self._config.total_timeout is not None and time.monotonic() - start > self._config.total_timeout:
                     return ExecutionResult(
                         success=False,
                         error=f"Total timeout ({self._config.total_timeout}s) exceeded",
@@ -137,16 +137,20 @@ class AgentExecutionEngine:
                     )
 
                 try:
-                    response = await asyncio.wait_for(
-                        self._agent_fn(
-                            message,
-                            session=session,
-                            model=cand_model,
-                            provider=cand_provider,
-                            metadata=metadata,
-                        ),
-                        timeout=self._config.total_timeout,
+                    agent_call = self._agent_fn(
+                        message,
+                        session=session,
+                        model=cand_model,
+                        provider=cand_provider,
+                        metadata=metadata,
                     )
+                    if self._config.total_timeout is None:
+                        response = await agent_call
+                    else:
+                        response = await asyncio.wait_for(
+                            agent_call,
+                            timeout=self._config.total_timeout,
+                        )
 
                     return ExecutionResult(
                         success=True,

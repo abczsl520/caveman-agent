@@ -19,7 +19,7 @@ from datetime import datetime
 from typing import Any, Callable, Awaitable
 
 from caveman.memory.manager import MemoryManager
-from caveman.memory.types import MemoryEntry
+from caveman.memory.types import MemoryEntry, MetadataKeys
 
 logger = logging.getLogger(__name__)
 
@@ -269,9 +269,15 @@ One word answer:"""
                         existing_entry.metadata.pop("superseded_by", None)
                         existing_entry.metadata.pop("superseded_at", None)
                         existing_entry.metadata.pop("superseded_content", None)
+                        # update_metadata merges patches; after removing stale
+                        # markers, write back only durable user metadata.  Do
+                        # not replay transport/DB shadow fields such as an
+                        # invalid last_accessed=0 observed in legacy entries.
+                        cleaned = dict(existing_entry.metadata)
+                        cleaned.pop(MetadataKeys.LAST_ACCESSED, None)
                         # Write cleaned metadata back to storage
                         await self.memory.update_metadata(
-                            existing_entry.id, existing_entry.metadata,
+                            existing_entry.id, cleaned,
                         )
                     conflict["dismissed"] = True
             except Exception as e:

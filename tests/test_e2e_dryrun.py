@@ -1,6 +1,7 @@
 """End-to-end dry run — tests full AgentLoop without real LLM API."""
 import pytest
 from caveman.agent.loop import AgentLoop
+from caveman.memory.manager import MemoryManager
 from caveman.providers.llm import LLMProvider
 
 
@@ -46,18 +47,31 @@ class PrematureClosingProvider(MockProvider):
             yield {"type": "message_stop", "stop_reason": "end_turn", "usage": {}}
 
 
+class ContinuationTerminalProvider(MockProvider):
+    """Provider emits a stop-like final response for a keep-going task."""
+
+    async def complete(self, messages, tools=None, stream=True, system=None, **kwargs):
+        yield {"type": "delta", "text": "本轮已完成 output_validator 修复。\n\nDone."}
+        yield {"type": "message_stop", "stop_reason": "end_turn", "usage": {}}
+
+
+def make_loop(provider, tmp_path):
+    """Create an AgentLoop with isolated JSON memory for deterministic tests."""
+    return AgentLoop(model="mock", provider=provider, memory_manager=MemoryManager(base_dir=tmp_path / "memory"))
+
+
 @pytest.mark.asyncio
-async def test_agent_loop_e2e_dryrun():
+async def test_agent_loop_e2e_dryrun(tmp_path):
     provider = MockProvider()
-    loop = AgentLoop(model="mock", provider=provider)
+    loop = make_loop(provider, tmp_path)
     result = await loop.run("Search for AI news")
     assert "completed" in result.lower() or len(result) > 0
 
 
 @pytest.mark.asyncio
-async def test_agent_loop_tool_execution():
+async def test_agent_loop_tool_execution(tmp_path):
     provider = MockProvider()
-    loop = AgentLoop(model="mock", provider=provider)
+    loop = make_loop(provider, tmp_path)
 
     call_log = []
     async def mock_tool(query: str):
@@ -71,9 +85,9 @@ async def test_agent_loop_tool_execution():
 
 
 @pytest.mark.asyncio
-async def test_premature_closing_marker_does_not_skip_tool_execution():
+async def test_premature_closing_marker_does_not_skip_tool_execution(tmp_path):
     provider = PrematureClosingProvider()
-    loop = AgentLoop(model="mock", provider=provider)
+    loop = make_loop(provider, tmp_path)
 
     call_log = []
     async def mock_tool(query: str):
@@ -86,3 +100,27 @@ async def test_premature_closing_marker_does_not_skip_tool_execution():
 
     assert call_log == ["test"]
     assert "Actual work finished" in result
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_neutralizes_terminal_text_for_auto_continuation_task(tmp_path):
+    provider = ContinuationTerminalProvider()
+    loop = make_loop(provider, tmp_path)
+
+    result = await loop.run("继续飞轮 (自动第 7/20 轮)")
+
+    assert "Done" not in result
+    assert "已完成" not in result
+    assert "阶段性推进" in result
+    assert "连续任务保持推进" in result
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_preserves_terminal_text_for_normal_task(tmp_path):
+    provider = ContinuationTerminalProvider()
+    loop = make_loop(provider, tmp_path)
+
+    result = await loop.run("修复 README 里的错别字")
+
+    assert "Done" in result
+    assert "已完成" in result

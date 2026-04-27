@@ -135,10 +135,16 @@ class TaskRegistry:
         logger.debug("Task created: %s (%s)", task.task_id[:12], title)
         return task
 
+    def _status_is(self, status: Any, *expected: TaskStatus) -> bool:
+        return _status_value(status) in {s.value for s in expected}
+
+    def _delivery_is(self, status: Any, expected: DeliveryStatus) -> bool:
+        return _status_value(status) == expected.value
+
     def start_task(self, task_id: str) -> bool:
         """Mark a task as running."""
         task = self._tasks.get(task_id)
-        if not task or task.status != TaskStatus.CREATED:
+        if not task or not self._status_is(task.status, TaskStatus.CREATED):
             return False
         task.status = TaskStatus.RUNNING
         task.started_at = time.time()
@@ -148,7 +154,7 @@ class TaskRegistry:
     def complete_task(self, task_id: str, summary: str = "") -> bool:
         """Mark a task as completed."""
         task = self._tasks.get(task_id)
-        if not task or task.status not in (TaskStatus.CREATED, TaskStatus.RUNNING):
+        if not task or not self._status_is(task.status, TaskStatus.CREATED, TaskStatus.RUNNING):
             return False
         task.status = TaskStatus.COMPLETED
         task.completed_at = time.time()
@@ -161,7 +167,7 @@ class TaskRegistry:
     def fail_task(self, task_id: str, error: str = "") -> bool:
         """Mark a task as failed."""
         task = self._tasks.get(task_id)
-        if not task or task.status not in (TaskStatus.CREATED, TaskStatus.RUNNING):
+        if not task or not self._status_is(task.status, TaskStatus.CREATED, TaskStatus.RUNNING):
             return False
         task.status = TaskStatus.FAILED
         task.completed_at = time.time()
@@ -182,7 +188,7 @@ class TaskRegistry:
     def update_progress(self, task_id: str, progress: float, summary: str = "") -> bool:
         """Update task progress (0.0 to 1.0)."""
         task = self._tasks.get(task_id)
-        if not task or task.status != TaskStatus.RUNNING:
+        if not task or not self._status_is(task.status, TaskStatus.RUNNING):
             return False
         task.progress = max(0.0, min(1.0, progress))
         if summary:
@@ -204,7 +210,8 @@ class TaskRegistry:
         if session_id:
             tasks = [t for t in tasks if t.session_id == session_id]
         if status:
-            tasks = [t for t in tasks if t.status == status]
+            status_value = _status_value(status)
+            tasks = [t for t in tasks if _status_value(t.status) == status_value]
         if runtime:
             tasks = [t for t in tasks if t.runtime == runtime]
         tasks.sort(key=lambda t: t.created_at, reverse=True)
@@ -214,14 +221,14 @@ class TaskRegistry:
         """Get registry summary stats."""
         by_status: dict[str, int] = {}
         for t in self._tasks.values():
-            by_status[t.status.value] = by_status.get(t.status.value, 0) + 1
+            by_status[_status_value(t.status)] = by_status.get(_status_value(t.status), 0) + 1
         return {
             "total": len(self._tasks),
             "by_status": by_status,
             "flows": len(self._flows),
             "pending_delivery": sum(
                 1 for t in self._tasks.values()
-                if t.delivery_status == DeliveryStatus.PENDING and _is_terminal(t.status)
+                if self._delivery_is(t.delivery_status, DeliveryStatus.PENDING) and _is_terminal(t.status)
             ),
         }
 
@@ -260,7 +267,7 @@ class TaskRegistry:
         """Get tasks with pending delivery notifications."""
         tasks = [
             t for t in self._tasks.values()
-            if t.delivery_status == DeliveryStatus.PENDING and _is_terminal(t.status)
+            if self._delivery_is(t.delivery_status, DeliveryStatus.PENDING) and _is_terminal(t.status)
         ]
         if session_id:
             tasks = [t for t in tasks if t.session_id == session_id]
@@ -272,8 +279,8 @@ class TaskRegistry:
         """Remove tasks older than retention period."""
         cutoff = time.time() - self._retention_seconds
         to_remove = [
-            tid for tid, t in self._tasks.items()
-            if _is_terminal(t.status) and t.completed_at and t.completed_at < cutoff
+            tid for tid, task in self._tasks.items()
+            if _is_terminal(task.status) and task.completed_at and task.completed_at < cutoff
         ]
         for tid in to_remove:
             del self._tasks[tid]
@@ -284,7 +291,7 @@ class TaskRegistry:
         cutoff = time.time() - timeout
         count = 0
         for task in self._tasks.values():
-            if task.status == TaskStatus.RUNNING and task.started_at < cutoff:
+            if self._status_is(task.status, TaskStatus.RUNNING) and task.started_at < cutoff:
                 task.status = TaskStatus.LOST
                 task.completed_at = time.time()
                 task.error = "task timed out (marked as lost)"
@@ -346,19 +353,28 @@ class TaskRegistry:
             logger.warning("Failed to load task registry: %s", e)
 
 
+def _status_value(status: Any) -> str:
+    return str(getattr(status, "value", status))
+
+
 def _is_terminal(status: TaskStatus) -> bool:
-    return status in (TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED, TaskStatus.LOST)
+    return _status_value(status) in {
+        TaskStatus.COMPLETED.value,
+        TaskStatus.FAILED.value,
+        TaskStatus.CANCELLED.value,
+        TaskStatus.LOST.value,
+    }
 
 
 def _task_to_dict(t: TaskRecord) -> dict[str, Any]:
     return {
-        "task_id": t.task_id, "title": t.title, "status": t.status.value,
-        "runtime": t.runtime.value, "session_id": t.session_id,
+        "task_id": t.task_id, "title": t.title, "status": _status_value(t.status),
+        "runtime": _status_value(t.runtime), "session_id": t.session_id,
         "flow_id": t.flow_id, "parent_task_id": t.parent_task_id,
         "created_at": t.created_at, "started_at": t.started_at,
         "completed_at": t.completed_at, "result_summary": t.result_summary,
         "error": t.error, "progress": t.progress,
-        "delivery_status": t.delivery_status.value,
+        "delivery_status": _status_value(t.delivery_status),
         "delivery_channel": t.delivery_channel, "metadata": t.metadata,
     }
 

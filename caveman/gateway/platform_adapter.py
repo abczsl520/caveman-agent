@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import random
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Dict, Optional, Set
@@ -18,13 +17,6 @@ from caveman.gateway.platform_types import (
     SendResult,
     SessionSource,
     build_session_key,
-)
-from caveman.gateway.platform_delivery import (
-    RETRYABLE_PATTERNS,
-    extract_images,
-    extract_media,
-    is_animation_url,
-    truncate_message,
 )
 
 logger = logging.getLogger("caveman.gateway")
@@ -208,9 +200,23 @@ class BasePlatformAdapter(ABC):
                 self._merge_pending(session_key, event)
                 return
 
-            # Default: queue and signal interrupt
-            self._pending_messages[session_key] = event
-            self._active_sessions[session_key].set()
+            # Default: delegate ordinary follow-up messages to the canonical
+            # GatewayServer session-lock path.  Keeping them only in this
+            # adapter-local queue hides the message from GatewayServer.handle_task,
+            # so the running task's ctx.shutdown_flag is never flipped and user
+            # interrupts silently fail on the new BasePlatformAdapter stack.
+            try:
+                response = await self._message_handler(event)
+                if response:
+                    meta = {"thread_id": event.source.thread_id} if event.source and event.source.thread_id else None
+                    await self._send_with_retry(event.source.chat_id, response, event.message_id, meta)
+            except Exception as e:
+                logger.error("[%s] Follow-up message handoff failed: %s", self.name, e, exc_info=True)
+                try:
+                    meta = {"thread_id": event.source.thread_id} if event.source and event.source.thread_id else None
+                    await self.send(event.source.chat_id, f"⚠️ Error: {type(e).__name__}: {str(e)[:300]}", metadata=meta)
+                except Exception as exc:
+                    logger.debug("follow-up handoff error notification suppressed: %s", exc)
             return
 
         # Mark session active BEFORE spawning task (prevents race)
@@ -288,36 +294,8 @@ class BasePlatformAdapter(ABC):
         reply_to: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Deliver a response: redact secrets, extract media, split, send."""
-        try:
-            from caveman.gateway.redaction import redact_all
-            response = redact_all(response)
-        except Exception as exc:
-            logger.debug("_deliver_response: suppressed %s", exc)
-        media_files, response = extract_media(response)
-        images, text_content = extract_images(response)
-
-        if text_content.strip():
-            chunks = truncate_message(text_content, self._max_message_length)
-            for i, chunk in enumerate(chunks):
-                r2 = reply_to if i == 0 and self.config.reply_to_mode != "off" else None
-                await self._send_with_retry(chat_id, chunk, r2, metadata)
-
-        for image_url, alt_text in images:
-            if is_animation_url(image_url):
-                await self.send_animation(chat_id, image_url, alt_text or None, metadata=metadata)
-            else:
-                await self.send_image(chat_id, image_url, alt_text or None, metadata=metadata)
-
-        for media_path, _is_voice in media_files:
-            ext = Path(media_path).suffix.lower()
-            if ext in _AUDIO_EXTS:
-                await self.send_voice(chat_id, media_path, metadata=metadata)
-            elif ext in _VIDEO_EXTS:
-                await self.send_video(chat_id, media_path, metadata=metadata)
-            elif ext in _IMAGE_EXTS:
-                await self.send_image_file(chat_id, media_path, metadata=metadata)
-            else:
-                await self.send_document(chat_id, media_path, metadata=metadata)
+        from caveman.gateway.platform_send import deliver_response
+        await deliver_response(self, chat_id, response, reply_to, metadata)
 
     # ── Retry logic ─────────────────────────────────────────────────────────
 
@@ -327,33 +305,8 @@ class BasePlatformAdapter(ABC):
         max_retries: int = 2, base_delay: float = 2.0,
     ) -> SendResult:
         """Send with automatic retry for transient network errors."""
-        result = await self.send(chat_id, content, reply_to, metadata)
-        if result.success:
-            return result
-
-        error_str = (result.error or "").lower()
-        is_network = result.retryable or any(p in error_str for p in RETRYABLE_PATTERNS)
-
-        if not is_network:
-            # Try plain-text fallback for formatting errors
-            fallback = await self.send(chat_id, f"(plain text fallback)\n\n{content[:3500]}", reply_to, metadata)
-            return fallback if fallback.success else result
-
-        # Retry with exponential backoff
-        for attempt in range(1, max_retries + 1):
-            delay = base_delay * (2 ** (attempt - 1)) + random.uniform(0, 1)
-            logger.warning("[%s] Send retry %d/%d in %.1fs: %s", self.name, attempt, max_retries, delay, result.error)
-            await asyncio.sleep(delay)
-            result = await self.send(chat_id, content, reply_to, metadata)
-            if result.success:
-                return result
-
-        # All retries failed — notify user
-        try:
-            await self.send(chat_id, "⚠️ Message delivery failed after retries. Please try again.")
-        except Exception as exc:
-            logger.debug("_send_with_retry: suppressed %s", exc)
-        return result
+        from caveman.gateway.platform_send import send_with_retry
+        return await send_with_retry(self, chat_id, content, reply_to, metadata, max_retries, base_delay)
 
     # ── Typing indicator ────────────────────────────────────────────────────
 

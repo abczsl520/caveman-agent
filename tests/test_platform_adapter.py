@@ -238,20 +238,37 @@ class TestHandleMessage:
     @pytest.mark.asyncio
     async def test_interrupt_queues_message(self):
         adapter = MockAdapter()
-        responses = iter(["first response", "second response"])
-        adapter.set_message_handler(AsyncMock(side_effect=lambda e: next(responses)))
+        gate = asyncio.Event()
+        calls = []
+
+        async def handler(event):
+            calls.append(event.text)
+            if event.text == "first":
+                await gate.wait()
+                return "first response"
+            return "second response"
+
+        adapter.set_message_handler(handler)
 
         event1 = _make_event("first")
         await adapter.handle_message(event1)
         await asyncio.sleep(0.01)
 
-        # Second message while first is processing
+        # Second message while first is processing must be handed to the
+        # canonical GatewayServer handler immediately.  GatewayServer owns the
+        # real interrupt/session-lock semantics; adapter-local pending queues
+        # hide this message and make interrupts silently fail.
         event2 = _make_event("second", chat_id="123", user_id="u1")
         await adapter.handle_message(event2)
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(0.05)
 
-        # Both should eventually be processed
-        assert len(adapter.sent_messages) >= 1
+        assert calls == ["first", "second"]
+        assert len(adapter._pending_messages) == 0
+
+        gate.set()
+        await asyncio.sleep(0.05)
+        assert any("first response" in m["content"] for m in adapter.sent_messages)
+        assert any("second response" in m["content"] for m in adapter.sent_messages)
 
 
 class TestRetry:

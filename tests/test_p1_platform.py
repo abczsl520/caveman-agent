@@ -157,6 +157,25 @@ class TestGatewayImports:
         gw = TelegramGateway(token="fake")
         assert gw.token == "fake"
 
+    def test_legacy_gateway_handlers_do_not_wrap_task_handler_in_hard_timeout(self):
+        """Platform adapters must not kill long auto-flywheel work from outside.
+
+        task_runner owns progress, idle, and absolute runtime policy. A legacy
+        gateway-level wait_for around the whole handler cancels healthy 20-round
+        auto-flywheel sessions and surfaces as a false stop.
+        """
+        import inspect
+        from caveman.gateway.discord_gw import DiscordGateway
+        from caveman.gateway.telegram_gw import TelegramGateway
+
+        discord_source = inspect.getsource(DiscordGateway._run_task_with_typing)
+        telegram_source = inspect.getsource(TelegramGateway.start)
+
+        assert "asyncio.wait_for" not in discord_source
+        assert "DISCORD_HEARTBEAT" not in discord_source
+        assert "Timed out" not in telegram_source
+        assert "self._task_handler(task, ctx)" in telegram_source
+
     def test_runner_import(self):
         from caveman.gateway.runner import run_gateway
         assert callable(run_gateway)

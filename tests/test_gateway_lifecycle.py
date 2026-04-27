@@ -400,6 +400,36 @@ class TestDrainMechanism:
         assert count == 0
         assert not timed_out
 
+    @pytest.mark.asyncio
+    async def test_drain_force_stop_interrupts_active_session_wait(self):
+        """Second SIGUSR1/force restart must not wait for the full drain timeout."""
+        from caveman.gateway.gateway_lifecycle import drain_active_sessions
+
+        lock = asyncio.Lock()
+        await lock.acquire()
+        sessions = {"discord:active": {"loop": object()}}
+        session_locks = {"discord:active": lock}
+        force = {"enabled": False}
+
+        async def enable_force():
+            await asyncio.sleep(0.05)
+            force["enabled"] = True
+
+        asyncio.create_task(enable_force())
+        started = time.monotonic()
+        count, timed_out = await drain_active_sessions(
+            sessions,
+            session_locks,
+            timeout=5.0,
+            force_stop=lambda: force["enabled"],
+        )
+        elapsed = time.monotonic() - started
+
+        lock.release()
+        assert count == 1
+        assert timed_out is True
+        assert elapsed < 1.0
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Integration: /restart command

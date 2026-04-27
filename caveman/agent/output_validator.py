@@ -119,6 +119,68 @@ def should_use_closing_marker(
     """
     return False
 
+
+_CONTINUATION_TASK_PATTERNS = (
+    re.compile(r"继续\s*飞轮", re.IGNORECASE),
+    re.compile(r"自动第\s*\d+\s*/\s*\d+\s*轮", re.IGNORECASE),
+    re.compile(r"(?:继续|持续|接着|下一个).{0,24}(?:排查|修复|改进|推进|飞轮|审计|压测)", re.IGNORECASE),
+    re.compile(r"(?:不要停|别停|不间断|一直推进|持续推进)", re.IGNORECASE),
+    re.compile(r"(?:keep\s*going|don['’]?t\s*stop|auto\s*-?\s*continue|autonomous)", re.IGNORECASE),
+    re.compile(r"下一个最高复利的改进", re.IGNORECASE),
+)
+
+# Lines/phrases that read like a terminal seal when the caller is explicitly in
+# a continuing/auto-run workflow. We only use these after task-intent detection,
+# so ordinary one-off tasks can still report their outcome naturally.
+_CONTINUATION_TERMINAL_LINES = (
+    re.compile(r"^\s*(?:Done\.?|任务(?:已)?完成|全部(?:已)?完成|本轮(?:已)?完成|收尾(?:完成)?|搞定了?)\s*[。.!！]*\s*$", re.IGNORECASE),
+    re.compile(r"^\s*(?:Flywheel\s+completed|Completed\s+successfully)\s*[。.!！]*\s*$", re.IGNORECASE),
+)
+_CONTINUATION_TERMINAL_SENTENCES = (
+    re.compile(r"(?<!不代表所有问题)(?:已完成|完成了|全部修复完毕|全部处理完毕|彻底搞定|Flywheel\s+completed|\bDone\b)", re.IGNORECASE),
+)
+
+
+def is_continuation_task(task: str | None) -> bool:
+    """Return True for flywheel/auto-continue tasks that should stay open-ended."""
+    if not task:
+        return False
+    return any(pattern.search(task) for pattern in _CONTINUATION_TASK_PATTERNS)
+
+
+def suppress_continuation_terminality(text: str, *, task: str | None = None, surface: str = "cli") -> str:
+    """Remove terminal-seal language from known continuing workflows.
+
+    This is intentionally task-gated. A normal one-shot task may say it finished;
+    an auto-flywheel/keep-going task must not leak stop-like wording as its final
+    visible state because the scheduler is expected to continue with another turn.
+    """
+    if not text or not is_continuation_task(task):
+        return text
+
+    cleaned = strip_closing_markers(text, surface=surface).strip()
+    if not cleaned:
+        return "本轮有进展记录；连续任务保持推进。"
+
+    kept_lines: list[str] = []
+    removed_terminal_line = False
+    for line in cleaned.splitlines():
+        if any(pattern.match(line) for pattern in _CONTINUATION_TERMINAL_LINES):
+            removed_terminal_line = True
+            continue
+        kept_lines.append(line)
+    cleaned = "\n".join(kept_lines).strip()
+
+    for pattern in _CONTINUATION_TERMINAL_SENTENCES:
+        cleaned = pattern.sub("阶段性推进了", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+
+    if not cleaned:
+        return "本轮有进展记录；连续任务保持推进。"
+    if removed_terminal_line:
+        return f"{cleaned}\n\n连续任务保持推进。"
+    return cleaned
+
 def strip_closing_markers(text: str, surface: str = "cli") -> str:
     """Remove terminal closing markers when policy says the turn should stay open.
 
@@ -134,13 +196,16 @@ def strip_closing_markers(text: str, surface: str = "cli") -> str:
     cleaned = _BARE_CHECKMARK.sub("", cleaned).rstrip()
     return cleaned
 
-def enforce_closing_format(text: str, should_close: bool, surface: str = "cli") -> str:
-    """Suppress terminal completion markers.
+def enforce_closing_format(text: str, should_close: bool, surface: str = "cli", task: str | None = None) -> str:
+    """Suppress terminal completion markers and continuation-task stop signals.
 
     ``should_close`` is intentionally ignored while completion markers are
     disabled. This strips both canonical markers and malformed trailing attempts
     so accidental prompt/model inertia cannot signal done to the gateway/flywheel.
+    When ``task`` is a keep-going/flywheel prompt, terminal-seal wording is also
+    neutralized so outer API/assistant final text does not look like a stop.
     """
     if not text:
         return text
-    return strip_closing_markers(text, surface=surface)
+    cleaned = strip_closing_markers(text, surface=surface)
+    return suppress_continuation_terminality(cleaned, task=task, surface=surface)

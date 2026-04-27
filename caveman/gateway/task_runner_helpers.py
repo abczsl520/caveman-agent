@@ -78,8 +78,11 @@ async def _handle_tool_call(event, ctx: _TaskContext, buf: _SmartBuffer) -> bool
     tool_name = ""
     tool_args = ""
     if isinstance(event.data, dict):
-        tool_name = event.data.get("name", "")
-        tool_args = str(event.data.get("input", event.data.get("arguments", "")))
+        name = event.data.get("name", "")
+        raw_args = event.data.get("input", event.data.get("arguments", ""))
+        args = raw_args if isinstance(raw_args, dict) else {}
+        tool_name = name
+        tool_args = str(raw_args)
     ctx.tool_call_count += 1
 
     # Optional explicit tool-call budget. By default there is no arbitrary
@@ -115,6 +118,36 @@ async def _handle_tool_call(event, ctx: _TaskContext, buf: _SmartBuffer) -> bool
             await ctx.send(f"{msg}。请换个思路继续。")
             return False  # let agent continue
 
+    async def _send_or_edit_heartbeat(name: str) -> None:
+        """Send or edit a bounded visible tool heartbeat."""
+        from caveman.tools.display import tool_display
+
+        ctx._hb_counts[name] = ctx._hb_counts.get(name, 0) + 1
+        total = sum(ctx._hb_counts.values())
+        recent = list(ctx._hb_counts.items())[-5:]
+        parts = []
+        for k, v in recent:
+            emoji, label = tool_display(k)
+            safe_label = label if label != k else "tool"
+            parts.append(f"{emoji}{safe_label} ×{v}" if v > 1 else f"{emoji}{safe_label}")
+        if len(ctx._hb_counts) > len(recent):
+            parts.insert(0, "工具调用持续进行中")
+        iter_info = f" [{ctx.iteration}/{ctx.max_iterations}]" if ctx.max_iterations else ""
+        elapsed = int(asyncio.get_running_loop().time() - ctx.task_start_time)
+        mins, secs = divmod(elapsed, 60)
+        text = f"⏳{iter_info} {', '.join(parts)} ({f'{mins}m{secs:02d}s' if mins else f'{secs}s'})..."
+        try:
+            if ctx._hb_msg_id:
+                await ctx.router.edit(ctx.gw_name, ctx.channel_id, ctx._hb_msg_id, text)
+            else:
+                result = await ctx.router.send(ctx.gw_name, ctx.channel_id, text)
+                if isinstance(result, dict) and result.get("message_id"):
+                    ctx._hb_msg_id = result["message_id"]
+                elif isinstance(result, (str, int)) and result:
+                    ctx._hb_msg_id = result
+        except Exception as e:
+            logger.debug("Heartbeat send/edit failed: %s", e)
+
     async def _heartbeat(name: str):
         """Periodic heartbeat during tool execution.
 
@@ -126,40 +159,32 @@ async def _handle_tool_call(event, ctx: _TaskContext, buf: _SmartBuffer) -> bool
         Long tools like coding_agent (15min) would trigger idle_shutdown
         (5min) because touch_activity was never called during execution.
         """
-        from caveman.tools.display import tool_display
         while True:
             await asyncio.sleep(15.0)
             # Critical: keep idle detector alive during long tool execution
             ctx.touch_activity()
-            ctx._hb_counts[name] = ctx._hb_counts.get(name, 0) + 1
-            parts = []
-            for k, v in ctx._hb_counts.items():
-                emoji, label = tool_display(k)
-                parts.append(f"{emoji}{label} ×{v}" if v > 1 else f"{emoji}{label}")
-            iter_info = f" [{ctx.iteration}/{ctx.max_iterations}]" if ctx.max_iterations else ""
-            elapsed = int(asyncio.get_running_loop().time() - ctx.task_start_time)
-            mins, secs = divmod(elapsed, 60)
-            time_str = f"{mins}m{secs:02d}s" if mins else f"{secs}s"
-            text = f"⏳{iter_info} {', '.join(parts)} ({time_str})..."
-            try:
-                if ctx._hb_msg_id:
-                    await ctx.router.edit(ctx.gw_name, ctx.channel_id, ctx._hb_msg_id, text)
-                else:
-                    result = await ctx.router.send(ctx.gw_name, ctx.channel_id, text)
-                    if isinstance(result, dict) and result.get("message_id"):
-                        ctx._hb_msg_id = result["message_id"]
-            except Exception as e:
-                logger.debug("Heartbeat send/edit failed: %s", e)
+            await _send_or_edit_heartbeat(name)
 
+    await _send_or_edit_heartbeat(tool_name)
     ctx.tool_heartbeat = ctx.spawn_task(lambda: _heartbeat(tool_name), name=f"heartbeat:{tool_name}")
     return False
 
-def _persist_result(buf: _SmartBuffer, final_text: str, session: dict, store: Any) -> None:
+def _persist_result(buf: _SmartBuffer, final_text: str, session: dict, store: Any, *, continuation_task: bool = False) -> None:
     """Save result to session store and update metadata."""
-    meta = session["meta"]
-    loop = session["loop"]
+    meta = session.get("meta")
+    loop = session.get("loop") or session.get("agent_loop")
 
     save_text = buf._sent_text.strip() or final_text or buf._full_text
+    if continuation_task:
+        from caveman.agent.output_validator import suppress_continuation_terminality
+        save_text = suppress_continuation_terminality(save_text, task="继续飞轮", surface=getattr(loop, "surface", "cli"))
+    if meta is None or loop is None:
+        logger.debug("Persisting result without session meta")
+        try:
+            store.append_turn("unknown", "assistant", save_text[:16000])
+        except Exception as exc:
+            logger.debug("Fallback result persistence failed: %s", exc)
+        return
     # Tool call count is metadata, not message content.
     # Injecting it into the text pollutes conversation history and causes
     # cumulative snowball on session restore (the count keeps growing).
@@ -211,8 +236,8 @@ def _spawn_post_task_review(session: dict, tool_call_count: int) -> None:
     """
     if tool_call_count < _REVIEW_MIN_TOOL_CALLS:
         return
-    loop_obj = session.get("loop")
-    if not loop_obj or not loop_obj.nudge:
+    loop_obj = session.get("loop") or session.get("agent_loop")
+    if not loop_obj or not getattr(loop_obj, "nudge", None):
         return
     nudge = loop_obj.nudge
     trajectory = loop_obj.trajectory_recorder

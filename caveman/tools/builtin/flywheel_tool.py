@@ -7,11 +7,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import sys
 from pathlib import Path
 
 from caveman.tools.registry import tool
 from caveman.timeouts import SUBPROCESS_FLYWHEEL
+
+_FLYWHEEL_HEARTBEAT_SECONDS = 60
 
 logger = logging.getLogger(__name__)
 
@@ -76,33 +79,45 @@ async def flywheel_exec(
 
         output_lines = []
         while True:
-            line = await asyncio.wait_for(
-                proc.stdout.readline(), timeout=SUBPROCESS_FLYWHEEL
-            )
+            try:
+                line = await asyncio.wait_for(
+                    proc.stdout.readline(), timeout=_FLYWHEEL_HEARTBEAT_SECONDS
+                )
+            except asyncio.TimeoutError:
+                if proc.returncode is not None:
+                    break
+                logger.info("flywheel: still running; waiting for more output")
+                continue
             if not line:
                 break
             decoded = line.decode("utf-8", errors="replace").rstrip()
             output_lines.append(decoded)
             logger.info("flywheel: %s", decoded)
 
-        await proc.wait()
+        await asyncio.wait_for(proc.wait(), timeout=SUBPROCESS_FLYWHEEL)
         output = "\n".join(output_lines[-100:])  # Keep last 100 lines
+        summary = re.search(r"Flywheel:\s+(\d+)/(\d+)\s+rounds successful", output)
+        failed_rounds = bool(summary and int(summary.group(1)) < int(summary.group(2)))
 
-        if proc.returncode == 0:
+        if proc.returncode == 0 and not failed_rounds:
             return {
                 "ok": True,
-                "message": f"Flywheel completed ({target or 'auto'}, {rounds} round(s))",
+                "message": f"Flywheel run ended with objective evidence ({target or 'auto'}, {rounds} round(s))",
                 "output": output,
             }
         else:
+            reason = "Flywheel reported failed rounds" if failed_rounds else f"Flywheel exited with code {proc.returncode}"
             return {
                 "ok": False,
-                "error": f"Flywheel exited with code {proc.returncode}",
+                "error": reason,
                 "output": output,
             }
 
     except asyncio.TimeoutError:
-        return {"ok": False, "error": f"Flywheel timed out after {SUBPROCESS_FLYWHEEL:g} seconds"}
+        if 'proc' in locals() and proc.returncode is None:
+            proc.kill()
+            await proc.wait()
+        return {"ok": False, "error": f"Flywheel subprocess exceeded {SUBPROCESS_FLYWHEEL:g} seconds without finishing"}
     except Exception as e:
         logger.exception("Flywheel failed: %s", e)
         return {"ok": False, "error": str(e)}
