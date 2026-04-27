@@ -118,28 +118,38 @@ class TestProcessRegistry:
         reg = ProcessRegistry()
         session = await reg.spawn("echo hello")
         assert session.status == "running" or session.status == "completed"
-        # Wait for completion
-        await asyncio.sleep(0.5)
-        result = reg.poll(session.id)
-        assert result["status"] in ("completed", "running")
+        result = await reg.wait(session.id, timeout=2)
+        assert result["status"] == "completed"
 
     @pytest.mark.asyncio
     async def test_spawn_with_timeout(self):
         from caveman.tools.builtin.process_registry import ProcessRegistry
         reg = ProcessRegistry()
         session = await reg.spawn("sleep 10", timeout=1)
-        await asyncio.sleep(3)
-        result = reg.poll(session.id)
+        result = await reg.wait(session.id, timeout=3)
         assert result["status"] == "killed"
+
+    @pytest.mark.asyncio
+    async def test_wait_timeout_does_not_kill_process(self):
+        from caveman.tools.builtin.process_registry import ProcessRegistry
+        reg = ProcessRegistry()
+        session = await reg.spawn("sleep 1")
+        with pytest.raises(asyncio.TimeoutError):
+            await reg.wait(session.id, timeout=0.01)
+        result = reg.poll(session.id)
+        assert result["status"] == "running"
+        await reg.kill(session.id)
 
     @pytest.mark.asyncio
     async def test_list_sessions(self):
         from caveman.tools.builtin.process_registry import ProcessRegistry
         reg = ProcessRegistry()
-        await reg.spawn("echo a")
-        await reg.spawn("echo b")
+        session_a = await reg.spawn("echo a")
+        session_b = await reg.spawn("echo b")
         sessions = reg.list_sessions()
         assert len(sessions) == 2
+        await reg.wait(session_a.id, timeout=2)
+        await reg.wait(session_b.id, timeout=2)
 
     @pytest.mark.asyncio
     async def test_kill(self):
@@ -154,7 +164,7 @@ class TestProcessRegistry:
         from caveman.tools.builtin.process_registry import ProcessRegistry
         reg = ProcessRegistry()
         session = await reg.spawn("echo line1 && echo line2 && echo line3")
-        await asyncio.sleep(0.5)
+        await reg.wait(session.id, timeout=2)
         result = reg.read_log(session.id)
         assert result.get("total_lines", 0) > 0
 
