@@ -1,8 +1,15 @@
 """Tests for MCP bridge + memory v2."""
+import json
 import pytest
 import tempfile
 from caveman.memory.manager import MemoryManager, _cosine_similarity
 from caveman.memory.types import MemoryType
+
+
+def _close_manager(mgr: MemoryManager) -> None:
+    """Close SQLite-backed test managers explicitly to keep lifecycle warnings visible."""
+    if mgr.backend:
+        mgr.backend.close()
 
 
 def test_cosine_similarity():
@@ -27,13 +34,16 @@ def test_cosine_edge_cases():
 async def test_memory_v2_keyword_fallback():
     """Without embedding fn, should fall back to keyword search."""
     with tempfile.TemporaryDirectory() as td:
-        mgr = MemoryManager(base_dir=td, embedding_fn=None)
-        await mgr.store("Python is a programming language", MemoryType.SEMANTIC)
-        await mgr.store("JavaScript runs in browsers", MemoryType.SEMANTIC)
+        mgr = MemoryManager.with_sqlite(base_dir=td, embedding_fn=None)
+        try:
+            await mgr.store("Python is a programming language", MemoryType.SEMANTIC)
+            await mgr.store("JavaScript runs in browsers", MemoryType.SEMANTIC)
 
-        results = await mgr.recall("Python programming")
-        assert len(results) >= 1
-        assert "Python" in results[0].content
+            results = await mgr.recall("Python programming")
+            assert len(results) >= 1
+            assert "Python" in results[0].content
+        finally:
+            _close_manager(mgr)
 
 
 @pytest.mark.asyncio
@@ -47,25 +57,31 @@ async def test_memory_v2_with_mock_embeddings():
         return [1.0 if w in text_lower else 0.0 for w in words]
 
     with tempfile.TemporaryDirectory() as td:
-        mgr = MemoryManager(base_dir=td, embedding_fn=mock_embed)
-        await mgr.store("Python AI agent framework", MemoryType.SEMANTIC)
-        await mgr.store("JavaScript browser animation", MemoryType.SEMANTIC)
-        await mgr.store("AI agent memory system", MemoryType.SEMANTIC)
+        mgr = MemoryManager.with_sqlite(base_dir=td, embedding_fn=mock_embed)
+        try:
+            await mgr.store("Python AI agent framework", MemoryType.SEMANTIC)
+            await mgr.store("JavaScript browser animation", MemoryType.SEMANTIC)
+            await mgr.store("AI agent memory system", MemoryType.SEMANTIC)
 
-        results = await mgr.recall("AI agent")
-        assert len(results) >= 1
-        # Should prefer entries with AI and agent
-        assert "AI" in results[0].content or "agent" in results[0].content
+            results = await mgr.recall("AI agent")
+            assert len(results) >= 1
+            # Should prefer entries with AI and agent
+            assert "AI" in results[0].content or "agent" in results[0].content
+        finally:
+            _close_manager(mgr)
 
 
 @pytest.mark.asyncio
 async def test_memory_v2_forget():
     with tempfile.TemporaryDirectory() as td:
-        mgr = MemoryManager(base_dir=td)
-        mid = await mgr.store("temp memory", MemoryType.WORKING)
-        assert mgr.total_count == 1
-        assert await mgr.forget(mid)
-        assert mgr.total_count == 0
+        mgr = MemoryManager.with_sqlite(base_dir=td)
+        try:
+            mid = await mgr.store("temp memory", MemoryType.WORKING)
+            assert mgr.total_count == 1
+            assert await mgr.forget(mid)
+            assert mgr.total_count == 0
+        finally:
+            _close_manager(mgr)
 
 
 @pytest.mark.asyncio
@@ -75,12 +91,22 @@ async def test_memory_v2_persistence():
         return [float(len(text)), 1.0, 0.5]
 
     with tempfile.TemporaryDirectory() as td:
-        mgr1 = MemoryManager(base_dir=td, embedding_fn=mock_embed)
-        mid = await mgr1.store("test content", MemoryType.EPISODIC)
-        assert mid in mgr1._embeddings
+        mgr1 = MemoryManager.with_sqlite(base_dir=td, embedding_fn=mock_embed)
+        try:
+            mid = await mgr1.store("test content", MemoryType.EPISODIC)
+            assert await mgr1.get_by_id(mid) is not None
+        finally:
+            _close_manager(mgr1)
 
         # Load in new instance
-        mgr2 = MemoryManager(base_dir=td, embedding_fn=mock_embed)
-        await mgr2.load()
-        assert mgr2.total_count == 1
-        assert mid in mgr2._embeddings
+        mgr2 = MemoryManager.with_sqlite(base_dir=td, embedding_fn=mock_embed)
+        try:
+            await mgr2.load()
+            assert mgr2.total_count == 1
+            assert await mgr2.get_by_id(mid) is not None
+            rows = mgr2.backend._get_conn().execute(
+                "SELECT vector_json FROM embeddings WHERE memory_id = ?", (mid,)
+            ).fetchall()
+            assert json.loads(rows[0][0]) == [12.0, 1.0, 0.5]
+        finally:
+            _close_manager(mgr2)
