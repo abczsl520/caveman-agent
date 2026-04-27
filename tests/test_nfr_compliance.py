@@ -18,6 +18,11 @@ import pytest
 from pathlib import Path
 
 
+def _close_memory_manager(mm) -> None:
+    if mm.backend:
+        mm.backend.close()
+
+
 # ═══════════════════════════════════════════════════════════════
 # NFR-1: Performance
 # ═══════════════════════════════════════════════════════════════
@@ -35,23 +40,31 @@ class TestNFRPerformance:
     def test_nfr103_memory_search_speed(self, tmp_path):
         """NFR-103: Memory search < 100ms (FTS5)."""
         from caveman.memory.manager import MemoryManager
-        from caveman.memory.types import MemoryEntry, MemoryType
-        from datetime import datetime
+        from caveman.memory.types import MemoryType
 
-        mm = MemoryManager(base_dir=tmp_path)
-        now = datetime.now()
-        # Seed 100 memories
-        for i in range(100):
-            mm._memories[MemoryType.SEMANTIC].append(
-                MemoryEntry(id=f"m{i}", content=f"Memory entry number {i} about topic {i % 10}",
-                           memory_type=MemoryType.SEMANTIC, created_at=now)
-            )
+        mm = MemoryManager.with_sqlite(base_dir=tmp_path)
+        try:
+            # Seed fixture rows via the production SQLite schema/triggers while
+            # excluding async store() overhead from the search-speed measurement.
+            conn = mm.backend._get_conn()
+            now = time.strftime("%Y-%m-%dT%H:%M:%S")
+            for i in range(100):
+                conn.execute(
+                    "INSERT INTO memories (id, content, type, created_at, metadata_json, trust_score) "
+                    "VALUES (?, ?, ?, ?, '{}', 0.5)",
+                    (f"m{i}", f"Memory entry number {i} about topic {i % 10}", MemoryType.SEMANTIC.value, now),
+                )
+            conn.commit()
 
-        start = time.monotonic()
-        results = mm.search_sync("topic 5", limit=5)
-        elapsed_ms = (time.monotonic() - start) * 1000
-        assert elapsed_ms < 100, f"Search took {elapsed_ms:.1f}ms (max 100ms)"
-        assert len(results) > 0
+            assert mm.backend._fts_search("topic 5", MemoryType.SEMANTIC, top_k=5)
+
+            start = time.monotonic()
+            results = mm.search_sync("topic 5", limit=5)
+            elapsed_ms = (time.monotonic() - start) * 1000
+            assert elapsed_ms < 100, f"Search took {elapsed_ms:.1f}ms (max 100ms)"
+            assert len(results) > 0
+        finally:
+            _close_memory_manager(mm)
 
     @pytest.mark.asyncio
     async def test_nfr104_shield_update_speed(self, tmp_path):
@@ -75,13 +88,16 @@ class TestNFRPerformance:
         from caveman.engines.recall import RecallEngine
         from caveman.memory.manager import MemoryManager
 
-        mm = MemoryManager(base_dir=tmp_path)
-        recall = RecallEngine(memory_manager=mm)
+        mm = MemoryManager.with_sqlite(base_dir=tmp_path)
+        try:
+            recall = RecallEngine(memory_manager=mm)
 
-        start = time.monotonic()
-        ctx = await recall.restore("test task")
-        elapsed_ms = (time.monotonic() - start) * 1000
-        assert elapsed_ms < 2000, f"Recall took {elapsed_ms:.1f}ms (max 2000ms)"
+            start = time.monotonic()
+            ctx = await recall.restore("test task")
+            elapsed_ms = (time.monotonic() - start) * 1000
+            assert elapsed_ms < 2000, f"Recall took {elapsed_ms:.1f}ms (max 2000ms)"
+        finally:
+            _close_memory_manager(mm)
 
     def test_nfr107_tool_registry_speed(self):
         """NFR-107: Internal tool dispatch < 100ms."""
