@@ -59,24 +59,27 @@ def test_skill_autocreate_needs_tools():
 
 # ── #5: Nudge extracts root causes and solutions ──
 
-def test_nudge_extracts_solutions():
+def test_nudge_extracts_solutions(tmp_path):
     """Nudge heuristic should extract 'fixed by X' patterns."""
-    import warnings
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", DeprecationWarning)
-        from caveman.memory.manager import MemoryManager
+    from caveman.memory.manager import MemoryManager
     from caveman.memory.nudge import MemoryNudge
 
-    mm = MemoryManager(base_dir="/tmp/test_nudge_sol")
-    nudge = MemoryNudge(memory_manager=mm)
-    turns = [
-        {"role": "assistant", "content": "I added cross-language query expansion to fix the search issue."},
-        {"role": "assistant", "content": "The root cause was that FTS5 only does lexical matching."},
-    ]
-    candidates = nudge._extract_heuristic(turns, "fix search")
-    contents = " ".join(c["content"] for c in candidates)
-    assert "added" in contents.lower() or "root cause" in contents.lower(), \
-        f"Should extract solutions/root causes, got: {contents}"
+    mm = MemoryManager.with_sqlite(base_dir=tmp_path)
+    try:
+        nudge = MemoryNudge(memory_manager=mm)
+        turns = [
+            {"role": "assistant", "content": "I added cross-language query expansion to fix the search issue."},
+            {"role": "assistant", "content": "The root cause was that FTS5 only does lexical matching."},
+        ]
+        candidates = nudge._extract_heuristic(turns, "fix search")
+        contents = " ".join(c["content"] for c in candidates).lower()
+        assert "added" in contents, \
+            f"Should extract solution, got: {contents}"
+        assert "root cause" in contents, \
+            f"Should extract root cause, got: {contents}"
+    finally:
+        if mm.backend:
+            mm.backend.close()
 
 
 # ── #6: Skill load_all caching ──
