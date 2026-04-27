@@ -56,8 +56,12 @@ class ContinuationTerminalProvider(MockProvider):
 
 
 def make_loop(provider, tmp_path):
-    """Create an AgentLoop with isolated JSON memory for deterministic tests."""
-    return AgentLoop(model="mock", provider=provider, memory_manager=MemoryManager(base_dir=tmp_path / "memory"))
+    """Create an AgentLoop with isolated SQLite memory for deterministic tests."""
+    return AgentLoop(
+        model="mock",
+        provider=provider,
+        memory_manager=MemoryManager.with_sqlite(base_dir=tmp_path / "memory"),
+    )
 
 
 @pytest.mark.asyncio

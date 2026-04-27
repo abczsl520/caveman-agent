@@ -60,7 +60,7 @@ async def test_agent_loop_tool_execution(tmp_path, monkeypatch):
     monkeypatch.setattr("builtins.print", lambda *a, **kw: None)
 
     provider = MockLLMProvider(tmp_path)
-    memory_mgr = MemoryManager(base_dir=tmp_path / "memory")
+    memory_mgr = MemoryManager.with_sqlite(base_dir=tmp_path / "memory")
     skill_mgr = SkillManager(skills_dir=tmp_path / "skills")
     traj_rec = TrajectoryRecorder(base_dir=tmp_path / "trajectories")
 
@@ -133,7 +133,7 @@ async def test_agent_loop_direct_response(tmp_path, monkeypatch):
         model="mock-direct",
         max_iterations=5,
         provider=provider,
-        memory_manager=MemoryManager(base_dir=tmp_path / "memory"),
+        memory_manager=MemoryManager.with_sqlite(base_dir=tmp_path / "memory"),
         skill_manager=SkillManager(skills_dir=tmp_path / "skills"),
         trajectory_recorder=TrajectoryRecorder(base_dir=tmp_path / "traj"),
         engine_flags=flags,
