@@ -126,17 +126,46 @@ class ProcessRegistry:
             session.status = "completed" if proc.returncode == 0 else "failed"
 
         except asyncio.TimeoutError:
-            proc.kill()
-            await proc.wait()
+            await self._terminate_process(proc)
+            session.exit_code = proc.returncode
             session.status = "killed"
             session.error_buffer += "\nProcess killed: timeout"
-
+        except asyncio.CancelledError:
+            await self._terminate_process(proc)
+            session.exit_code = proc.returncode
+            session.status = "killed"
+            raise
         except Exception as e:
             session.status = "failed"
             session.error_buffer += f"\nReader error: {e}"
-
         finally:
             session.completed_at = time.monotonic()
+            session._process = None
+
+    async def wait(self, session_id: str, timeout: Optional[float] = None) -> Dict[str, Any]:
+        """Wait for a managed process reader to finish and return current state."""
+        session = self._sessions.get(session_id)
+        if not session:
+            return {"error": f"Session {session_id} not found"}
+        if session._task and not session._task.done():
+            await asyncio.wait_for(asyncio.shield(session._task), timeout=timeout)
+        return self.poll(session_id)
+
+    async def _terminate_process(self, proc: asyncio.subprocess.Process) -> None:
+        """Terminate a subprocess and drain pipes so transports close cleanly."""
+        if proc.returncode is None:
+            proc.kill()
+        try:
+            await proc.communicate()
+        except Exception as e:
+            try:
+                await proc.wait()
+            except Exception as wait_error:
+                logger.debug(
+                    "Failed to drain terminated process cleanly: %s; wait failed: %s",
+                    e,
+                    wait_error,
+                )
 
     # ── Query ──
 
@@ -183,11 +212,18 @@ class ProcessRegistry:
             return {"error": "Process not running", "status": session.status}
 
         try:
-            if session._process:
+            if session._process and session._process.returncode is None:
                 session._process.kill()
-                await session._process.wait()
+            if session._task and session._task is not asyncio.current_task():
+                try:
+                    await session._task
+                except asyncio.CancelledError:
+                    pass
+            elif session._process:
+                await self._terminate_process(session._process)
             session.status = "killed"
             session.completed_at = time.monotonic()
+            session._process = None
             return {"ok": True, "status": "killed"}
         except Exception as e:
             return {"error": str(e)}
@@ -236,5 +272,7 @@ class ProcessRegistry:
             if session.is_alive:
                 await self.kill(session.id)
                 killed += 1
+            elif session._task and not session._task.done():
+                await session._task
         self._sessions.clear()
         return killed
