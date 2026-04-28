@@ -251,7 +251,7 @@ async def reflect(
         outcome=outcome,
         effective_patterns=[w.strip() for w in what_worked.split("\n") if w.strip()],
         anti_patterns=[f.strip() for f in what_failed.split("\n") if f.strip()],
-        lessons=[l.strip() for l in lessons.split("\n") if l.strip()],
+        lessons=[lesson.strip() for lesson in lessons.split("\n") if lesson.strip()],
         confidence=0.8 if outcome == "success" else 0.4,
     )
     # Persist reflection via ReflectEngine
@@ -404,7 +404,7 @@ def run_stdio() -> None:
 
 def run_http(port: int = 8765) -> None:
     """Run MCP server with HTTP transport."""
-    mcp.run(transport="streamable-http", host="127.0.0.1", port=port)
+    mcp.run(transport="streamable-http", host="127.0.0.1", port=port)  # type: ignore[call-arg]
 
 if __name__ == "__main__":
     run_stdio()

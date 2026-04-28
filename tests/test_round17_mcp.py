@@ -6,14 +6,12 @@ Does NOT test actual MCP protocol transport (that requires a running server).
 from __future__ import annotations
 
 import pytest
-from pathlib import Path
 from unittest.mock import AsyncMock, patch, MagicMock
 
 from caveman.mcp.server import (
     mcp,
     memory_store,
     memory_search,
-    memory_recall,
     shield_save,
     shield_load,
     reflect,
@@ -59,6 +57,7 @@ class TestMemoryTools:
                 tags="python,basics",
                 source="claude-code",
             )
+            MockMgr.with_sqlite.assert_called_once()
             assert result["stored"]
             assert result["memory_id"] == "mem_123"
             assert "python" in result["tags"]
@@ -77,6 +76,7 @@ class TestMemoryTools:
             MockMgr.with_sqlite.return_value = mock_mgr
 
             result = await memory_search(query="python indexing")
+            MockMgr.with_sqlite.assert_called_once()
             assert result["count"] == 1
             assert result["results"][0]["content"] == "Python uses 0-based indexing"
 

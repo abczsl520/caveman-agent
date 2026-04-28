@@ -14,6 +14,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, TYPE_CHECKING, cast
 
+from caveman.training.retrieval_log import RetrievalLog
+
 from .types import MemoryType, MemoryEntry
 from .metadata import validate_metadata
 from .retrieval import HybridScorer, tokenize
@@ -82,6 +84,8 @@ class MemoryManager:
         from .sqlite_store import SQLiteMemoryStore
         if db_path is None and base_dir is not None:
             db_path = Path(base_dir).expanduser() / "caveman.db"
+        if retrieval_log is None:
+            retrieval_log = cls._default_retrieval_log(base_dir=base_dir, db_path=db_path)
         store = SQLiteMemoryStore(
             db_path=db_path, embedding_fn=embedding_fn,
             scorer_config=scorer_config,
@@ -92,6 +96,25 @@ class MemoryManager:
             base_dir=base_dir, embedding_fn=embedding_fn,
             retrieval_log=retrieval_log, ripple_engine=ripple_engine, backend=store,
         )
+
+    @staticmethod
+    def _default_retrieval_log(
+        base_dir: Path | str | None = None,
+        db_path: Path | str | None = None,
+    ) -> RetrievalLog:
+        """Build the default retrieval log without breaking isolated memory stores.
+
+        Production managers with no explicit store path feed the global training
+        flywheel. Managers created with a custom base_dir/db_path (tests,
+        doctor/selftests, imports, sandboxes) keep telemetry next to that custom
+        store instead of silently polluting the user's global training database.
+        """
+        if base_dir is not None:
+            return RetrievalLog(Path(base_dir).expanduser() / "training" / "retrieval_log.sqlite")
+        if db_path is not None:
+            db_dir = Path(db_path).expanduser().parent
+            return RetrievalLog(db_dir / "training" / "retrieval_log.sqlite")
+        return RetrievalLog()
 
     def set_ripple(self, engine) -> None:
         self._ripple = engine
@@ -255,13 +278,24 @@ class MemoryManager:
             # Use HybridScorer for real scores instead of fake decreasing scores.
             # This matters for confidence feedback — fake scores mean fake learning.
             from .retrieval import HybridScorer, tokenize
+            start = time.perf_counter()
             backend = cast("MemoryBackend", self._backend)
             results = await backend.recall(query, memory_type, top_k)
+            latency_ms = (time.perf_counter() - start) * 1000
             if not results:
                 return []
             scorer = HybridScorer()
             query_tokens = tokenize(query)
-            return [(scorer.score(query_tokens, e), e) for e in results]
+            scored_results = [(scorer.score(query_tokens, e), e) for e in results]
+            if self._retrieval_log:
+                try:
+                    self._retrieval_log.log_search(
+                        query=query, results=scored_results,
+                        source="memory_search_scored", latency_ms=latency_ms,
+                    )
+                except Exception as e:
+                    logger.debug("Retrieval log scored write failed: %s", e)
+            return scored_results
         return await self._recall_json_scored(query, memory_type, top_k)
 
     async def forget(self, memory_id: str) -> bool:
