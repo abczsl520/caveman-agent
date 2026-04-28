@@ -12,7 +12,7 @@ import time
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import List, TYPE_CHECKING
+from typing import List, TYPE_CHECKING, cast
 
 from .types import MemoryType, MemoryEntry
 from .metadata import validate_metadata
@@ -98,7 +98,8 @@ class MemoryManager:
 
     async def store(self, content: str, memory_type: MemoryType, metadata: dict | None = None, trusted: bool = False) -> str:
         if self._use_backend:
-            mid = await self._backend.store(content, memory_type, metadata, trusted=trusted)
+            backend = cast("MemoryBackend", self._backend)
+            mid = await backend.store(content, memory_type, metadata, trusted=trusted)
             if not mid:  # Quality gate rejected
                 return ""
             self._recall_cache.invalidate()
@@ -161,11 +162,13 @@ class MemoryManager:
     ) -> List[MemoryEntry]:
         cached = self._recall_cache.get(query, top_k, memory_type)
         if cached is not None:
+            self._log_cached_recall(query, cached)
             return cached
 
         if self._use_backend:
             start = time.perf_counter()
-            results = await self._backend.recall(query, memory_type, top_k)
+            backend = cast("MemoryBackend", self._backend)
+            results = await backend.recall(query, memory_type, top_k)
             latency_ms = (time.perf_counter() - start) * 1000
             self._recall_cache.put(query, top_k, memory_type, results)
             if self._retrieval_log and results:
@@ -179,6 +182,18 @@ class MemoryManager:
             return results
 
         return await self._recall_json(query, memory_type, top_k)
+
+    def _log_cached_recall(self, query: str, results: List[MemoryEntry]) -> None:
+        """Log cache-hit recalls so retrieval analytics reflect actual usage."""
+        if not self._retrieval_log or not results:
+            return
+        try:
+            self._retrieval_log.log_search(
+                query=query, results=[(1.0, e) for e in results],
+                source="memory_search_cache", latency_ms=0.0,
+            )
+        except Exception as e:
+            logger.debug("Retrieval log cache write failed: %s", e)
 
     async def _recall_json(
         self, query: str, memory_type: MemoryType | None = None, top_k: int = 5
@@ -240,7 +255,8 @@ class MemoryManager:
             # Use HybridScorer for real scores instead of fake decreasing scores.
             # This matters for confidence feedback — fake scores mean fake learning.
             from .retrieval import HybridScorer, tokenize
-            results = await self._backend.recall(query, memory_type, top_k)
+            backend = cast("MemoryBackend", self._backend)
+            results = await backend.recall(query, memory_type, top_k)
             if not results:
                 return []
             scorer = HybridScorer()
@@ -250,7 +266,8 @@ class MemoryManager:
 
     async def forget(self, memory_id: str) -> bool:
         if self._use_backend:
-            result = await self._backend.forget(memory_id)
+            backend = cast("MemoryBackend", self._backend)
+            result = await backend.forget(memory_id)
             if result:
                 self._recall_cache.invalidate()
             return result
@@ -273,7 +290,8 @@ class MemoryManager:
 
     async def update_metadata(self, memory_id: str, metadata: dict) -> bool:
         if self._use_backend:
-            return await self._backend.update_metadata(memory_id, metadata)
+            backend = cast("MemoryBackend", self._backend)
+            return await backend.update_metadata(memory_id, metadata)
         async with self._lock:
             for mt in MemoryType:
                 for entry in self._memories.get(mt, []):
@@ -333,10 +351,8 @@ class MemoryManager:
     async def get_by_id(self, memory_id: str) -> MemoryEntry | None:
         """Fetch a memory by ID, or None if it does not exist."""
         if self._use_backend:
-            get_by_id = getattr(self._backend, "get_by_id", None)
-            if get_by_id is None:
-                return None
-            return await get_by_id(memory_id)
+            backend = cast("MemoryBackend", self._backend)
+            return await backend.get_by_id(memory_id)
         async with self._lock:
             if not any(self._memories.values()):
                 await self.load()
@@ -349,17 +365,20 @@ class MemoryManager:
     @property
     def total_count(self) -> int:
         if self._use_backend:
-            return self._backend.total_count
+            backend = cast("MemoryBackend", self._backend)
+            return backend.total_count
         return sum(len(entries) for entries in self._memories.values())
 
     def all_entries(self) -> list[MemoryEntry]:
         if self._use_backend:
-            return self._backend.all_entries()
+            backend = cast("MemoryBackend", self._backend)
+            return backend.all_entries()
         return [e for entries in self._memories.values() for e in entries]
 
     def search_sync(self, query: str, limit: int = 5) -> list[MemoryEntry]:
         if self._use_backend:
-            return self._backend.search_sync(query, limit)
+            backend = cast("MemoryBackend", self._backend)
+            return backend.search_sync(query, limit)
         query_lower = query.lower()
         scored = []
         for entry in self.all_entries():
@@ -371,7 +390,8 @@ class MemoryManager:
 
     def recent(self, limit: int = 20) -> list[MemoryEntry]:
         if self._use_backend:
-            return self._backend.recent(limit)
+            backend = cast("MemoryBackend", self._backend)
+            return backend.recent(limit)
         all_mem = self.all_entries()
         all_mem.sort(key=lambda e: e.created_at, reverse=True)
         return all_mem[:limit]
