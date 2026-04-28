@@ -303,6 +303,7 @@ def train(
     eval_only: bool = typer.Option(False, "--eval-only", help="Evaluate embedding retrieval quality without training"),
     auto_select: bool = typer.Option(False, "--auto-select", help="Select trained embedding only when eval metrics improve"),
     min_eval_delta: float = typer.Option(0.01, "--min-eval-delta", help="Minimum weighted quality improvement for auto-select"),
+    stats: bool = typer.Option(False, "--stats", help="Show training data statistics"),
 ) -> None:
     """Train embedding model or export data for researchers."""
     from caveman.cli.tui import show_banner

@@ -128,7 +128,7 @@ Context references — @file, @url, @diff inline expansion. Inspired by Hermes c
 
 ## `caveman.agent.conversation_lifecycle`
 
-Conversation lifecycle awareness — dynamic format rules based on dialog state. Instead of static format rules that never change, this module provides context-aware formatting guidance that adapts to: - Conversation compl
+Conversation lifecycle awareness — dynamic format rules based on dialog state. Instead of static format rules that never change, this module provides context-aware guidance that adapts to: - Conversation complexity (simp
 
 **Classes:** `ConversationComplexity`, `ConversationPhase`, `ConversationState`
 
@@ -152,6 +152,12 @@ Iteration budget — thread-safe iteration counter with refund support. Ported f
 
 **Classes:** `IterationBudget`
 
+## `caveman.agent.llm_turn`
+
+LLM streaming and response repair helpers for AgentLoop.
+
+**Functions:** `stream_llm_turn()`, `request_continuation_if_needed()`, `execute_tool_phase()`
+
 ## `caveman.agent.loop`
 
 Core agent loop v3 — thin orchestrator over decomposed phases.
@@ -163,6 +169,12 @@ Core agent loop v3 — thin orchestrator over decomposed phases.
 Loop engine helpers — post-task engine orchestration extracted from loop.py.
 
 **Functions:** `build_user_content()`, `prepare_multi_turn()`, `post_task_engines()`, `record_turn_metrics()`, `check_termination()`, `update_shield()`, `run_preemptive_compaction()`
+
+## `caveman.agent.loop_init`
+
+Initialization helpers for AgentLoop.
+
+**Functions:** `build_fallback_chain()`, `ensure_provider()`, `ensure_memory_manager()`, `set_default_permissions()`
 
 ## `caveman.agent.loop_state`
 
@@ -192,7 +204,7 @@ Agent performance metrics — track timings, counters, and percentiles.
 
 Output format validator — suppresses premature terminal markers. The canonical ✅---本轮已完成---✅ marker is retained only as a legacy token for recognition/stripping. It must not be synthesized or preserved by default: comple
 
-**Functions:** `final_text_looks_truncated()`, `final_sentence_is_question()`, `should_use_closing_marker()`, `strip_closing_markers()`, `enforce_closing_format()`
+**Functions:** `final_text_looks_truncated()`, `final_sentence_is_question()`, `should_use_closing_marker()`, `is_continuation_task()`, `suppress_continuation_terminality()`, `strip_closing_markers()`, `enforce_closing_format()`
 
 ## `caveman.agent.phased_coordinator`
 
@@ -279,6 +291,8 @@ Smart Model Routing — cheap vs strong model selection per turn. Routes simple 
 Stream primitives — StreamEvent + StreamBuffer. The streaming implementation lives in AgentLoop.run_stream() (loop.py). This module only contains the data types to avoid circular imports.
 
 **Classes:** `StreamEvent`, `StreamBuffer`
+
+**Functions:** `is_result_event_type()`
 
 ## `caveman.agent.subdirectory_hints`
 
@@ -423,6 +437,12 @@ Caveman Doctor v2 — flywheel health diagnostics with 6 metrics. `caveman docto
 **Classes:** `DoctorReport`
 
 **Functions:** `run_doctor()`
+
+## `caveman.cli.entrypoint`
+
+Console-script entrypoint with portable stdio setup.
+
+**Functions:** `main()`
 
 ## `caveman.cli.flywheel`
 
@@ -1034,6 +1054,12 @@ Link understanding — auto-detect URLs in messages and fetch content. When a us
 
 **Functions:** `extract_urls()`, `format_link_context()`, `fetch_url_content()`, `understand_links()`
 
+## `caveman.gateway.log_diagnostics`
+
+Current-startup gateway log diagnostics. This module intentionally scans only the current gateway process window. The primary boundary is the latest PID-file startup marker (`PID file written ... PID N`), with an ISO `st
+
+**Functions:** `scan_current_startup_log()`
+
 ## `caveman.gateway.matrix_adapter`
 
 Matrix Platform Adapter — BasePlatformAdapter implementation for Matrix. Uses matrix-nio for the Matrix protocol. Features: E2EE support, room management, media uploads, reactions.
@@ -1094,7 +1120,7 @@ Gateway device pairing — QR code / token based pairing for mobile apps. Genera
 
 ## `caveman.gateway.platform_adapter`
 
-Base Platform Adapter — unified abstraction for all messaging platforms. Subclasses implement connect/disconnect/send. Base handles: typing, retry, media extraction, interrupt, session tracking, message splitting.
+Base platform adapter: connect/send abstraction plus typing, retry, media, sessions.
 
 **Classes:** `BasePlatformAdapter`
 
@@ -1109,6 +1135,12 @@ Platform delivery utilities — media extraction, retry, message splitting. Extr
 Platform Registry — discover and instantiate platform adapters. Central registry for all available platform adapters. Used by the gateway runner to start configured platforms. Usage: from caveman.gateway.platform_registr
 
 **Functions:** `register_adapter()`, `get_adapter()`, `list_platforms()`
+
+## `caveman.gateway.platform_send`
+
+Shared gateway platform send/delivery helpers.
+
+**Functions:** `deliver_response()`, `send_with_retry()`
 
 ## `caveman.gateway.platform_types`
 
@@ -1183,6 +1215,12 @@ Gateway runner — streaming session management for Discord/Telegram.
 **Classes:** `GatewayServer`
 
 **Functions:** `run_gateway()`, `run_gateway_forever()`
+
+## `caveman.gateway.runner_task`
+
+GatewayServer task handling helpers.
+
+**Functions:** `run_locked_gateway_task()`
 
 ## `caveman.gateway.secrets`
 
@@ -1321,6 +1359,12 @@ Thread Manager — create, bind, and manage conversation threads. Extracted from
 **Classes:** `ThreadBinding`, `AutoThreadConfig`, `ThreadManager`
 
 **Functions:** `sanitize_thread_name()`
+
+## `caveman.gateway.transcript_cleaner`
+
+Helpers for cleaning legacy gateway transcript metadata.
+
+**Functions:** `clean_transcript_message()`
 
 ## `caveman.gateway.webhook`
 
@@ -1630,6 +1674,10 @@ Memory content security scanner. Ported from Hermes memory_tool.py (MIT, Nous Re
 
 **Functions:** `scan_memory_content()`, `is_safe()`
 
+## `caveman.memory.sqlite_schema`
+
+SQLite schema for the memory backend.
+
 ## `caveman.memory.sqlite_store`
 
 SQLite + FTS5 memory backend.
@@ -1734,7 +1782,7 @@ Usage tracking and cost estimation. Inspired by Hermes InsightsEngine (MIT, Nous
 
 ## `caveman.providers.llm`
 
-LLM provider abstraction — unified interface across providers. All providers yield normalized event dicts: - {"type": "delta", "text": "..."} - {"type": "tool_call", "id": "...", "name": "...", "input": {...}} - {"type":
+LLM provider abstraction — unified interface across providers. All providers yield normalized event dicts: - {"type": "delta", "text": "..."} - {"type": "tool_call", "id": "...", "name": "...", "input": {...}} - a provid
 
 **Classes:** `LLMProvider`
 
@@ -2330,7 +2378,7 @@ Terminal Tool v2 — compatibility shim. All functionality has been merged into 
 
 Todo tool — persistent task list stored as JSON.
 
-**Functions:** `todo_add()`, `todo_list()`, `todo_done()`, `todo_remove()`
+**Functions:** `todo_add()`, `todo_list()`, `todo_finish()`, `todo_remove()`
 
 ## `caveman.tools.builtin.tool_result_storage`
 

@@ -368,7 +368,7 @@ _FLOW_REGISTRY = {
 }
 
 
-def create_flow(flow_type: str) -> cls:
+def create_flow(flow_type: str) -> Flow | None:
     """Create a flow by type."""
     cls = _FLOW_REGISTRY.get(flow_type)
     if cls:

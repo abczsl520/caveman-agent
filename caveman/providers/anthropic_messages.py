@@ -8,7 +8,7 @@ from __future__ import annotations
 import copy
 import json
 import logging
-from typing import Any
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 

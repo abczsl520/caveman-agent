@@ -9,7 +9,7 @@ import logging
 import time
 import threading
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 logger = logging.getLogger("caveman.agent.rate_limit_tracker")
 

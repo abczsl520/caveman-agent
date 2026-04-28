@@ -14,6 +14,7 @@ from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from caveman.gateway.task_runner import _TaskContext
+    from caveman.gateway.smart_buffer import _SmartBuffer
 
 from caveman.aio import aio_write_text, aio_mkdir
 from caveman.paths import CAVEMAN_HOME
