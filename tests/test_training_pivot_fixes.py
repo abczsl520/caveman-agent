@@ -91,6 +91,42 @@ class TestRetrievalLog:
         assert len(pairs) == 1
         assert pairs[0]["source"] == "score"
 
+    def test_legacy_jsonl_is_migrated_into_sqlite_once(self, tmp_path):
+        """Historical JSONL retrieval data remains available after SQLite pivot."""
+        import json
+        from caveman.training.retrieval_log import RetrievalLog, RetrievalEntry
+
+        log_path = tmp_path / "retrieval_log.sqlite"
+        legacy_path = tmp_path / "retrieval_log.jsonl"
+        legacy_path.write_text(
+            json.dumps({
+                "query": "legacy server",
+                "results": [
+                    {"memory_id": "legacy-m1", "content": "legacy Ubuntu server memory", "score": 0.91},
+                ],
+                "source": "memory_search",
+                "adopted_ids": [],
+                "timestamp": "2026-04-20T00:00:00",
+            }) + "\n",
+            encoding="utf-8",
+        )
+
+        log = RetrievalLog(log_path)
+        log.log(RetrievalEntry(
+            query="new server",
+            results=[{"memory_id": "new-m1", "content": "new SQLite memory", "score": 0.8}],
+            source="recall",
+        ))
+
+        entries = log.read_all()
+        assert [entry.query for entry in entries] == ["legacy server", "new server"]
+        assert log.count() == 2
+
+        log.close()
+        reopened = RetrievalLog(log_path)
+        assert [entry.query for entry in reopened.read_all()] == ["legacy server", "new server"]
+        assert reopened.count() == 2
+
     def test_count(self, tmp_path):
         from caveman.training.retrieval_log import RetrievalLog, RetrievalEntry
         log = RetrievalLog(tmp_path / "test.sqlite")
