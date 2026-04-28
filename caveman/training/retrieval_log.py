@@ -14,10 +14,10 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from caveman.db import connect as db_connect
 
@@ -57,6 +57,15 @@ class RetrievalEntry:
         return cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
 
 
+class _LegacyRetrievalRow(NamedTuple):
+    query: str
+    results_json: str
+    source: str
+    adopted_ids_json: str
+    latency_ms: float | None
+    timestamp: str
+
+
 class RetrievalLog:
     """Append-only SQLite log of memory retrieval events.
 
@@ -77,7 +86,58 @@ class RetrievalLog:
         if self._conn is None:
             self._conn = db_connect(self._path)
             self._conn.executescript(_SCHEMA)
+            self._migrate_legacy_jsonl_once()
         return self._conn
+
+    def _migrate_legacy_jsonl_once(self) -> None:
+        """Import same-stem legacy JSONL retrieval logs into new SQLite storage.
+
+        The JSONL→SQLite pivot must not strand historical retrieval data. This
+        best-effort migration is intentionally idempotent: it only runs when the
+        SQLite table is empty, so normal writes and repeated startups do not
+        duplicate legacy rows.
+        """
+        if self._path.suffix == ".jsonl":
+            return
+        legacy_path = self._path.with_suffix(".jsonl")
+        if not legacy_path.exists():
+            return
+        conn = self._conn
+        if conn is None:
+            return
+        try:
+            existing_row = conn.execute("SELECT COUNT(*) FROM retrieval_log").fetchone()
+            existing = int(existing_row[0]) if existing_row is not None else 0
+            if existing > 0:
+                return
+            rows: list[_LegacyRetrievalRow] = []
+            with legacy_path.open("r", encoding="utf-8") as f:
+                for line in f:
+                    if not line.strip():
+                        continue
+                    try:
+                        entry = RetrievalEntry.from_dict(json.loads(line))
+                    except (json.JSONDecodeError, TypeError) as e:
+                        logger.warning("Skip malformed legacy retrieval log row: %s", e)
+                        continue
+                    rows.append(_LegacyRetrievalRow(
+                        entry.query,
+                        json.dumps(entry.results, ensure_ascii=False),
+                        entry.source,
+                        json.dumps(entry.adopted_ids, ensure_ascii=False),
+                        entry.latency_ms,
+                        entry.timestamp,
+                    ))
+            if rows:
+                conn.executemany(
+                    "INSERT INTO retrieval_log(query, results_json, source, adopted_ids_json, latency_ms, timestamp) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    rows,
+                )
+                conn.commit()
+                logger.info("Migrated %d legacy retrieval log rows from %s", len(rows), legacy_path)
+        except Exception as e:
+            logger.warning("Failed to migrate legacy retrieval log %s: %s", legacy_path, e)
 
     @property
     def path(self) -> Path:
