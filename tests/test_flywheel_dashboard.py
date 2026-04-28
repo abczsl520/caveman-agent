@@ -20,9 +20,32 @@ def test_collect_memory_stats_no_db(dashboard, tmp_path):
     assert stats["status"] == "no database"
 
 
+def test_collect_memory_stats_uses_canonical_caveman_db(dashboard, tmp_path):
+    """Dashboard should read the same caveman.db that MemoryDecay and stores use."""
+    db_path = tmp_path / "caveman.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("""CREATE TABLE memories (
+        id TEXT, content TEXT, trust_score REAL, retrieval_count INTEGER,
+        helpful_count INTEGER DEFAULT 0
+    )""")
+    conn.execute("INSERT INTO memories VALUES ('m1', 'useful', 0.8, 5, 1)")
+    conn.execute("INSERT INTO memories VALUES ('m2', 'stale', 0.1, 0, 0)")
+    conn.commit()
+    conn.close()
+
+    with patch("caveman.training.flywheel_dashboard.MEMORY_DIR", tmp_path):
+        stats = dashboard.collect_memory_stats()
+
+    assert stats["status"] == "ok"
+    assert stats["total"] == 2
+    assert stats["never_recalled"] == 1
+    assert stats["recalled"] == 1
+    assert stats["helpful"] == 1
+
+
 def test_collect_memory_stats_with_db(dashboard, tmp_path):
     """Should read real SQLite stats."""
-    db_path = tmp_path / "memories.db"
+    db_path = tmp_path / "caveman.db"
     conn = sqlite3.connect(str(db_path))
     conn.execute("""CREATE TABLE memories (
         id TEXT, content TEXT, trust_score REAL, retrieval_count INTEGER
