@@ -2,9 +2,10 @@
 
 Key metrics:
   - trust_distribution: histogram of trust scores (healthy = bell curve, not flat)
-  - feedback_rate: % of recalled memories that got trust feedback
-  - recall_hit_rate: % of recalls that returned results
-  - decay_balance: ratio of trust increases vs decreases
+  - feedback_rate: % of memories with real helpful feedback
+    (helpful_count > 0), not merely a default/passive trust score
+  - recall_rate: % of memories that have been recalled at least once
+  - top_recalled: heavily reused memories that dominate retrieval context
 """
 from __future__ import annotations
 
@@ -24,6 +25,8 @@ class FlywheelHealth:
     memories_never_recalled: int = 0
     memories_with_feedback: int = 0
     feedback_rate: float = 0.0
+    recalled_memories: int = 0
+    recall_rate: float = 0.0
     top_recalled: list[dict[str, Any]] = field(default_factory=list)
     issues: list[str] = field(default_factory=list)
 
@@ -36,7 +39,8 @@ class FlywheelHealth:
         return (
             f"Flywheel {status}: {self.total_memories} memories, "
             f"avg trust={self.avg_trust:.2f}, "
-            f"feedback rate={self.feedback_rate:.0%}"
+            f"feedback rate={self.feedback_rate:.0%}, "
+            f"recall rate={self.recall_rate:.0%}"
         )
 
     @classmethod
@@ -51,7 +55,10 @@ class FlywheelHealth:
         """
         health = cls()
         try:
-            # Support both sync (all_entries) and async (list_all) backends
+            # Support both sync (all_entries) and async (list_all) backends.
+            # SQLiteMemoryStore exposes live trust/retrieval counters through
+            # MemoryEntry.metadata, so reading all entries is enough for
+            # diagnostics without mutating production data.
             if hasattr(backend, 'all_entries'):
                 entries = backend.all_entries
                 all_memories = entries() if callable(entries) else entries
@@ -90,11 +97,16 @@ class FlywheelHealth:
             else:
                 buckets["0.8-1.0"] += 1
 
-            # Recall tracking
-            retrieval_count = meta.get("retrieval_count", 0)
+            # Feedback tracking: helpful_count is a real judge/user feedback
+            # signal. A trust_score alone only means the row has a default score
+            # (or passive recall boost), not that the flywheel learned whether
+            # the memory helped. Older backends may only expose these counters
+            # through metadata, so keep tolerant fallbacks.
+            retrieval_count = int(meta.get("retrieval_count", getattr(mem, "retrieval_count", 0)) or 0)
+            helpful_count = int(meta.get("helpful_count", getattr(mem, "helpful_count", 0)) or 0)
             if retrieval_count == 0:
                 never_recalled += 1
-            if meta.get("trust_score") is not None:
+            if helpful_count > 0:
                 with_feedback += 1
 
         health.trust_distribution = buckets
@@ -102,14 +114,36 @@ class FlywheelHealth:
         health.memories_never_recalled = never_recalled
         health.memories_with_feedback = with_feedback
         health.feedback_rate = with_feedback / len(all_memories) if all_memories else 0.0
+        health.recalled_memories = len(all_memories) - never_recalled
+        health.recall_rate = health.recalled_memories / len(all_memories) if all_memories else 0.0
+
+        top_scored: list[tuple[int, float, Any]] = []
+        for mem in all_memories:
+            meta = getattr(mem, "metadata", {}) or {}
+            retrieval_count = int(meta.get("retrieval_count", getattr(mem, "retrieval_count", 0)) or 0)
+            if retrieval_count <= 0:
+                continue
+            trust = float(meta.get("trust_score", getattr(mem, "trust_score", 0.5)) or 0.0)
+            top_scored.append((retrieval_count, trust, mem))
+        top_scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        health.top_recalled = [
+            {
+                "id": getattr(mem, "id", ""),
+                "type": getattr(getattr(mem, "memory_type", ""), "value", str(getattr(mem, "memory_type", ""))),
+                "retrieval_count": retrieval_count,
+                "trust_score": trust,
+                "preview": str(getattr(mem, "content", ""))[:120],
+            }
+            for retrieval_count, trust, mem in top_scored[:10]
+        ]
 
         # Diagnostics
         if health.avg_trust < 0.3:
             health.issues.append(f"Low average trust ({health.avg_trust:.2f}) — memories may be unreliable")
-        if health.feedback_rate < 0.1:
+        if health.total_memories >= 10 and health.feedback_rate < 0.1:
             health.issues.append(f"Low feedback rate ({health.feedback_rate:.0%}) — flywheel not learning")
         never_pct = never_recalled / len(all_memories) if all_memories else 0
-        if never_pct > 0.8:
+        if health.total_memories >= 10 and never_pct > 0.8:
             health.issues.append(f"{never_pct:.0%} memories never recalled — retrieval may be broken")
 
         return health
