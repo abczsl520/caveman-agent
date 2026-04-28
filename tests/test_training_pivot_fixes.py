@@ -254,6 +254,33 @@ class TestMemoryManagerRetrievalLog:
         assert len(entries) >= 1
         assert entries[0].query == "server IP"
 
+    def test_cached_recall_still_logs_retrieval_events(self, tmp_path):
+        """Cache hits must remain observable for training/usage metrics."""
+        import asyncio
+        from caveman.memory.manager import MemoryManager
+        from caveman.memory.types import MemoryType
+        from caveman.training.retrieval_log import RetrievalLog
+
+        log_path = tmp_path / "retrieval.sqlite"
+        log = RetrievalLog(log_path)
+        mgr = MemoryManager.with_sqlite(base_dir=tmp_path / "mem", retrieval_log=log)
+
+        asyncio.run(
+            mgr.store("Server 198.51.100.20 runs Ubuntu", MemoryType.SEMANTIC)
+        )
+
+        first = asyncio.run(mgr.recall("server IP"))
+        second = asyncio.run(mgr.recall("server IP"))
+
+        assert [m.id for m in second] == [m.id for m in first]
+        entries = log.read_all()
+        assert len(entries) == 2
+        assert [entry.source for entry in entries] == ["memory_search", "memory_search_cache"]
+        assert [entry.query for entry in entries] == ["server IP", "server IP"]
+        assert entries[1].latency_ms == 0.0
+        assert [result["memory_id"] for result in entries[1].results] == [m.id for m in first]
+        assert entries[1].results[0]["content"] == "Server 198.51.100.20 runs Ubuntu"
+
 
 class TestRecallEngineRetrievalLog:
     """Test that RecallEngine accepts retrieval_log parameter."""
