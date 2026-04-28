@@ -16,10 +16,10 @@ import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from caveman.paths import (
-    MEMORY_DIR, TRAJECTORIES_DIR, TRAINING_DIR,
+    MEMORY_DIR, MEMORY_DB_PATH, TRAJECTORIES_DIR, TRAINING_DIR,
     SKILLS_DIR, WIKI_DIR,
 )
 
@@ -35,9 +35,16 @@ class FlywheelDashboard:
         self.metrics: dict[str, Any] = {}
 
     def collect_memory_stats(self) -> dict:
-        """Collect memory subsystem stats."""
-        stats = {"total": 0, "trust_buckets": {}, "never_recalled": 0, "avg_trust": 0.0}
-        db_path = MEMORY_DIR / "memories.db"
+        """Collect memory subsystem stats from the canonical SQLite store."""
+        stats: dict[str, Any] = {
+            "total": 0,
+            "trust_buckets": {},
+            "never_recalled": 0,
+            "recalled": 0,
+            "helpful": 0,
+            "avg_trust": 0.0,
+        }
+        db_path = MEMORY_DIR / MEMORY_DB_PATH.name
         if not db_path.exists():
             stats["status"] = "no database"
             return stats
@@ -54,8 +61,17 @@ class FlywheelDashboard:
             row = cur.fetchone()
             stats["avg_trust"] = round(row[0] or 0, 3)
 
-            cur.execute("SELECT COUNT(*) FROM memories WHERE retrieval_count = 0")
+            cur.execute("SELECT COUNT(*) FROM memories WHERE COALESCE(retrieval_count, 0) = 0")
             stats["never_recalled"] = cur.fetchone()[0]
+
+            cur.execute("SELECT COUNT(*) FROM memories WHERE COALESCE(retrieval_count, 0) > 0")
+            stats["recalled"] = cur.fetchone()[0]
+
+            try:
+                cur.execute("SELECT COUNT(*) FROM memories WHERE COALESCE(helpful_count, 0) > 0")
+                stats["helpful"] = cur.fetchone()[0]
+            except Exception:
+                stats["helpful"] = 0
 
             # Trust distribution
             for label, lo, hi in [
@@ -67,11 +83,12 @@ class FlywheelDashboard:
                     "SELECT COUNT(*) FROM memories WHERE trust_score >= ? AND trust_score < ?",
                     (lo, hi),
                 )
-                stats["trust_buckets"][label] = cur.fetchone()[0]
+                cast(dict[str, int], stats["trust_buckets"])[label] = cur.fetchone()[0]
 
             # Decay candidates
             cur.execute(
-                "SELECT COUNT(*) FROM memories WHERE trust_score < 0.05 AND retrieval_count = 0"
+                "SELECT COUNT(*) FROM memories "
+                "WHERE trust_score < 0.05 AND COALESCE(retrieval_count, 0) = 0"
             )
             stats["prune_candidates"] = cur.fetchone()[0]
 
@@ -85,7 +102,13 @@ class FlywheelDashboard:
 
     def collect_trajectory_stats(self) -> dict:
         """Collect trajectory subsystem stats."""
-        stats = {"total": 0, "with_tools": 0, "avg_quality": 0.0, "high_quality": 0, "low_quality": 0}
+        stats: dict[str, Any] = {
+            "total": 0,
+            "with_tools": 0,
+            "avg_quality": 0.0,
+            "high_quality": 0,
+            "low_quality": 0,
+        }
         traj_dir = Path(TRAJECTORIES_DIR)
         if not traj_dir.exists():
             stats["status"] = "no directory"
@@ -119,7 +142,7 @@ class FlywheelDashboard:
 
     def collect_rl_router_stats(self) -> dict:
         """Collect RL Router arm statistics."""
-        stats = {"arms": {}, "total_updates": 0}
+        stats: dict[str, Any] = {"arms": {}, "total_updates": 0}
         state_path = SKILLS_DIR / ".rl_router_state.json"
         if not state_path.exists():
             stats["status"] = "no state file"
@@ -134,7 +157,7 @@ class FlywheelDashboard:
                 beta = arm.get("beta", 1)
                 total = alpha + beta - 2  # subtract priors
                 win_rate = alpha / (alpha + beta) if (alpha + beta) > 0 else 0
-                stats["arms"][name] = {
+                cast(dict[str, dict[str, Any]], stats["arms"])[name] = {
                     "alpha": alpha, "beta": beta,
                     "updates": max(0, total),
                     "win_rate": round(win_rate, 3),
@@ -149,7 +172,7 @@ class FlywheelDashboard:
 
     def collect_wiki_stats(self) -> dict:
         """Collect wiki subsystem stats."""
-        stats = {"tiers": {}, "total_entries": 0}
+        stats: dict[str, Any] = {"tiers": {}, "total_entries": 0}
         wiki_dir = Path(WIKI_DIR)
         if not wiki_dir.exists():
             stats["status"] = "no directory"
@@ -162,10 +185,10 @@ class FlywheelDashboard:
                 if tier_file.exists():
                     data = json.loads(tier_file.read_text(encoding="utf-8"))
                     count = len(data) if isinstance(data, list) else 0
-                    stats["tiers"][tier] = count
+                    cast(dict[str, int], stats["tiers"])[tier] = count
                     stats["total_entries"] += count
                 else:
-                    stats["tiers"][tier] = 0
+                    cast(dict[str, int], stats["tiers"])[tier] = 0
             stats["status"] = "ok"
         except Exception as e:
             stats["status"] = f"error: {e}"
@@ -223,7 +246,10 @@ class FlywheelDashboard:
         if buckets:
             dist = " | ".join(f"{k}: {v}" for k, v in buckets.items())
             lines.append(f"   Trust distribution: {dist}")
-        lines.append(f"   Never recalled: {mem.get('never_recalled', 0)}, Prune candidates: {mem.get('prune_candidates', 0)}")
+        lines.append(
+            f"   Recalled: {mem.get('recalled', 0)}, Never recalled: {mem.get('never_recalled', 0)}, "
+            f"Helpful: {mem.get('helpful', 0)}, Prune candidates: {mem.get('prune_candidates', 0)}"
+        )
         lines.append("")
 
         # Trajectories
