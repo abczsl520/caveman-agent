@@ -36,7 +36,7 @@ jobs:
         run: python scripts/ci_mypy_gate.py
 
       - name: Run tests with coverage gate
-        run: pytest --tb=short -q --cov=caveman --cov-report=term-missing --cov-fail-under=80
+        run: python scripts/ci_coverage_gate.py
 
       - name: Verify CLI entry point
         run: |

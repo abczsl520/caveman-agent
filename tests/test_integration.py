@@ -1,6 +1,9 @@
 """Integration tests — verify full system wiring."""
 import pytest
 from caveman.agent.loop import AgentLoop
+from caveman.memory.manager import MemoryManager
+from caveman.skills.manager import SkillManager
+from caveman.engines.flags import EngineFlags
 from caveman.providers.llm import LLMProvider
 
 
@@ -87,9 +90,29 @@ async def test_trajectory_recorded():
     import tempfile
 
     with tempfile.TemporaryDirectory() as td:
-        rec = TrajectoryRecorder(base_dir=td)
-        loop = AgentLoop(model="mock", provider=ToolTestProvider(), trajectory_recorder=rec)
-        await loop.run("do something")
+        from pathlib import Path
+
+        base = Path(td)
+        rec = TrajectoryRecorder(base_dir=base / "trajectories")
+        flags = EngineFlags({"engines": {
+            "shield": {"enabled": False}, "recall": {"enabled": False},
+            "nudge": {"enabled": False}, "reflect": {"enabled": False},
+            "lint": {"enabled": False}, "ripple": {"enabled": False},
+        }})
+        mem = MemoryManager.with_sqlite(base_dir=base / "memory")
+        loop = AgentLoop(
+            model="mock",
+            provider=ToolTestProvider(),
+            memory_manager=mem,
+            skill_manager=SkillManager(skills_dir=base / "skills"),
+            trajectory_recorder=rec,
+            engine_flags=flags,
+        )
+        try:
+            await loop.run("do something")
+        finally:
+            if mem.backend:
+                mem.backend.close()
         traj = rec.to_sharegpt()
         assert len(traj) >= 2  # at least user + assistant
         assert traj[0]["from"] == "human"

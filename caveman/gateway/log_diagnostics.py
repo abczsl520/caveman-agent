@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -64,6 +64,29 @@ def _parse_log_time(line: str, tz=timezone.utc) -> datetime | None:
     return dt.replace(tzinfo=tz)
 
 
+def _candidate_log_timezones(started_at: datetime) -> list:
+    """Return deterministic timezone candidates for naive gateway log timestamps.
+
+    Gateway logs historically omit timezone information. The process pidfile
+    stores an aware UTC timestamp, while local development logs are often local
+    wall-clock time. Do not use the CI runner's host timezone as the sole
+    interpretation; try UTC plus common local offsets deterministically so the
+    bounded current-startup scan is stable across runners.
+    """
+    candidates = [started_at.tzinfo or timezone.utc]
+    try:
+        local_tz = started_at.astimezone().tzinfo
+        if local_tz and local_tz not in candidates:
+            candidates.append(local_tz)
+    except (OSError, ValueError):
+        pass
+    for hours in (8, -8):
+        tz = timezone(timedelta(hours=hours))
+        if tz not in candidates:
+            candidates.append(tz)
+    return candidates
+
+
 def _find_start_index(lines: list[str], record: dict[str, Any] | None) -> tuple[int, bool, str]:
     if not record:
         return 0, False, "missing_or_invalid_pidfile"
@@ -77,11 +100,18 @@ def _find_start_index(lines: list[str], record: dict[str, Any] | None) -> tuple[
                 return idx, True, "pid_marker"
     started_at = _parse_iso(record.get("started_at"))
     if started_at:
-        local_started = started_at.astimezone()
-        for idx, line in enumerate(lines):
-            ts = _parse_log_time(line, tz=local_started.tzinfo or timezone.utc)
-            if ts and ts >= local_started.replace(microsecond=0):
-                return idx, True, "started_at"
+        started_at_floor = started_at.replace(microsecond=0)
+        matches: list[tuple[float, int]] = []
+        for tz in _candidate_log_timezones(started_at):
+            comparable_started = started_at_floor.astimezone(tz)
+            for idx, line in enumerate(lines):
+                ts = _parse_log_time(line, tz=tz)
+                if ts and ts >= comparable_started:
+                    matches.append(((ts - comparable_started).total_seconds(), idx))
+                    break
+        if matches:
+            _delta, idx = min(matches, key=lambda item: (item[0], -item[1]))
+            return idx, True, "started_at"
     return 0, False, "no_start_boundary_found"
 
 
