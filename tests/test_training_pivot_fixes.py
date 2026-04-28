@@ -1,7 +1,6 @@
 """Tests for training pivot fixes — retrieval log, local embedding, evaluation."""
 from __future__ import annotations
 
-import json
 import pytest
 from pathlib import Path
 
@@ -43,6 +42,52 @@ class TestRetrievalLog:
         assert stats["count"] == 1
         assert stats["avg_latency_ms"] == 3.2
         assert stats["by_source"] == {"memory_search": 1}
+
+    @pytest.mark.asyncio
+    async def test_with_sqlite_wires_default_retrieval_log(self, tmp_path, monkeypatch):
+        """Production SQLite memory managers feed retrieval telemetry by default."""
+        from caveman.memory.manager import MemoryManager
+        from caveman.training.retrieval_log import RetrievalLog
+
+        monkeypatch.setenv("CAVEMAN_HOME", str(tmp_path / "home"))
+        mgr = MemoryManager.with_sqlite()
+
+        assert isinstance(mgr._retrieval_log, RetrievalLog)
+
+    @pytest.mark.asyncio
+    async def test_with_sqlite_custom_db_keeps_retrieval_log_isolated(self, tmp_path):
+        """Custom SQLite stores should not pollute the global retrieval log."""
+        from caveman.memory.manager import MemoryManager
+        from caveman.training.retrieval_log import RetrievalLog
+
+        db_path = tmp_path / "sandbox" / "memory.sqlite"
+        mgr = MemoryManager.with_sqlite(db_path=db_path)
+
+        assert isinstance(mgr._retrieval_log, RetrievalLog)
+        assert mgr._retrieval_log.path == db_path.parent / "training" / "retrieval_log.sqlite"
+
+    @pytest.mark.asyncio
+    async def test_recall_scored_logs_retrievals(self, tmp_path):
+        """Scored recall is a retrieval path and must feed the training log."""
+        from caveman.memory.manager import MemoryManager
+        from caveman.memory.types import MemoryType
+        from caveman.training.retrieval_log import RetrievalLog
+
+        log = RetrievalLog(tmp_path / "retrieval_log.sqlite")
+        mgr = MemoryManager.with_sqlite(
+            db_path=tmp_path / "memory.sqlite",
+            retrieval_log=log,
+        )
+        await mgr.store("Python uses 0-based indexing", MemoryType.SEMANTIC, trusted=True)
+
+        results = await mgr.recall_scored("python indexing")
+
+        assert len(results) == 1
+        entries = log.read_all()
+        assert len(entries) == 1
+        assert entries[0].query == "python indexing"
+        assert entries[0].source == "memory_search_scored"
+        assert entries[0].results[0]["content"] == "Python uses 0-based indexing"
 
     def test_mark_adopted(self, tmp_path):
         from caveman.training.retrieval_log import RetrievalLog
