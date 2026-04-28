@@ -43,6 +43,7 @@ embedding-train = [
     "jieba>=0.42",
     "sentence-transformers>=3.0",
     "torch>=2.2",
+    "datasets>=2.19",
 ]
 browser = ["playwright>=1.44"]
 crypto = ["cryptography>=42"]
@@ -74,6 +75,7 @@ all = [
     "jieba>=0.42",
     "sentence-transformers>=3.0",
     "torch>=2.2",
+    "datasets>=2.19",
     "playwright>=1.44",
     "cryptography>=42",
 ]

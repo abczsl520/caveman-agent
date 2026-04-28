@@ -106,7 +106,7 @@ class TestRetrievalLog:
             query="deploy server",
             results=[
                 {"memory_id": "m1", "content": "198.51.100.20 Ubuntu Node v22", "score": 0.9},
-                {"memory_id": "m2", "content": "some unrelated thing", "score": 0.3},
+                {"memory_id": "m2", "content": "Wrong old server", "score": 0.8},
             ],
             source="recall",
         ))
@@ -115,9 +115,56 @@ class TestRetrievalLog:
 
         pairs = log.generate_training_pairs()
         assert len(pairs) == 1
-        assert pairs[0]["query"] == "deploy server"
-        assert "198.51" in pairs[0]["positive"]
         assert pairs[0]["source"] == "adopted"
+        assert "198.51" in pairs[0]["positive"]
+        assert pairs[0]["negative"] == "Wrong old server"
+
+    def test_generate_training_pairs_keeps_all_hard_negatives(self, tmp_path):
+        """Adoption events should keep every non-adopted retrieval as hard-negative signal."""
+        from caveman.training.retrieval_log import RetrievalLog, RetrievalEntry
+
+        log = RetrievalLog(tmp_path / "test.sqlite")
+        log.log(RetrievalEntry(
+            query="deploy server",
+            results=[
+                {"memory_id": "m1", "content": "Correct production server 198.51.100.20", "score": 0.9},
+                {"memory_id": "m2", "content": "Wrong old server", "score": 0.8},
+                {"memory_id": "m3", "content": "Wrong staging server", "score": 0.7},
+            ],
+            source="memory_search",
+        ))
+        log.mark_adopted("deploy server", ["m1"])
+
+        pairs = log.generate_training_pairs()
+
+        assert len(pairs) == 2
+        assert [pair["negative"] for pair in pairs] == ["Wrong old server", "Wrong staging server"]
+        assert {pair["source"] for pair in pairs} == {"adopted"}
+
+    def test_generate_training_pairs_excludes_all_adopted_ids_from_negatives(self, tmp_path):
+        """Multi-adoption should not train one adopted answer as another answer's negative."""
+        from caveman.training.retrieval_log import RetrievalLog, RetrievalEntry
+
+        log = RetrievalLog(tmp_path / "test.sqlite")
+        log.log(RetrievalEntry(
+            query="deploy server",
+            results=[
+                {"memory_id": "m1", "content": "Correct production server 198.51.100.20", "score": 0.9},
+                {"memory_id": "m2", "content": "Correct backup production server 198.51.100.21", "score": 0.85},
+                {"memory_id": "m3", "content": "Wrong staging server", "score": 0.7},
+            ],
+            source="memory_search",
+        ))
+        log.mark_adopted("deploy server", ["m1", "m2"])
+
+        pairs = log.generate_training_pairs()
+
+        assert len(pairs) == 2
+        assert {pair["positive"] for pair in pairs} == {
+            "Correct production server 198.51.100.20",
+            "Correct backup production server 198.51.100.21",
+        }
+        assert {pair["negative"] for pair in pairs} == {"Wrong staging server"}
 
     def test_generate_pairs_score_fallback(self, tmp_path):
         from caveman.training.retrieval_log import RetrievalLog, RetrievalEntry
@@ -201,6 +248,28 @@ class TestPairExtractorRetrievalLog:
         pairs = extractor.extract_from_retrieval_log(log_path)
         assert len(pairs) >= 1
         assert extractor._retrieval_pairs >= 1
+
+    def test_primary_source_preserves_hard_negative(self, tmp_path):
+        """Embedding pairs should carry adoption hard negatives into dataset export."""
+        from caveman.training.embedding import PairExtractor
+        from caveman.training.retrieval_log import RetrievalLog, RetrievalEntry
+
+        log_path = tmp_path / "retrieval_log.sqlite"
+        log = RetrievalLog(log_path)
+        log.log(RetrievalEntry(
+            query="which server should I deploy",
+            results=[
+                {"memory_id": "m1", "content": "Use production server 198.51.100.20", "score": 0.9},
+                {"memory_id": "m2", "content": "Old staging server 203.0.113.5", "score": 0.8},
+            ],
+            source="memory_search",
+        ))
+        log.mark_adopted("which server should I deploy", ["m1"])
+
+        pairs = PairExtractor().extract_from_retrieval_log(log_path)
+
+        assert len(pairs) == 1
+        assert pairs[0].negative == "Old staging server 203.0.113.5"
 
     def test_trajectory_fallback_lower_weight(self):
         from caveman.training.embedding import PairExtractor
