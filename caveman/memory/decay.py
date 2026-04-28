@@ -37,6 +37,9 @@ _IMMUNE_DAYS = 14            # Recently accessed memories are immune
 _PRUNE_THRESHOLD = 0.05      # Trust below this → candidate for pruning
 _PRUNE_AGE_DAYS = 90         # Must be this old to be pruned
 _MAX_DECAY_PER_RUN = 500     # Process at most this many per run
+_QUARANTINE_TRUST_THRESHOLD = 0.07
+_QUARANTINE_DOWNRANK_TRUST = 0.01
+_IMPORT_SOURCE_PREFIX = "import:"
 
 
 @dataclass
@@ -45,6 +48,7 @@ class DecayResult:
     memories_scanned: int = 0
     memories_decayed: int = 0
     memories_pruned: int = 0
+    memories_quarantined: int = 0
     trust_total_reduced: float = 0.0
 
     def summary(self) -> str:
@@ -52,6 +56,7 @@ class DecayResult:
             f"Decay: scanned={self.memories_scanned}, "
             f"decayed={self.memories_decayed}, "
             f"pruned={self.memories_pruned}, "
+            f"quarantined={self.memories_quarantined}, "
             f"trust_reduced={self.trust_total_reduced:.3f}"
         )
 
@@ -96,12 +101,14 @@ class MemoryDecay:
 
             to_decay: list[tuple[str, float]] = []  # (id, new_trust)
             to_prune: list[dict] = []  # full row data for archive
+            to_quarantine: list[tuple[str, float, dict[str, Any]]] = []
 
             for row in rows:
                 result.memories_scanned += 1
                 mid = row["id"]
                 trust = row["trust_score"]
                 retrieval_count = row["retrieval_count"]
+                helpful_count = row["helpful_count"]
                 created_at = row["created_at"]
                 metadata = json.loads(row["metadata_json"] or "{}")
 
@@ -155,17 +162,41 @@ class MemoryDecay:
                 if (new_trust <= _PRUNE_THRESHOLD
                         and (now - created).days >= _PRUNE_AGE_DAYS
                         and retrieval_count == 0):
-                    to_prune.append(dict(row))
-                    result.memories_pruned += 1
+                    source = str(metadata.get("source", ""))
+                    if source.startswith(_IMPORT_SOURCE_PREFIX):
+                        if helpful_count > 0:
+                            continue
+                        metadata.setdefault("previous_trust_score", trust)
+                        metadata["governance_state"] = "quarantined"
+                        metadata["quarantine_reason"] = "stale_low_signal_import"
+                        metadata["quarantined_at"] = now.isoformat()
+                        to_quarantine.append((mid, _QUARANTINE_DOWNRANK_TRUST, metadata))
+                        result.memories_quarantined += 1
+                    else:
+                        to_prune.append(dict(row))
+                        result.memories_pruned += 1
 
             if dry_run:
                 return result
 
             # Apply decay
             if to_decay:
+                quarantine_ids = {mid for mid, _, _ in to_quarantine}
+                decay_updates = [(new_trust, mid) for mid, new_trust in to_decay if mid not in quarantine_ids]
+                if decay_updates:
+                    conn.executemany(
+                        "UPDATE memories SET trust_score = ? WHERE id = ?",
+                        decay_updates,
+                    )
+                    conn.commit()
+
+            if to_quarantine:
                 conn.executemany(
-                    "UPDATE memories SET trust_score = ? WHERE id = ?",
-                    [(new_trust, mid) for mid, new_trust in to_decay],
+                    "UPDATE memories SET trust_score = ?, metadata_json = ? WHERE id = ?",
+                    [
+                        (new_trust, json.dumps(metadata, ensure_ascii=False), mid)
+                        for mid, new_trust, metadata in to_quarantine
+                    ],
                 )
                 conn.commit()
 
@@ -176,7 +207,7 @@ class MemoryDecay:
         finally:
             conn.close()
 
-        if result.memories_decayed > 0 or result.memories_pruned > 0:
+        if result.memories_decayed > 0 or result.memories_pruned > 0 or result.memories_quarantined > 0:
             logger.info(result.summary())
 
         return result
