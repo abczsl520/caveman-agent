@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import signal
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -87,6 +88,7 @@ class ProcessRegistry:
                 stderr=asyncio.subprocess.PIPE,
                 cwd=session.cwd,
                 env=run_env,
+                start_new_session=True,
             )
             session._process = proc
             session.pid = proc.pid
@@ -152,14 +154,20 @@ class ProcessRegistry:
         return self.poll(session_id)
 
     async def _terminate_process(self, proc: asyncio.subprocess.Process) -> None:
-        """Terminate a subprocess and drain pipes so transports close cleanly."""
+        """Terminate a subprocess tree and drain pipes so transports close cleanly."""
         if proc.returncode is None:
-            proc.kill()
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                try:
+                    proc.kill()
+                except ProcessLookupError:
+                    pass
         try:
-            await proc.communicate()
+            await asyncio.wait_for(proc.communicate(), timeout=2)
         except Exception as e:
             try:
-                await proc.wait()
+                await asyncio.wait_for(proc.wait(), timeout=1)
             except Exception as wait_error:
                 logger.debug(
                     "Failed to drain terminated process cleanly: %s; wait failed: %s",
@@ -213,14 +221,12 @@ class ProcessRegistry:
 
         try:
             if session._process and session._process.returncode is None:
-                session._process.kill()
-            if session._task and session._task is not asyncio.current_task():
+                await self._terminate_process(session._process)
+            elif session._task and session._task is not asyncio.current_task():
                 try:
                     await session._task
                 except asyncio.CancelledError:
                     pass
-            elif session._process:
-                await self._terminate_process(session._process)
             session.status = "killed"
             session.completed_at = time.monotonic()
             session._process = None
