@@ -22,6 +22,7 @@ import hashlib
 import logging
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 
 from caveman.wiki import (
     TIER_CONFIG,

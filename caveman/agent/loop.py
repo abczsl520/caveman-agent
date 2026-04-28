@@ -2,6 +2,7 @@
 from __future__ import annotations
 import logging, time as _time
 from collections.abc import AsyncIterator
+from typing import Any
 logger = logging.getLogger(__name__)
 
 from caveman.agent.loop_state import LoopState

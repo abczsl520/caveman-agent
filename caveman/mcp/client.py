@@ -130,7 +130,7 @@ class MCPClient:
 
     async def _connect_sse(self) -> None:
         import httpx
-        self._http_client = httpx.AsyncClient(base_url=self.url, timeout=MCP_PROCESS_KILL0)
+        self._http_client = httpx.AsyncClient(base_url=self.url, timeout=MCP_PROCESS_KILL)
         try:
             # Initialize
             resp = await self._http_client.post("/mcp/v1", json={

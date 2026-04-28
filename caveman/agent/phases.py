@@ -20,8 +20,8 @@ from caveman.skills.manager import SkillManager
 from caveman.trajectory.recorder import TrajectoryRecorder
 from caveman.engines.flags import EngineFlags
 from caveman.engines.recall import RecallEngine
-
 logger = logging.getLogger(__name__)
+_PROVIDER_FINISH_EVENT_TYPES = {"message_stop", "done"}
 
 # Pre-compiled patterns for episode filtering (Fix #16)
 import re as _re
@@ -70,7 +70,6 @@ async def phase_prepare(
         }, source="skill")
 
     memories = []
-    provider_finish_types = {"message_stop", "do" "ne"}
 
     try:
         memories = await memory_manager.recall(task, top_k=5)
@@ -208,7 +207,7 @@ async def phase_llm_call(
                     sys.stdout.flush()
             elif ev["type"] == "tool_call":
                 tool_calls.append(ev)
-            elif ev["type"] in provider_finish_types:
+            elif ev["type"] in _PROVIDER_FINISH_EVENT_TYPES:
                 stop = ev.get("stop_reason", "end_turn")
             elif ev["type"] == "error":
                 action = ev.get("action", "abort")

@@ -268,7 +268,7 @@ class _FallbackChain:
     def has_fallbacks(self) -> bool:
         return bool(self._config.provider) and not self._activated
 
-    def try_activate_next(self) -> OpenAIProvider:
+    def try_activate_next(self):
         """Try to create a fallback provider. Returns provider or None."""
         if self._activated:
             return None

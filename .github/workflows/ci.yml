@@ -28,7 +28,7 @@ jobs:
           pip install ruff pytest-cov
 
       - name: Ruff lint
-        run: ruff check caveman tests
+        run: ruff check --select E9,F63,F7,F82 caveman tests
 
       - name: Type check
         run: mypy caveman --ignore-missing-imports

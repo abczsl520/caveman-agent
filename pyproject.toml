@@ -85,7 +85,7 @@ dev = [
 ]
 
 [project.scripts]
-caveman = "caveman.cli.main:app"
+caveman = "caveman.cli.entrypoint:main"
 
 [project.urls]
 Homepage = "https://github.com/abczsl520/caveman-agent"
