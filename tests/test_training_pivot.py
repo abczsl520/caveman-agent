@@ -2,8 +2,6 @@
 from __future__ import annotations
 
 import json
-import pytest
-from pathlib import Path
 
 
 class TestEmbeddingPairExtractor:
@@ -89,6 +87,152 @@ class TestEmbeddingTrainer:
         result = trainer.train(dataset)
         # Either succeeds (if installed) or returns skip status
         assert result["status"] in ("success", "skip")
+
+
+    def test_train_uses_triplet_loss_for_explicit_negatives(self, tmp_path, monkeypatch):
+        """Adoption hard negatives must affect the actual trainer, not just JSONL."""
+        from caveman.training.embedding import EmbeddingTrainer, EmbeddingTrainConfig
+
+        dataset = tmp_path / "pairs.jsonl"
+        dataset.write_text(json.dumps({
+            "query": "deploy where",
+            "positive": "Use production server 198.51.100.20",
+            "negative": "Old staging server 203.0.113.5",
+        }) + "\n")
+        config = EmbeddingTrainConfig(output_dir=str(tmp_path / "out"))
+        trainer = EmbeddingTrainer(config)
+
+        class FakeModel:
+            def fit(self, **kwargs):
+                (loss,) = {type(loss).__name__ for _, loss in kwargs["train_objectives"]}
+                assert loss == "FakeTripletLoss"
+
+        class FakeInputExample:
+            def __init__(self, texts):
+                self.texts = texts
+
+        class FakeMultipleNegativesRankingLoss:
+            def __init__(self, model):
+                self.model = model
+
+        class FakeTripletLoss:
+            def __init__(self, model):
+                self.model = model
+
+        class FakeDataLoader:
+            def __init__(self, examples, shuffle, batch_size):
+                self.examples = list(examples)
+                self.shuffle = shuffle
+                self.batch_size = batch_size
+
+            def __len__(self):
+                return 1
+
+        import sys
+        import types
+        fake_st = types.ModuleType("sentence_transformers")
+        fake_st.SentenceTransformer = lambda _model_name: FakeModel()
+        fake_st.InputExample = FakeInputExample
+        fake_losses = types.ModuleType("sentence_transformers.losses")
+        fake_losses.MultipleNegativesRankingLoss = FakeMultipleNegativesRankingLoss
+        fake_losses.TripletLoss = FakeTripletLoss
+        fake_torch = types.ModuleType("torch")
+        fake_torch_utils = types.ModuleType("torch.utils")
+        fake_torch_data = types.ModuleType("torch.utils.data")
+        fake_torch_data.DataLoader = FakeDataLoader
+        monkeypatch.setitem(sys.modules, "sentence_transformers", fake_st)
+        monkeypatch.setitem(sys.modules, "sentence_transformers.losses", fake_losses)
+        monkeypatch.setitem(sys.modules, "torch", fake_torch)
+        monkeypatch.setitem(sys.modules, "torch.utils", fake_torch_utils)
+        monkeypatch.setitem(sys.modules, "torch.utils.data", fake_torch_data)
+
+        result = trainer.train(dataset)
+
+        assert result["status"] == "success"
+        assert result["loss"] == "triplet"
+        assert result["triplet_examples"] == 1
+
+    def test_train_filters_to_triplets_when_dataset_mixes_pairs_and_negatives(self, tmp_path, monkeypatch):
+        """TripletLoss must never receive 2-text examples from mixed datasets."""
+        from caveman.training.embedding import EmbeddingTrainer, EmbeddingTrainConfig
+
+        dataset = tmp_path / "pairs.jsonl"
+        dataset.write_text(
+            json.dumps({
+                "query": "deploy where",
+                "positive": "Use production server 198.51.100.20",
+                "negative": "Old staging server 203.0.113.5",
+            })
+            + "\n"
+            + json.dumps({
+                "query": "who owns docs",
+                "positive": "Docs are maintained by the platform team",
+            })
+            + "\n"
+        )
+        config = EmbeddingTrainConfig(output_dir=str(tmp_path / "out"))
+        trainer = EmbeddingTrainer(config)
+
+        captured = {}
+
+        class FakeModel:
+            def fit(self, **kwargs):
+                objectives = kwargs["train_objectives"]
+                assert len(objectives) == 1
+                loader, loss = objectives[0]
+                captured["loss"] = type(loss).__name__
+                captured["texts"] = [example.texts for example in loader.examples]
+
+        class FakeInputExample:
+            def __init__(self, texts):
+                self.texts = texts
+
+        class FakeMultipleNegativesRankingLoss:
+            def __init__(self, model):
+                self.model = model
+
+        class FakeTripletLoss:
+            def __init__(self, model):
+                self.model = model
+
+        class FakeDataLoader:
+            def __init__(self, examples, shuffle, batch_size):
+                self.examples = list(examples)
+                self.shuffle = shuffle
+                self.batch_size = batch_size
+
+            def __len__(self):
+                return len(self.examples)
+
+        import sys
+        import types
+        fake_st = types.ModuleType("sentence_transformers")
+        fake_st.SentenceTransformer = lambda _model_name: FakeModel()
+        fake_st.InputExample = FakeInputExample
+        fake_losses = types.ModuleType("sentence_transformers.losses")
+        fake_losses.MultipleNegativesRankingLoss = FakeMultipleNegativesRankingLoss
+        fake_losses.TripletLoss = FakeTripletLoss
+        fake_torch = types.ModuleType("torch")
+        fake_torch_utils = types.ModuleType("torch.utils")
+        fake_torch_data = types.ModuleType("torch.utils.data")
+        fake_torch_data.DataLoader = FakeDataLoader
+        monkeypatch.setitem(sys.modules, "sentence_transformers", fake_st)
+        monkeypatch.setitem(sys.modules, "sentence_transformers.losses", fake_losses)
+        monkeypatch.setitem(sys.modules, "torch", fake_torch)
+        monkeypatch.setitem(sys.modules, "torch.utils", fake_torch_utils)
+        monkeypatch.setitem(sys.modules, "torch.utils.data", fake_torch_data)
+
+        result = trainer.train(dataset)
+
+        assert result["status"] == "success"
+        assert result["examples"] == 2
+        assert result["triplet_examples"] == 1
+        assert captured["loss"] == "FakeTripletLoss"
+        assert captured["texts"] == [[
+            "deploy where",
+            "Use production server 198.51.100.20",
+            "Old staging server 203.0.113.5",
+        ]]
 
 
 class TestCLIHandler:

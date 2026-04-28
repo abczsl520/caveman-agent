@@ -16,7 +16,7 @@ import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 __all__ = [
     "EmbeddingTrainConfig",
@@ -84,8 +84,10 @@ class PairExtractor:
             query = p.get("query", "")
             positive = p.get("positive", "")
             if len(query) > 5 and len(positive) > 10:
+                negative = p.get("negative", "")
                 pairs.append(QueryMemoryPair(
                     query=query[:512], positive=positive[:512],
+                    negative=str(negative)[:512] if negative else "",
                     score=1.0 if p.get("source") == "adopted" else 0.7,
                 ))
         self._retrieval_pairs = len(pairs)
@@ -190,7 +192,7 @@ class EmbeddingTrainer:
         """Train embedding model. Requires sentence-transformers installed."""
         try:
             from sentence_transformers import SentenceTransformer, InputExample
-            from sentence_transformers.losses import MultipleNegativesRankingLoss
+            from sentence_transformers.losses import MultipleNegativesRankingLoss, TripletLoss
             from torch.utils.data import DataLoader
         except ImportError:
             return {
@@ -200,40 +202,62 @@ class EmbeddingTrainer:
             }
 
         # Load dataset
-        examples = []
+        triplet_examples = []
+        pair_examples = []
         with open(dataset_path, encoding="utf-8") as f:
             for line in f:
                 if line.strip():
                     try:
                         record = json.loads(line)
-                        examples.append(InputExample(
-                            texts=[record["query"], record["positive"]]
-                        ))
+                        pair_examples.append(InputExample(texts=[record["query"], record["positive"]]))
+                        negative = record.get("negative")
+                        if negative:
+                            triplet_examples.append(InputExample(
+                                texts=[record["query"], record["positive"], str(negative)]
+                            ))
                     except (json.JSONDecodeError, KeyError) as e:
                         logger.warning("Skipping malformed JSONL line in %s: %s", dataset_path, e)
                         continue
 
-        if not examples:
+        if not pair_examples:
             return {"status": "error", "reason": "No training examples found"}
 
-        model = SentenceTransformer(self.config.base_model)
-        train_dataloader = DataLoader(examples, shuffle=True, batch_size=self.config.batch_size)
-        train_loss = MultipleNegativesRankingLoss(model)
+        try:
+            model = SentenceTransformer(self.config.base_model)
+        except Exception as e:
+            return {
+                "status": "skip",
+                "reason": f"embedding base model unavailable: {e}",
+                "dataset": str(dataset_path),
+            }
+        objectives = []
+        if triplet_examples:
+            triplet_dataloader = DataLoader(
+                cast(Any, triplet_examples), shuffle=True, batch_size=self.config.batch_size
+            )
+            objectives.append((triplet_dataloader, TripletLoss(model)))
+        else:
+            pair_dataloader = DataLoader(
+                cast(Any, pair_examples), shuffle=True, batch_size=self.config.batch_size
+            )
+            objectives.append((pair_dataloader, MultipleNegativesRankingLoss(model)))
 
-        output_dir = Path(self.config.output_dir)
+        output_dir = Path(self.config.output_dir or "")
         output_dir.mkdir(parents=True, exist_ok=True)
 
         model.fit(
-            train_objectives=[(train_dataloader, train_loss)],
+            train_objectives=objectives,
             epochs=self.config.epochs,
-            warmup_steps=int(len(train_dataloader) * self.config.warmup_ratio),
+            warmup_steps=int(sum(len(loader) for loader, _ in objectives) * self.config.warmup_ratio),
             output_path=str(output_dir),
         )
 
         return {
             "status": "success",
             "model_path": str(output_dir),
-            "examples": len(examples),
+            "examples": len(pair_examples),
+            "triplet_examples": len(triplet_examples),
+            "loss": "triplet" if triplet_examples else "multiple_negatives_ranking",
             "epochs": self.config.epochs,
             "base_model": self.config.base_model,
         }

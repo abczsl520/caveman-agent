@@ -267,25 +267,37 @@ class RetrievalLog:
             if entry.source == "adoption" or not entry.results:
                 continue
 
-            adopted_ids = adoptions.get(entry.query, [])
+            adopted_ids = set(adoptions.get(entry.query, []))
+
+            if adopted_ids:
+                valid_results = [
+                    result
+                    for result in entry.results
+                    if result.get("content", "") and len(result.get("content", "")) >= 10
+                ]
+                for result in valid_results:
+                    mid = result.get("memory_id", "")
+                    if mid in adopted_ids:
+                        for hard_negative in valid_results:
+                            negative_id = hard_negative.get("memory_id", "")
+                            if negative_id in adopted_ids:
+                                continue
+                            pairs.append({
+                                "query": entry.query,
+                                "positive": result.get("content", ""),
+                                "negative": hard_negative.get("content", ""),
+                                "source": "adopted",
+                            })
+                continue
 
             for result in entry.results:
                 score = result.get("score", 0)
                 content = result.get("content", "")
-                mid = result.get("memory_id", "")
 
                 if not content or len(content) < 10:
                     continue
 
-                # If we have adoption data, use it
-                if adopted_ids:
-                    if mid in adopted_ids:
-                        pairs.append({
-                            "query": entry.query,
-                            "positive": content,
-                            "source": "adopted",
-                        })
-                elif score >= 0.5:
+                if score >= 0.5:
                     # No adoption data — use score as proxy
                     pairs.append({
                         "query": entry.query,
