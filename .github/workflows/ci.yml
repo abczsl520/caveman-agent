@@ -31,7 +31,7 @@ jobs:
         run: ruff check --select E9,F63,F7,F82 caveman tests
 
       - name: Type check
-        run: mypy caveman --ignore-missing-imports
+        run: python scripts/ci_mypy_gate.py
 
       - name: Run tests with coverage gate
         run: pytest --tb=short -q --cov=caveman --cov-report=term-missing --cov-fail-under=80

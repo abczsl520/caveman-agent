@@ -13,7 +13,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, TypeAlias, Union
 
 __all__ = [
     "StepStatus",
@@ -362,13 +362,16 @@ class ProviderSetupFlow:
         return "Flow cancelled."
 
 
-_FLOW_REGISTRY = {
+ProviderSetupFlowType: TypeAlias = "ProviderSetupFlow"
+FlowDefinition: TypeAlias = Union[Flow, ProviderSetupFlowType]
+
+_FLOW_REGISTRY: dict[str, type[ProviderSetupFlow]] = {
     "provider": ProviderSetupFlow,
     "channel": ProviderSetupFlow,  # Placeholder
 }
 
 
-def create_flow(flow_type: str) -> Flow | None:
+def create_flow(flow_type: str) -> FlowDefinition | None:
     """Create a flow by type."""
     cls = _FLOW_REGISTRY.get(flow_type)
     if cls:

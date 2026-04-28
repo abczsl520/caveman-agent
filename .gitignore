@@ -44,7 +44,7 @@ gateway_sessions/
 *.log
 
 # Sensitive / personal data — never push
-memory/
+/memory/
 *.env
 .env.*
 config.yaml
