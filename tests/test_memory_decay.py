@@ -37,10 +37,12 @@ def _insert_memory(
     created_days_ago: int = 60,
     last_accessed_days_ago: int | None = None,
     retrieval_count: int = 0,
+    helpful_count: int = 0,
+    metadata: dict | None = None,
 ) -> None:
     now = datetime.now(timezone.utc)
     created = now - timedelta(days=created_days_ago)
-    metadata = {}
+    metadata = dict(metadata or {})
     if last_accessed_days_ago is not None:
         la = now - timedelta(days=last_accessed_days_ago)
         metadata["last_accessed"] = la.isoformat()
@@ -48,9 +50,9 @@ def _insert_memory(
     conn = sqlite3.connect(str(db_path))
     conn.execute(
         "INSERT INTO memories (id, content, type, created_at, metadata_json, "
-        "trust_score, retrieval_count) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "trust_score, retrieval_count, helpful_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         (mid, content, "fact", created.isoformat(),
-         json.dumps(metadata), trust, retrieval_count),
+         json.dumps(metadata), trust, retrieval_count, helpful_count),
     )
     conn.commit()
     conn.close()
@@ -167,3 +169,60 @@ class TestMemoryDecay:
         pop_trust = _get_trust(db_path, "popular")
         unpop_trust = _get_trust(db_path, "unpopular")
         assert pop_trust > unpop_trust
+
+    def test_low_signal_import_memories_are_quarantined_without_deletion(self, tmp_path):
+        """Stale imported memories with no recall/helpful signal should be reversible quarantine candidates."""
+        db_path = _create_test_db(tmp_path)
+        _insert_memory(
+            db_path,
+            "cold-import",
+            trust=0.06,
+            created_days_ago=120,
+            retrieval_count=0,
+            helpful_count=0,
+            metadata={"source": "import:openclaw"},
+        )
+        decay = MemoryDecay(db_path=db_path, archive_dir=tmp_path / "archive")
+
+        result = decay.run()
+
+        assert result.memories_quarantined == 1
+        assert result.memories_pruned == 0
+        assert _get_trust(db_path, "cold-import") is not None
+        conn = sqlite3.connect(str(db_path))
+        meta_json, trust = conn.execute(
+            "SELECT metadata_json, trust_score FROM memories WHERE id = ?",
+            ("cold-import",),
+        ).fetchone()
+        conn.close()
+        meta = json.loads(meta_json)
+        assert meta["governance_state"] == "quarantined"
+        assert meta["quarantine_reason"] == "stale_low_signal_import"
+        assert meta["previous_trust_score"] == pytest.approx(0.06)
+        assert trust == pytest.approx(0.01)
+
+    def test_helpful_import_memories_are_not_quarantined(self, tmp_path):
+        """Explicit helpful feedback should protect imported memories from quarantine."""
+        db_path = _create_test_db(tmp_path)
+        _insert_memory(
+            db_path,
+            "helpful-import",
+            trust=0.06,
+            created_days_ago=120,
+            retrieval_count=0,
+            helpful_count=1,
+            metadata={"source": "import:openclaw"},
+        )
+        decay = MemoryDecay(db_path=db_path, archive_dir=tmp_path / "archive")
+
+        result = decay.run()
+
+        assert result.memories_quarantined == 0
+        assert _get_trust(db_path, "helpful-import") is not None
+        conn = sqlite3.connect(str(db_path))
+        meta_json = conn.execute(
+            "SELECT metadata_json FROM memories WHERE id = ?",
+            ("helpful-import",),
+        ).fetchone()[0]
+        conn.close()
+        assert "governance_state" not in json.loads(meta_json)
