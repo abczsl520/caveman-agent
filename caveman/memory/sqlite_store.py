@@ -380,10 +380,20 @@ class SQLiteMemoryStore:
 
     def all_entries(self) -> List[MemoryEntry]:
         rows = self._get_conn().execute(
-            "SELECT id, content, type, created_at, metadata_json, trust_score, retrieval_count, last_accessed "
+            "SELECT id, content, type, created_at, metadata_json, trust_score, retrieval_count, helpful_count, last_accessed "
             "FROM memories ORDER BY created_at"
         ).fetchall()
-        return [row_to_entry(row) for row in rows]
+        entries = []
+        for row in rows:
+            entry = row_to_entry(
+                row,
+                trust=row[5],
+                retrieval_count=row[6],
+                last_accessed=row[8],
+            )
+            entry.metadata["helpful_count"] = int(row[7] or 0)
+            entries.append(entry)
+        return entries
 
     def search_sync(self, query: str, limit: int = 5) -> List[MemoryEntry]:
         """Synchronous search — FTS5 first, LIKE fallback."""
