@@ -1590,7 +1590,7 @@ Embedding providers — generate vector embeddings for memory search.
 
 ## `caveman.memory.flywheel_metrics`
 
-Flywheel health metrics — quantify whether the flywheel is turning. Key metrics: - trust_distribution: histogram of trust scores (healthy = bell curve, not flat) - feedback_rate: % of recalled memories that got trust fee
+Flywheel health metrics — quantify whether the flywheel is turning. Key metrics: - trust_distribution: histogram of trust scores (healthy = bell curve, not flat) - feedback_rate: % of memories with real helpful feedback 
 
 **Classes:** `FlywheelHealth`
 

@@ -372,7 +372,8 @@ class SQLiteMemoryStore:
 
     @property
     def total_count(self) -> int:
-        return self._get_conn().execute("SELECT COUNT(*) FROM memories").fetchone()[0]
+        row = self._get_conn().execute("SELECT COUNT(*) FROM memories").fetchone()
+        return int(row[0]) if row is not None else 0
 
     def type_counts(self) -> dict[str, int]:
         rows = self._get_conn().execute("SELECT type, COUNT(*) FROM memories GROUP BY type").fetchall()
