@@ -21,7 +21,6 @@ def pytest_collection_modifyitems(items):
     known_failures = {
         "test_empty_query_returns_empty": "SQLite FTS returns results for empty query",
         "test_memory_persists": "Memory persistence test flaky",
-        "test_core_files_under_400_lines": "sqlite_store.py and lint.py over 400 lines",
         "test_lint_no_penalty_for_clean_memories": "Lint trust feedback test flaky",
         "test_sqlite_empty_query": "SQLite FTS returns results for empty query",
         "test_prd_status_is_v0_3_0": "PRD version updated to v0.4.0 by wildman",
