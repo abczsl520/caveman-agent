@@ -108,7 +108,7 @@ class BrowserbaseProvider(CloudBrowserProvider):
                 method="DELETE",
             )
             with urllib.request.urlopen(req, timeout=10) as resp:
-                return resp.status < 300
+                return bool(resp.status < 300)
         except Exception as e:
             logger.debug("suppressed: %s", e)
             return False
