@@ -12,7 +12,7 @@ from __future__ import annotations
 import ast
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 logger = logging.getLogger(__name__)
 
@@ -63,14 +63,14 @@ def _get_threshold(rel_path: str, policy: dict[str, Any]) -> int:
     overrides = policy.get("overrides", {})
     for pattern, limit in overrides.items():
         if rel_path.endswith(pattern) or pattern in rel_path:
-            return limit
+            return cast(int, limit)
     # Tier: engine files
     if "/engines/" in rel_path or rel_path.startswith("engines/"):
-        return policy["engine_max_lines"]
+        return cast(int, policy["engine_max_lines"])
     # Tier: CLI files
     if "/cli/" in rel_path or rel_path.startswith("cli/"):
-        return policy["cli_max_lines"]
-    return policy["default_max_lines"]
+        return cast(int, policy["cli_max_lines"])
+    return cast(int, policy["default_max_lines"])
 
 
 def _check_function_sizes(source: str, path: Path, max_fn_lines: int) -> list[str]:

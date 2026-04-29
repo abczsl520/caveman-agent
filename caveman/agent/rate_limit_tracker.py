@@ -9,7 +9,7 @@ import logging
 import time
 import threading
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, cast
 
 logger = logging.getLogger("caveman.agent.rate_limit_tracker")
 
@@ -19,10 +19,10 @@ class RateLimitState:
     """State for a rate-limited endpoint."""
     requests_remaining: int = -1  # -1 = unknown
     tokens_remaining: int = -1
-    reset_at: float = 0
-    retry_after: float = 0
+    reset_at: float = 0.0
+    retry_after: float = 0.0
     consecutive_429s: int = 0
-    last_429_at: float = 0
+    last_429_at: float = 0.0
     total_429s: int = 0
 
     @property
@@ -51,7 +51,8 @@ class RateLimitState:
         if self.consecutive_429s == 0:
             return 0
         base = 1.0
-        return min(base * (2 ** (self.consecutive_429s - 1)), 60.0)
+        backoff: float = base * (2 ** (self.consecutive_429s - 1))
+        return min(backoff, 60.0)
 
 
 class RateLimitTracker:
@@ -116,7 +117,7 @@ class RateLimitTracker:
         """Check if we should wait before making a request. Returns wait seconds."""
         state = self.get_state(key)
         if state.is_limited:
-            return state.wait_seconds
+            return cast(float, state.wait_seconds)
         if state.consecutive_429s > 0:
             return state.backoff_seconds()
         return 0
@@ -147,7 +148,7 @@ def _parse_duration(s: str) -> float:
     """Parse duration string like '1s', '6m0s', '1h2m3s'."""
     import re
     total = 0.0
-    for match in re.finditer(r"(\d+(?:\.\d+)?)(h|m|s|ms)", s):
+    for match in re.finditer(r"(\d+(?:\.\d+)?)(ms|h|m|s)", s):
         value = float(match.group(1))
         unit = match.group(2)
         if unit == "h":

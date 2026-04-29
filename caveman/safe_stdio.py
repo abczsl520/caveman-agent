@@ -8,15 +8,20 @@ character in a log message would crash the entire agent.
 """
 from __future__ import annotations
 import sys
+from typing import Any, TextIO, cast
 
 
 class _SafeWriter:
     """Wraps a file-like object to swallow write/flush errors."""
 
-    def __init__(self, inner):
-        object.__setattr__(self, "_inner", inner)
+    def __init__(self, inner: TextIO) -> None:
+        object.__setattr__(self, "_inner_stream", inner)
 
-    def write(self, data) -> int:
+    @property
+    def _inner(self) -> TextIO:
+        return cast(TextIO, object.__getattribute__(self, "_inner_stream"))
+
+    def write(self, data: str) -> int:
         try:
             return self._inner.write(data)
         except (OSError, ValueError, UnicodeEncodeError):
@@ -37,7 +42,7 @@ class _SafeWriter:
         except (OSError, ValueError):
             return False
 
-    def __getattr__(self, name):
+    def __getattr__(self, name: str) -> Any:
         return getattr(self._inner, name)
 
 
