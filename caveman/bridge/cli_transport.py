@@ -9,6 +9,7 @@ import asyncio
 import json
 import logging
 import shutil
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -127,11 +128,14 @@ class CLITransport:
             return {"stdout": "", "stderr": str(e), "returncode": -1}
 
     @staticmethod
-    def _parse_result(result: dict) -> dict:
+    def _parse_result(result: dict[str, Any]) -> dict[str, Any]:
         if result["returncode"] != 0:
             return {"error": result["stderr"], "success": False}
         try:
-            return json.loads(result["stdout"])
+            data = json.loads(result["stdout"])
+            if isinstance(data, dict):
+                return data
+            return {"result": data, "success": True}
         except json.JSONDecodeError:
             return {"result": result["stdout"], "success": True}
 

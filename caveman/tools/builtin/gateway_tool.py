@@ -1,6 +1,8 @@
 """Gateway tools — send messages and list gateways."""
 from __future__ import annotations
 
+from typing import Any
+
 from caveman.tools.registry import tool
 
 
@@ -34,9 +36,14 @@ async def gateway_send(
     params={},
     required=[],
 )
-async def gateway_list(_context: dict | None = None) -> list[dict]:
+async def gateway_list(_context: dict | None = None) -> list[dict[str, Any]]:
     """List all registered gateways and their status."""
     router = (_context or {}).get("gateway_router")
     if not router:
         return [{"error": "gateway_router not available"}]
-    return router.list_gateways()
+    gateways = router.list_gateways()
+    if not isinstance(gateways, list):
+        return [{"error": "gateway_router returned invalid gateway list"}]
+    if not all(isinstance(item, dict) for item in gateways):
+        return [{"error": "gateway_router returned malformed gateway item"}]
+    return gateways

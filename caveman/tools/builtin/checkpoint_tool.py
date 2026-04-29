@@ -1,6 +1,8 @@
 """Checkpoint tools — save and restore agent conversation state."""
 from __future__ import annotations
 
+from typing import Any
+
 from caveman.tools.registry import tool
 
 __all__ = [
@@ -67,9 +69,14 @@ async def checkpoint_restore(
     },
     required=[],
 )
-async def checkpoint_list(session_id: str = "", _context: dict | None = None) -> list[dict]:
+async def checkpoint_list(session_id: str = "", _context: dict | None = None) -> list[dict[str, Any]]:
     """List available checkpoints."""
     mgr = (_context or {}).get("checkpoint_manager")
     if not mgr:
         return [{"error": "checkpoint_manager not available"}]
-    return await mgr.list_checkpoints(session_id or None)
+    checkpoints = await mgr.list_checkpoints(session_id or None)
+    if not isinstance(checkpoints, list):
+        return [{"error": "checkpoint_manager returned invalid checkpoint list"}]
+    if not all(isinstance(item, dict) for item in checkpoints):
+        return [{"error": "checkpoint_manager returned malformed checkpoint item"}]
+    return checkpoints

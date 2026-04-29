@@ -239,7 +239,9 @@ class MCPClient:
             server._process.stdin.write(request.encode())
             await server._process.stdin.drain()
             result = await asyncio.wait_for(future, timeout=MCP_TOOL_CALL)
-            return result
+            if isinstance(result, dict):
+                return result
+            return {"error": f"Invalid response for {method}"}
         except asyncio.TimeoutError:
             return {"error": f"Timeout waiting for {method}"}
         except Exception as e:
