@@ -5,7 +5,7 @@ import logging
 import time
 from collections import defaultdict
 from contextlib import contextmanager
-from typing import Any
+from typing import Any, Iterator
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +26,7 @@ class AgentMetrics:
         self._counters[name] += amount
 
     @contextmanager
-    def timer(self, name: str) -> None:
+    def timer(self, name: str) -> Iterator[None]:
         """Context manager that records elapsed time."""
         start = time.monotonic()
         try:

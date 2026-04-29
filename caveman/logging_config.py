@@ -57,7 +57,7 @@ def setup_logging(
     root.handlers.clear()
 
     if format == "json":
-        formatter = JsonFormatter()
+        formatter: logging.Formatter = JsonFormatter()
     else:
         formatter = logging.Formatter(
             "%(asctime)s %(name)s %(levelname)s %(message)s",
