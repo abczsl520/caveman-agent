@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import math
 import re
+import warnings
 from datetime import datetime, timezone
 
 from caveman.memory.types import MemoryEntry
@@ -43,7 +44,18 @@ def _has_cjk(text: str) -> bool:
 def _tokenize_cjk(text: str) -> list[str]:
     """Tokenize text with jieba for CJK, regex for Latin."""
     try:
-        import jieba
+        with warnings.catch_warnings():
+            # jieba imports pkg_resources on Python 3.12/setuptools 81+, which
+            # emits a third-party deprecation UserWarning during import. Keep
+            # the suppression at the import boundary so project warnings still
+            # surface under pytest warning gates.
+            warnings.filterwarnings(
+                "ignore",
+                message="pkg_resources is deprecated as an API.*",
+                category=UserWarning,
+            )
+            import jieba
+
         jieba.setLogLevel(20)  # suppress loading messages
         if not getattr(jieba, '_caveman_initialized', False):
             jieba.initialize()  # Pre-load dictionary (290ms cold, 0ms warm)
@@ -51,7 +63,7 @@ def _tokenize_cjk(text: str) -> list[str]:
         return list(jieba.cut(text))
     except ImportError:
         # Fallback: character bigrams for CJK + word split for Latin
-        tokens = []
+        tokens: list[str] = []
         cjk_buf = []
         for ch in text:
             if _CJK_RANGE.match(ch):
@@ -269,7 +281,7 @@ class HybridScorer:
         trust_factor = 0.6 + trust * 1.4  # Range: 0.6 (trust=0) to 2.0 (trust=1)
         effective_half_life = int(self.temporal_half_life_days * trust_factor)
         decay = temporal_decay(effective_age_start, effective_half_life)
-        return relevance * decay
+        return float(relevance * decay)
 
     def rerank(
         self,

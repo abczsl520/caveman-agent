@@ -16,8 +16,9 @@ Features:
 from __future__ import annotations
 
 import logging
+import warnings
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 from caveman.gateway.platform_adapter import BasePlatformAdapter
 from caveman.gateway.platform_types import (
@@ -28,12 +29,14 @@ from caveman.gateway.platform_types import (
 logger = logging.getLogger("caveman.gateway.discord")
 
 try:
-    import discord
-    from discord import app_commands
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message="'audioop' is deprecated.*", category=DeprecationWarning)
+        import discord
+        from discord import app_commands
     DISCORD_AVAILABLE = True
 except ImportError:
     DISCORD_AVAILABLE = False
-    discord = None
+    discord = None  # type: ignore[assignment]
 
 
 class DiscordAdapter(BasePlatformAdapter):
@@ -70,7 +73,7 @@ class DiscordAdapter(BasePlatformAdapter):
 
         intents = discord.Intents.all()
         client = discord.Client(intents=intents)
-        client.tree = app_commands.CommandTree(client)
+        cast(Any, client).tree = app_commands.CommandTree(client)
         self._client = client
 
         @client.event

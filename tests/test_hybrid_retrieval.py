@@ -2,6 +2,10 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
+import sys
+import types
+import warnings
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -44,6 +48,48 @@ class TestTokenize:
         tokens = tokenize("I am a b c developer")
         assert "i" not in tokens  # single char
         assert "developer" in tokens
+
+    def test_jieba_pkg_resources_warning_suppressed_only_at_import_boundary(self, monkeypatch):
+        import caveman.memory.retrieval as retrieval
+
+        fake_jieba = types.ModuleType("jieba")
+
+        def cut(text: str):
+            return text.split()
+
+        fake_jieba.cut = cut
+        fake_jieba.setLogLevel = lambda level: None
+        fake_jieba.initialize = lambda: None
+
+        original_import_module = importlib.import_module
+        original_import = __import__
+
+        def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == "jieba":
+                warnings.warn(
+                    "pkg_resources is deprecated as an API. See https://setuptools.pypa.io/en/latest/pkg_resources.html.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                return fake_jieba
+            return original_import(name, globals, locals, fromlist, level)
+
+        monkeypatch.delitem(sys.modules, "jieba", raising=False)
+        monkeypatch.setattr("builtins.__import__", fake_import)
+
+        assert retrieval._tokenize_cjk("登录 bug") == ["登录", "bug"]
+
+        def noisy_import(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == "jieba":
+                warnings.warn("unexpected jieba warning", UserWarning, stacklevel=2)
+                return fake_jieba
+            return original_import(name, globals, locals, fromlist, level)
+
+        monkeypatch.setattr("builtins.__import__", noisy_import)
+        with pytest.warns(UserWarning, match="unexpected jieba warning"):
+            retrieval._tokenize_cjk("登录 bug")
+
+        assert importlib.import_module is original_import_module
 
 
 # --- Jaccard ---
