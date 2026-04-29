@@ -3,13 +3,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-import pytest
 import tempfile
-from datetime import datetime
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
-
-import pytest
 
 # ═══════════════════════════════════════════════════════════════════
 # FR-101: Compaction Shield
@@ -120,7 +115,7 @@ class TestCompactionShield:
         assert len(essence.key_data) > 0
 
     def test_save_and_load(self):
-        from caveman.engines.shield import CompactionShield, SessionEssence
+        from caveman.engines.shield import CompactionShield
         tmp = Path(tempfile.mkdtemp())
         shield = CompactionShield(session_id="persist_test", store_dir=tmp)
         messages = [
@@ -169,7 +164,7 @@ class TestCompactionShield:
         from caveman.engines.shield import CompactionShield
         tmp = Path(tempfile.mkdtemp())
 
-        llm_response = json.dumps({
+        llm_response: str = json.dumps({
             "decisions": ["Use FastAPI over Flask for async support"],
             "progress": ["Set up project structure"],
             "stances": ["Prefer type hints everywhere"],
@@ -195,7 +190,8 @@ class TestCompactionShield:
         tmp = Path(tempfile.mkdtemp())
 
         async def failing_llm(prompt: str) -> str:
-            raise RuntimeError("API error")
+            msg = f"API error while handling {prompt[:20]}"
+            raise RuntimeError(msg)
 
         shield = CompactionShield(session_id="fallback_test", store_dir=tmp, llm_fn=failing_llm)
         messages = [
@@ -241,7 +237,7 @@ class TestNudgeLLMIntegration:
         mem_dir = tempfile.mkdtemp()
         manager = MemoryManager.with_sqlite(base_dir=mem_dir)
 
-        llm_response = json.dumps([
+        llm_response: str = json.dumps([
             {"type": "semantic", "content": "pyenv is not pre-installed on macOS"},
             {"type": "procedural", "content": "Use brew install pyenv to install"},
         ])
@@ -259,7 +255,6 @@ class TestNudgeLLMIntegration:
         created = loop.run_until_complete(nudge.run(turns, task="install pyenv"))
         assert len(created) >= 1
 
-    @pytest.mark.xfail(reason="Nudge heuristic patterns changed in Round 97+")
     def test_nudge_heuristic_without_llm(self):
         from caveman.memory.nudge import MemoryNudge
         from caveman.memory.manager import MemoryManager

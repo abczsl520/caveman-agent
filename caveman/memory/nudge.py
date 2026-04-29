@@ -206,7 +206,7 @@ class MemoryNudge:
 
     async def _handle_drift(
         self, candidate: dict[str, str], drift_result: dict,
-    ) -> None:
+    ) -> MemoryEntry | None:
         """Handle drift detection result (contradiction or supersession)."""
         conflict = drift_result["entry"]
         drift_type = drift_result["drift_type"]
@@ -331,6 +331,7 @@ If nothing worth remembering, respond: []"""
         import re
         paths: set[str] = set()
         errors: list[tuple[str, str]] = []
+        outcomes: list[str] = []
         decisions: list[str] = []
         facts: list[str] = []
         prefs: list[str] = []
@@ -379,6 +380,12 @@ If nothing worth remembering, respond: []"""
 
             if role in ("assistant", "gpt", "function_call"):
                 last_assistant = text
+                if re.search(
+                    r"\b(?:deployed|completed|succeeded|successfully|fixed|resolved|solved)\b",
+                    text,
+                    re.IGNORECASE,
+                ):
+                    outcomes.append(text[:150].strip())
                 for m in re.finditer(r'(?:/[\w./-]+){2,}', text):
                     p = m.group()
                     if len(p) > 5:
@@ -393,8 +400,8 @@ If nothing worth remembering, respond: []"""
             if ("error" in text.lower() or "failed" in text.lower()) and last_assistant:
                 errors.append((text[:150].strip(), last_assistant[:100].strip()))
 
-        return {"paths": paths, "errors": errors, "decisions": decisions,
-                "facts": facts, "prefs": prefs}
+        return {"paths": paths, "errors": errors, "outcomes": outcomes,
+                "decisions": decisions, "facts": facts, "prefs": prefs}
 
     @staticmethod
     def _build_candidates(scan: dict, task: str) -> list[dict[str, str]]:
@@ -413,6 +420,10 @@ If nothing worth remembering, respond: []"""
         for error, ctx in scan["errors"][:2]:
             candidates.append({"type": "feedback",
                 "content": f"When trying: {ctx}... Got error: {error}"})
+        if task and scan.get("outcomes"):
+            outcome = scan["outcomes"][-1]
+            candidates.append({"type": "feedback",
+                "content": f"Task '{task[:80]}' outcome: {outcome}"})
         return candidates
 
     @property

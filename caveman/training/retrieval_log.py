@@ -313,4 +313,7 @@ class RetrievalLog:
             self._conn = None
 
     def __del__(self):
-        self.close()
+        try:
+            self.close()
+        except sqlite3.ProgrammingError:
+            self._conn = None

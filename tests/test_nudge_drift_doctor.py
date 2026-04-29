@@ -2,14 +2,9 @@
 import asyncio
 import json
 import tempfile
-from pathlib import Path
-
-import pytest
-
-import pytest
 
 from caveman.memory.manager import MemoryManager
-from caveman.memory.types import MemoryType, MemoryEntry
+from caveman.memory.types import MemoryType
 from caveman.memory.nudge import MemoryNudge
 from caveman.memory.drift import DriftDetector, _is_contradiction, _is_supersede
 
@@ -101,7 +96,6 @@ def test_nudge_should_nudge():
     asyncio.run(_run())
 
 
-@pytest.mark.xfail(reason="Nudge heuristic patterns changed in Round 97+, needs update")
 def test_nudge_heuristic_extraction():
     async def _run():
         with tempfile.TemporaryDirectory() as td:

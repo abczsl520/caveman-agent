@@ -8,9 +8,8 @@ Round 107: Added Lint→trust and Reflect→trust loop tests.
 from __future__ import annotations
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 
-from caveman.memory.types import MemoryType, MemoryEntry
+from caveman.memory.types import MemoryType
 from caveman.events import EventBus, EventType
 
 
@@ -179,7 +178,7 @@ class TestLintTrustFeedback:
         ).fetchone()[0]
 
         lint = LintEngine(memory_manager=mm, check_paths=False)
-        report = await lint.scan()
+        await lint.scan()
 
         after = mm._backend._get_conn().execute(
             "SELECT trust_score FROM memories WHERE id = ?", (mid,)
@@ -210,6 +209,37 @@ class TestLintTrustFeedback:
 
         # Each scan should lower trust further
         assert scores[0] >= scores[1] >= scores[2]  # Trust may not decrease if lint finds no issues
+    @pytest.mark.asyncio
+    async def test_lint_inactive_decay_exempts_user_source_memories(self, tmp_path):
+        """User-source preferences should not decay just because they are old."""
+        from datetime import datetime, timedelta
+
+        from caveman.engines.lint import LintEngine
+        from caveman.memory.manager import MemoryManager
+
+        mm = MemoryManager.with_sqlite(db_path=tmp_path / "test.db")
+        mid = await mm.store(
+            "User prefers concise implementation updates",
+            MemoryType.SEMANTIC,
+            metadata={"source": "user"},
+        )
+        old = (datetime.now() - timedelta(days=45)).isoformat()
+        mm._backend._get_conn().execute(
+            "UPDATE memories SET created_at = ?, last_accessed = NULL WHERE id = ?",
+            (old, mid),
+        )
+
+        initial = mm._backend._get_conn().execute(
+            "SELECT trust_score FROM memories WHERE id = ?", (mid,),
+        ).fetchone()[0]
+
+        lint = LintEngine(memory_manager=mm, check_paths=False)
+        await lint.scan()
+
+        after = mm._backend._get_conn().execute(
+            "SELECT trust_score FROM memories WHERE id = ?", (mid,),
+        ).fetchone()[0]
+        assert after == initial
 
 
 class TestEstimateTokens:

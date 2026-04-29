@@ -243,7 +243,7 @@ class LintEngine:
 
         Cognitive science: unused memories fade. Active memories float to top.
         Decay: -0.02 per scan cycle for idle > 30 days.
-        User-type memories are exempt (preferences don't expire).
+        Source=user memories are exempt (preferences don't expire).
         """
         backend = getattr(self.memory, '_backend', None)
         if not backend:
@@ -251,17 +251,18 @@ class LintEngine:
         try:
             conn = backend._get_conn()
             cutoff = (datetime.now() - timedelta(days=30)).isoformat()
-            # Decay memories not accessed recently, excluding user preferences
-            conn.execute(
+            # Decay old idle memories, excluding user preferences by source metadata.
+            cursor = conn.execute(
                 "UPDATE memories SET trust_score = MAX(0.05, trust_score - 0.02) "
                 "WHERE trust_score > 0.05 "
-                "AND type != 'user' "
-                "AND (metadata_json NOT LIKE '%\"last_accessed\"%' "
-                "     OR json_extract(metadata_json, '$.last_accessed') < ?)",
-                (cutoff,),
+                "AND created_at < ? "
+                "AND (last_accessed IS NULL OR last_accessed < ?) "
+                "AND COALESCE(json_extract(metadata_json, '$.source'), '') != 'user'",
+                (cutoff, cutoff),
             )
-            changed = conn.total_changes
+            changed = cursor.rowcount
             if changed:
+                conn.commit()
                 logger.info("Lint decay: %d inactive memories trust -0.02", changed)
         except Exception as e:
             logger.debug("Lint decay failed: %s", e)

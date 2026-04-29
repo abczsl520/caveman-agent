@@ -453,9 +453,9 @@ class TestPRDAlignment:
         prd = Path("./docs/PRD.md").read_text()
         assert "Version:**" in prd  # Version may change
 
-    def test_prd_status_is_v0_3_0(self):
+    def test_prd_status_tracks_current_release(self):
         prd = Path("./docs/PRD.md").read_text()
-        assert "v0.3.0" in prd[:500]
+        assert "> **Status:** v0.4.1" in prd[:500]
 
     def test_prd_no_stale_next_step(self):
         prd = Path("./docs/PRD.md").read_text()
