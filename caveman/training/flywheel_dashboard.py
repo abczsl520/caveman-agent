@@ -22,6 +22,16 @@ from caveman.paths import (
     MEMORY_DIR, MEMORY_DB_PATH, TRAJECTORIES_DIR,
     SKILLS_DIR, WIKI_DIR,
 )
+from caveman.training._flywheel_dashboard_values import (
+    _count_value as count_value,
+    _number_value as number_value,
+    _optional_number as optional_number,
+)
+from caveman.training._flywheel_memory_diagnostics import (
+    _collect_memory_source_breakdown as collect_memory_source_breakdown,
+    _collect_memory_type_breakdown as collect_memory_type_breakdown,
+    _memory_columns as memory_columns,
+)
 
 
 def _json_from_file(path: Path) -> Any | None:
@@ -58,29 +68,6 @@ def _json_objects_from_jsonl(path: Path) -> list[dict[str, Any]]:
     return entries
 
 
-def _number(value: Any, default: float = 0.0) -> float:
-    """Parse a numeric telemetry field; fallback instead of crashing dashboard."""
-    parsed = _optional_number(value)
-    return default if parsed is None else parsed
-
-
-def _optional_number(value: Any) -> float | None:
-    """Parse a numeric telemetry field; return None for malformed values."""
-    if isinstance(value, bool):
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _count(value: Any, default: int = 0) -> int:
-    """Parse a non-negative integer telemetry counter."""
-    parsed = _number(value, float(default))
-    if parsed < 0:
-        return default
-    return int(parsed)
-
 logger = logging.getLogger(__name__)
 
 __all__ = ["FlywheelDashboard", "generate_report"]
@@ -97,6 +84,8 @@ class FlywheelDashboard:
         stats: dict[str, Any] = {
             "total": 0,
             "trust_buckets": {},
+            "source_breakdown": [],
+            "type_breakdown": [],
             "never_recalled": 0,
             "recalled": 0,
             "helpful": 0,
@@ -142,6 +131,12 @@ class FlywheelDashboard:
                     (lo, hi),
                 )
                 cast(dict[str, int], stats["trust_buckets"])[label] = cur.fetchone()[0]
+
+            columns = memory_columns(cur)
+            if {"type", "trust_score", "retrieval_count", "helpful_count"}.issubset(columns):
+                stats["type_breakdown"] = collect_memory_type_breakdown(cur)
+            if {"metadata_json", "trust_score", "retrieval_count", "helpful_count"}.issubset(columns):
+                stats["source_breakdown"] = collect_memory_source_breakdown(cur)
 
             # Decay candidates
             cur.execute(
@@ -196,10 +191,10 @@ class FlywheelDashboard:
         meta_value = data.get("metadata")
         meta = meta_value if isinstance(meta_value, dict) else data
         stats["total"] += 1
-        tc = _count(meta.get("tool_calls", data.get("tool_calls", 0)))
+        tc = count_value(meta.get("tool_calls", data.get("tool_calls", 0)))
         if tc > 0:
             stats["with_tools"] += 1
-        q = _number(meta.get("quality_score", data.get("quality_score", 0.5)), 0.5)
+        q = number_value(meta.get("quality_score", data.get("quality_score", 0.5)), 0.5)
         if q >= 0.7:
             stats["high_quality"] += 1
         elif q <= 0.4:
@@ -232,11 +227,11 @@ class FlywheelDashboard:
             for name, arm_value in arms.items():
                 if not isinstance(arm_value, dict):
                     continue
-                alpha = _optional_number(arm_value.get("alpha", 1))
-                beta = _optional_number(arm_value.get("beta", 1))
+                alpha = optional_number(arm_value.get("alpha", 1))
+                beta = optional_number(arm_value.get("beta", 1))
                 if alpha is None or beta is None or alpha < 0 or beta < 0:
                     continue
-                total_value = _optional_number(arm_value.get("total"))
+                total_value = optional_number(arm_value.get("total"))
                 total = alpha + beta - 2 if total_value is None else total_value
                 denom = alpha + beta
                 win_rate = alpha / denom if denom > 0 else 0.0
@@ -340,6 +335,24 @@ class FlywheelDashboard:
             f"   Recalled: {mem.get('recalled', 0)}, Never recalled: {mem.get('never_recalled', 0)}, "
             f"Helpful: {mem.get('helpful', 0)}, Prune candidates: {mem.get('prune_candidates', 0)}"
         )
+        source_breakdown = mem.get("source_breakdown", [])
+        if source_breakdown:
+            lines.append("   By source (top):")
+            for row in source_breakdown[:6]:
+                lines.append(
+                    "      "
+                    f"{row['label']}: n={row['total']}, avg={row['avg_trust']:.2f}, "
+                    f"never={row['never_recalled_pct']:.0%}, helpful={row['helpful_pct']:.0%}"
+                )
+        type_breakdown = mem.get("type_breakdown", [])
+        if type_breakdown:
+            lines.append("   By type:")
+            for row in type_breakdown:
+                lines.append(
+                    "      "
+                    f"{row['label']}: n={row['total']}, avg={row['avg_trust']:.2f}, "
+                    f"never={row['never_recalled_pct']:.0%}, helpful={row['helpful_pct']:.0%}"
+                )
         lines.append("")
 
         # Trajectories
