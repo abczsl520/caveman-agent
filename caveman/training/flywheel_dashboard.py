@@ -19,9 +19,67 @@ from pathlib import Path
 from typing import Any, cast
 
 from caveman.paths import (
-    MEMORY_DIR, MEMORY_DB_PATH, TRAJECTORIES_DIR, TRAINING_DIR,
+    MEMORY_DIR, MEMORY_DB_PATH, TRAJECTORIES_DIR,
     SKILLS_DIR, WIKI_DIR,
 )
+
+
+def _json_from_file(path: Path) -> Any | None:
+    """Load JSON from disk; return None for malformed/unreadable data."""
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def _json_object_from_file(path: Path) -> dict[str, Any] | None:
+    """Load a JSON object from disk; return None for malformed/non-object data."""
+    data = _json_from_file(path)
+    return cast(dict[str, Any], data) if isinstance(data, dict) else None
+
+
+def _json_objects_from_jsonl(path: Path) -> list[dict[str, Any]]:
+    """Load JSONL objects from disk, skipping malformed/non-object lines."""
+    entries: list[dict[str, Any]] = []
+    try:
+        with path.open(encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    item = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(item, dict):
+                    entries.append(cast(dict[str, Any], item))
+    except (OSError, UnicodeDecodeError):
+        return []
+    return entries
+
+
+def _number(value: Any, default: float = 0.0) -> float:
+    """Parse a numeric telemetry field; fallback instead of crashing dashboard."""
+    parsed = _optional_number(value)
+    return default if parsed is None else parsed
+
+
+def _optional_number(value: Any) -> float | None:
+    """Parse a numeric telemetry field; return None for malformed values."""
+    if isinstance(value, bool):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _count(value: Any, default: int = 0) -> int:
+    """Parse a non-negative integer telemetry counter."""
+    parsed = _number(value, float(default))
+    if parsed < 0:
+        return default
+    return int(parsed)
 
 logger = logging.getLogger(__name__)
 
@@ -116,22 +174,14 @@ class FlywheelDashboard:
             return stats
 
         quality_sum = 0.0
-        for path in traj_dir.glob("*.json"):
-            try:
-                data = json.loads(path.read_text(encoding="utf-8"))
-                meta = data.get("metadata", {})
-                stats["total"] += 1
-                tc = meta.get("tool_calls", 0)
-                if tc > 0:
-                    stats["with_tools"] += 1
-                q = meta.get("quality_score", 0.5)
-                quality_sum += q
-                if q >= 0.7:
-                    stats["high_quality"] += 1
-                elif q <= 0.4:
-                    stats["low_quality"] += 1
-            except (json.JSONDecodeError, OSError):
+        for path in traj_dir.rglob("*.json"):
+            data = _json_object_from_file(path)
+            if data is None:
                 continue
+            quality_sum += self._accumulate_trajectory(stats, data)
+        for path in traj_dir.rglob("*.jsonl"):
+            for data in _json_objects_from_jsonl(path):
+                quality_sum += self._accumulate_trajectory(stats, data)
 
         if stats["total"] > 0:
             stats["avg_quality"] = round(quality_sum / stats["total"], 3)
@@ -139,6 +189,22 @@ class FlywheelDashboard:
         stats["status"] = "ok"
         self.metrics["trajectories"] = stats
         return stats
+
+    @staticmethod
+    def _accumulate_trajectory(stats: dict[str, Any], data: dict[str, Any]) -> float:
+        """Accumulate one trajectory-like object and return its quality contribution."""
+        meta_value = data.get("metadata")
+        meta = meta_value if isinstance(meta_value, dict) else data
+        stats["total"] += 1
+        tc = _count(meta.get("tool_calls", data.get("tool_calls", 0)))
+        if tc > 0:
+            stats["with_tools"] += 1
+        q = _number(meta.get("quality_score", data.get("quality_score", 0.5)), 0.5)
+        if q >= 0.7:
+            stats["high_quality"] += 1
+        elif q <= 0.4:
+            stats["low_quality"] += 1
+        return q
 
     def collect_rl_router_stats(self) -> dict:
         """Collect RL Router arm statistics."""
@@ -150,19 +216,29 @@ class FlywheelDashboard:
             return stats
 
         try:
-            data = json.loads(state_path.read_text(encoding="utf-8"))
-            arms = data.get("arms", {})
-            for name, arm in arms.items():
-                alpha = arm.get("alpha", 1)
-                beta = arm.get("beta", 1)
+            data = _json_object_from_file(state_path)
+            if data is None:
+                stats["status"] = "error: invalid state file"
+                self.metrics["rl_router"] = stats
+                return stats
+            arms_value = data.get("arms", {})
+            arms = arms_value if isinstance(arms_value, dict) else {}
+            for name, arm_value in arms.items():
+                if not isinstance(arm_value, dict):
+                    continue
+                alpha = _optional_number(arm_value.get("alpha", 1))
+                beta = _optional_number(arm_value.get("beta", 1))
+                if alpha is None or beta is None or alpha < 0 or beta < 0:
+                    continue
                 total = alpha + beta - 2  # subtract priors
-                win_rate = alpha / (alpha + beta) if (alpha + beta) > 0 else 0
-                cast(dict[str, dict[str, Any]], stats["arms"])[name] = {
+                denom = alpha + beta
+                win_rate = alpha / denom if denom > 0 else 0.0
+                cast(dict[str, dict[str, Any]], stats["arms"])[str(name)] = {
                     "alpha": alpha, "beta": beta,
-                    "updates": max(0, total),
+                    "updates": max(0, int(total)),
                     "win_rate": round(win_rate, 3),
                 }
-                stats["total_updates"] += max(0, total)
+                stats["total_updates"] += max(0, int(total))
             stats["status"] = "ok"
         except Exception as e:
             stats["status"] = f"error: {e}"
@@ -183,8 +259,14 @@ class FlywheelDashboard:
             for tier in ["working", "episodic", "semantic", "procedural"]:
                 tier_file = wiki_dir / f"{tier}.json"
                 if tier_file.exists():
-                    data = json.loads(tier_file.read_text(encoding="utf-8"))
-                    count = len(data) if isinstance(data, list) else 0
+                    data = _json_from_file(tier_file)
+                    if isinstance(data, list):
+                        count = len(data)
+                    elif isinstance(data, dict):
+                        entries = data.get("entries", data.get("items", []))
+                        count = len(entries) if isinstance(entries, list) else 0
+                    else:
+                        count = 0
                     cast(dict[str, int], stats["tiers"])[tier] = count
                     stats["total_entries"] += count
                 else:
