@@ -32,6 +32,15 @@ __all__ = [
 logger = logging.getLogger(__name__)
 
 
+def _optional_str(value: Any) -> str:
+    """Return string import fields without turning None/containers into text."""
+    if value is None:
+        return ""
+    if isinstance(value, (str, int, float)):
+        return str(value)
+    return ""
+
+
 @dataclass
 class ToolCall:
     """A single tool invocation within an assistant turn."""
@@ -52,7 +61,8 @@ class ToolCall:
     def sent_message(self) -> str:
         """The text sent to the user, if this is a message send."""
         if self.is_message_send:
-            return self.arguments.get("message", "")
+            message = self.arguments.get("message", "")
+            return message if isinstance(message, str) else ""
         return ""
 
     @property
@@ -223,8 +233,6 @@ def parse_session(path: Path) -> ParsedSession | None:
         return None
 
     metadata = SessionMetadata()
-    # Pending tool results keyed by tool call ID
-    pending_results: dict[str, str] = {}
     turns: list[ConversationTurn] = []
     current_turn: ConversationTurn | None = None
     turn_index = 0
@@ -241,23 +249,26 @@ def parse_session(path: Path) -> ParsedSession | None:
         if not line_text:
             continue
         try:
-            obj = json.loads(line_text)
+            loaded = json.loads(line_text)
         except json.JSONDecodeError:
             continue
+        if not isinstance(loaded, dict):
+            continue
+        obj = loaded
 
         obj_type = obj.get("type", "")
 
         # --- Session header ---
         if obj_type == "session":
-            metadata.session_id = obj.get("id", "")
-            metadata.timestamp = obj.get("timestamp", "")
-            metadata.cwd = obj.get("cwd", "")
+            metadata.session_id = _optional_str(obj.get("id"))
+            metadata.timestamp = _optional_str(obj.get("timestamp"))
+            metadata.cwd = _optional_str(obj.get("cwd"))
             continue
 
         # --- Model info ---
         if obj_type == "model_change":
-            metadata.provider = obj.get("provider", "")
-            metadata.model_id = obj.get("modelId", "")
+            metadata.provider = _optional_str(obj.get("provider"))
+            metadata.model_id = _optional_str(obj.get("modelId"))
             continue
 
         # --- Messages ---
@@ -265,6 +276,8 @@ def parse_session(path: Path) -> ParsedSession | None:
             continue
 
         msg = obj.get("message", {})
+        if not isinstance(msg, dict):
+            continue
         role = msg.get("role", "")
         timestamp = obj.get("timestamp", "")
         content = msg.get("content", [])
@@ -289,28 +302,30 @@ def parse_session(path: Path) -> ParsedSession | None:
                     block_type = block.get("type", "")
 
                     if block_type == "text":
-                        text = block.get("text", "").strip()
+                        text_value = block.get("text", "")
+                        text = text_value.strip() if isinstance(text_value, str) else ""
                         if text:
                             current_turn.assistant_texts.append(text)
 
                     elif block_type == "thinking":
-                        thinking = block.get("thinking", "").strip()
+                        thinking_value = block.get("thinking", "")
+                        thinking = thinking_value.strip() if isinstance(thinking_value, str) else ""
                         if thinking:
                             current_turn.thinking_text += thinking + "\n"
 
                     elif block_type == "toolCall":
+                        tool_name = block.get("name", block.get("toolName", ""))
+                        arguments = block.get("arguments", block.get("input", {}))
                         tc = ToolCall(
-                            name=block.get("name", block.get("toolName", "")),
-                            arguments=block.get("arguments", block.get("input", {})),
-                            call_id=block.get("id", ""),
+                            name=str(tool_name or ""),
+                            arguments=arguments if isinstance(arguments, dict) else {},
+                            call_id=_optional_str(block.get("id")),
                         )
                         current_turn.tool_calls.append(tc)
 
         elif role == "toolResult" and current_turn is not None:
             # Match tool results back to their calls
             result_text = _extract_text_from_content(content)
-            # Try to match by parent message ID
-            parent_id = obj.get("parentId", "")
             # Store for potential matching
             if result_text:
                 # Find the most recent unmatched tool call
@@ -341,7 +356,9 @@ def _extract_text_from_content(content: Any) -> str:
         parts = []
         for block in content:
             if isinstance(block, dict) and block.get("type") == "text":
-                parts.append(block.get("text", ""))
+                value = block.get("text", "")
+                if isinstance(value, str):
+                    parts.append(value)
             elif isinstance(block, str):
                 parts.append(block)
         return "\n".join(parts).strip()
@@ -353,7 +370,7 @@ def scan_sessions(sessions_dir: Path) -> list[Path]:
     if not sessions_dir.is_dir():
         return []
 
-    results = []
+    results: list[Path] = []
     for f in sorted(sessions_dir.iterdir()):
         if not f.name.endswith(".jsonl"):
             continue

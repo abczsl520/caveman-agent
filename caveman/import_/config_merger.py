@@ -40,7 +40,7 @@ class ConfigMerger:
     def merge_hermes_yaml(self, raw: str) -> dict:
         """Extract model/providers from Hermes config.yaml content."""
         try:
-            import yaml
+            import yaml  # type: ignore[import-untyped]
             data = yaml.safe_load(raw) or {}
         except Exception:
             logger.warning("Invalid hermes config.yaml")

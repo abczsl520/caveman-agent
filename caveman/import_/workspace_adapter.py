@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 # ─── Tool Name Mapping ───────────────────────────────────────────────────────
 # OpenClaw tool → Caveman tool
-_TOOL_MAP: dict[str, str] = {
+_TOOL_MAP: dict[str, str | None] = {
     "message": "progress",
     "exec": "bash",
     "read": "file_read",
@@ -68,7 +68,6 @@ def adapt_workspace_content(filename: str, content: str) -> str:
     Returns:
         Adapted content suitable for Caveman
     """
-    original = content
     adaptations: list[str] = []
 
     # 1. Replace compound patterns FIRST (before individual tool names change)

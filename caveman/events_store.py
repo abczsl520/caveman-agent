@@ -14,7 +14,7 @@ import sqlite3
 
 from caveman.db import connect as db_connect
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, cast
 
 from caveman.events import Event, EventBus
 from caveman.paths import CAVEMAN_HOME
@@ -112,7 +112,7 @@ class EventStore:
             ).fetchone()
         else:
             row = self._conn.execute("SELECT COUNT(*) FROM events").fetchone()
-        return row[0]
+        return cast(int, row[0])
 
     def distinct_types(self) -> list[str]:
         """List all distinct event types stored."""
