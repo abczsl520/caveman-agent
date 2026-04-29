@@ -4,10 +4,10 @@ import logging
 import os
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 try:
-    import yaml
+    import yaml  # type: ignore[import-untyped]
 except ImportError:
     yaml = None
 
@@ -60,7 +60,7 @@ def _resolve_env_vars(obj: Any) -> Any:
     return obj
 
 
-def _deep_merge(base: dict, override: dict) -> dict:
+def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
     result = base.copy()
     for k, v in override.items():
         if k in result and isinstance(result[k], dict) and isinstance(v, dict):
@@ -70,7 +70,7 @@ def _deep_merge(base: dict, override: dict) -> dict:
     return result
 
 
-def load_config(config_path: Path | str | None = None, validate: bool = True) -> dict:
+def load_config(config_path: Path | str | None = None, validate: bool = True) -> dict[str, Any]:
     """Load config: bundled defaults → user config → env vars → validate.
 
     Results are cached by file path + mtime. Subsequent calls with the same
@@ -89,18 +89,28 @@ def load_config(config_path: Path | str | None = None, validate: bool = True) ->
 
     cached = _cache.get(key)
     if cached and cached["mtime"] == combined_mtime:
-        return cached["config"]
+        return cast(dict[str, Any], cached["config"])
 
     # Cache miss — load from disk
-    config = {}
+    config: dict[str, Any] = {}
     if BUNDLED_DEFAULT.exists():
         with open(BUNDLED_DEFAULT, encoding="utf-8") as f:
-            config = yaml.safe_load(f) or {}
+            loaded = yaml.safe_load(f)
+            if loaded is None:
+                loaded = {}
+            if not isinstance(loaded, dict):
+                raise TypeError("bundled config must be a mapping")
+            config = loaded
     if user_path.exists():
         with open(user_path, encoding="utf-8") as f:
-            user_config = yaml.safe_load(f) or {}
+            loaded_user = yaml.safe_load(f)
+        if loaded_user is None:
+            loaded_user = {}
+        if not isinstance(loaded_user, dict):
+            raise TypeError(f"config file must be a mapping: {user_path}")
+        user_config = loaded_user
         config = _deep_merge(config, user_config)
-    resolved = _resolve_env_vars(config)
+    resolved = cast(dict[str, Any], _resolve_env_vars(config))
 
     if validate:
         from caveman.config.validator import validate_config

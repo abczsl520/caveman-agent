@@ -1,17 +1,15 @@
 """Shared utilities for command handlers. Eliminates repeated patterns."""
 from __future__ import annotations
 
-import logging
-
-logger = logging.getLogger(__name__)
-
 import json
-import sqlite3
+import logging
+from pathlib import Path
+from typing import cast
 
 from caveman.db import connect as db_connect
-from pathlib import Path
-
 from caveman.paths import CAVEMAN_HOME
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "read_json",
@@ -34,7 +32,8 @@ def read_json(filename: str) -> dict | list | None:
     if not path.exists():
         return None
     try:
-        return json.loads(path.read_text())
+        data = json.loads(path.read_text())
+        return data if isinstance(data, (dict, list)) else None
     except Exception as e:
         logger.debug("suppressed: %s", e)
         return None
@@ -61,7 +60,7 @@ def memory_count() -> int:
         conn = db_connect(db)
         count = conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
         conn.close()
-        return count
+        return cast(int, count)
     except Exception:
         return 0
 

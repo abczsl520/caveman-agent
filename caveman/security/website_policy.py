@@ -21,12 +21,30 @@ logger = logging.getLogger(__name__)
 _CACHE_TTL = 30  # seconds
 _cache: dict[str, Any] = {"policy": None, "loaded_at": 0.0}
 
-_DEFAULT_POLICY = {
+_DEFAULT_POLICY: dict[str, Any] = {
     "enabled": False,
     "blocked_domains": [],
     "allowed_domains": [],  # If non-empty, only these are allowed (allowlist mode)
     "shared_files": [],
 }
+
+
+def _string_list(value: Any) -> list[str] | None:
+    """Normalize policy list fields from untrusted config.
+
+    Returns None when a truthy non-list value is supplied, so security-sensitive
+    allow/block lists can fail closed instead of silently being ignored.
+    """
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        return None
+    values: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            return None
+        values.append(item)
+    return values
 
 
 def check_url(url: str, config: dict[str, Any] | None = None) -> tuple[bool, str]:
@@ -54,20 +72,27 @@ def check_url(url: str, config: dict[str, Any] | None = None) -> tuple[bool, str
         return False, "no hostname"
 
     # Allowlist mode: if allowed_domains is set, only those are permitted
-    allowed = policy.get("allowed_domains", [])
+    allowed = _string_list(policy.get("allowed_domains", []))
+    if allowed is None:
+        return False, "malformed allowed_domains"
     if allowed:
         if not _matches_any(hostname, allowed):
-            return False, f"not in allowlist"
+            return False, "not in allowlist"
         return True, ""
 
     # Blocklist mode
-    blocked = policy.get("blocked_domains", [])
+    blocked = _string_list(policy.get("blocked_domains", []))
+    if blocked is None:
+        return False, "malformed blocked_domains"
     # Load shared files
-    for shared_file in policy.get("shared_files", []):
+    shared_files = _string_list(policy.get("shared_files", []))
+    if shared_files is None:
+        return False, "malformed shared_files"
+    for shared_file in shared_files:
         blocked.extend(_load_shared_file(shared_file))
 
     if _matches_any(hostname, blocked):
-        return False, f"blocked by policy"
+        return False, "blocked by policy"
 
     return True, ""
 
@@ -94,7 +119,8 @@ def _get_policy() -> dict[str, Any]:
     """Get cached policy, reloading from config if TTL expired."""
     now = time.time()
     if _cache["policy"] is not None and (now - _cache["loaded_at"]) < _CACHE_TTL:
-        return _cache["policy"]
+        policy = _cache["policy"]
+        return policy if isinstance(policy, dict) else dict(_DEFAULT_POLICY)
 
     policy = _load_policy_from_config()
     _cache["policy"] = policy
@@ -107,7 +133,8 @@ def _load_policy_from_config() -> dict[str, Any]:
     try:
         from caveman.config.loader import load_config
         config = load_config()
-        return config.get("website_policy", dict(_DEFAULT_POLICY))
+        policy = config.get("website_policy", dict(_DEFAULT_POLICY))
+        return policy if isinstance(policy, dict) else dict(_DEFAULT_POLICY)
     except Exception:
         return dict(_DEFAULT_POLICY)
 

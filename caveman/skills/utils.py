@@ -19,7 +19,7 @@ import os
 import re
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, cast
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +32,7 @@ PLATFORM_MAP = {
 _EXCLUDED_DIRS = frozenset((".git", ".github", ".hub", "__pycache__", "node_modules"))
 
 # Lazy YAML loader
-_yaml_load_fn = None
+_yaml_load_fn: Callable[[str], Any] | None = None
 
 
 def _yaml_load(content: str) -> Any:
@@ -40,7 +40,7 @@ def _yaml_load(content: str) -> Any:
     global _yaml_load_fn
     if _yaml_load_fn is None:
         try:
-            import yaml
+            import yaml  # type: ignore[import-untyped]
             loader = getattr(yaml, "CSafeLoader", None) or yaml.SafeLoader
             _yaml_load_fn = lambda v: yaml.load(v, Loader=loader)  # noqa: E731
         except ImportError:
@@ -66,7 +66,7 @@ def parse_frontmatter(content: str) -> tuple[dict[str, Any], str]:
     try:
         parsed = _yaml_load(yaml_content)
         if isinstance(parsed, dict):
-            return parsed, body
+            return cast(dict[str, Any], parsed), body
     except Exception:
         # Fallback: simple key:value parsing
         fm: dict[str, Any] = {}
