@@ -104,6 +104,9 @@ class SQLiteMemoryStore:
         """Hybrid recall: FTS5 candidates → Jaccard + trust + decay reranking."""
         from caveman.memory.retrieval import HybridScorer, expand_query_cross_lang
 
+        if not query.strip():
+            return []
+
         conn = self._get_conn()
         scorer = HybridScorer(**self._scorer_config)
 
