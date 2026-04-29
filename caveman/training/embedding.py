@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -192,7 +193,22 @@ class EmbeddingTrainer:
         """Train embedding model. Requires sentence-transformers installed."""
         try:
             from sentence_transformers import SentenceTransformer, InputExample
-            from sentence_transformers.losses import MultipleNegativesRankingLoss, TripletLoss
+            try:
+                from sentence_transformers.sentence_transformer.losses import (
+                    MultipleNegativesRankingLoss,
+                    TripletLoss,
+                )
+            except ImportError:
+                with warnings.catch_warnings():
+                    warnings.filterwarnings(
+                        "ignore",
+                        message="Importing from 'sentence_transformers.losses' is deprecated.*",
+                        category=DeprecationWarning,
+                    )
+                    from sentence_transformers.losses import (  # type: ignore[no-redef]
+                        MultipleNegativesRankingLoss,
+                        TripletLoss,
+                    )
             from torch.utils.data import DataLoader
         except ImportError:
             return {
@@ -230,7 +246,7 @@ class EmbeddingTrainer:
                 "reason": f"embedding base model unavailable: {e}",
                 "dataset": str(dataset_path),
             }
-        objectives = []
+        objectives: list[tuple[Any, Any]] = []
         if triplet_examples:
             triplet_dataloader = DataLoader(
                 cast(Any, triplet_examples), shuffle=True, batch_size=self.config.batch_size
@@ -245,12 +261,19 @@ class EmbeddingTrainer:
         output_dir = Path(self.config.output_dir or "")
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        model.fit(
-            train_objectives=objectives,
-            epochs=self.config.epochs,
-            warmup_steps=int(sum(len(loader) for loader, _ in objectives) * self.config.warmup_ratio),
-            output_path=str(output_dir),
-        )
+        try:
+            model.fit(
+                train_objectives=objectives,
+                epochs=self.config.epochs,
+                warmup_steps=int(sum(len(loader) for loader, _ in objectives) * self.config.warmup_ratio),
+                output_path=str(output_dir),
+            )
+        except ImportError as e:
+            return {
+                "status": "skip",
+                "reason": f"optional embedding training dependency unavailable: {e}",
+                "dataset": str(dataset_path),
+            }
 
         return {
             "status": "success",

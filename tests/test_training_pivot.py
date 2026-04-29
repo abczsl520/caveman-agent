@@ -89,6 +89,65 @@ class TestEmbeddingTrainer:
         assert result["status"] in ("success", "skip")
 
 
+    def test_train_skips_when_optional_fit_dependency_missing(self, tmp_path, monkeypatch):
+        """Runtime optional dependency gaps from sentence-transformers fit should skip."""
+        from caveman.training.embedding import EmbeddingTrainer, EmbeddingTrainConfig
+
+        dataset = tmp_path / "pairs.jsonl"
+        dataset.write_text(json.dumps({"query": "test", "positive": "answer"}) + "\n")
+        config = EmbeddingTrainConfig(output_dir=str(tmp_path / "out"))
+        trainer = EmbeddingTrainer(config)
+
+        class FakeModel:
+            def fit(self, **_kwargs):
+                raise ImportError("Please install `datasets` to use this function: `pip install datasets`.")
+
+        class FakeInputExample:
+            def __init__(self, texts):
+                self.texts = texts
+
+        class FakeMultipleNegativesRankingLoss:
+            def __init__(self, model):
+                self.model = model
+
+        class FakeTripletLoss:
+            def __init__(self, model):
+                self.model = model
+
+        class FakeDataLoader:
+            def __init__(self, examples, shuffle, batch_size):
+                self.examples = list(examples)
+                self.shuffle = shuffle
+                self.batch_size = batch_size
+
+            def __len__(self):
+                return 1
+
+        import sys
+        import types
+        fake_st = types.ModuleType("sentence_transformers")
+        fake_st.SentenceTransformer = lambda _model_name: FakeModel()
+        fake_st.InputExample = FakeInputExample
+        fake_losses = types.ModuleType("sentence_transformers.losses")
+        fake_losses.MultipleNegativesRankingLoss = FakeMultipleNegativesRankingLoss
+        fake_losses.TripletLoss = FakeTripletLoss
+        fake_torch = types.ModuleType("torch")
+        fake_torch_utils = types.ModuleType("torch.utils")
+        fake_torch_data = types.ModuleType("torch.utils.data")
+        fake_torch_data.DataLoader = FakeDataLoader
+        monkeypatch.setitem(sys.modules, "sentence_transformers", fake_st)
+        monkeypatch.setitem(sys.modules, "sentence_transformers.losses", fake_losses)
+        monkeypatch.setitem(sys.modules, "sentence_transformers.sentence_transformer.losses", fake_losses)
+        monkeypatch.setitem(sys.modules, "torch", fake_torch)
+        monkeypatch.setitem(sys.modules, "torch.utils", fake_torch_utils)
+        monkeypatch.setitem(sys.modules, "torch.utils.data", fake_torch_data)
+
+        result = trainer.train(dataset)
+
+        assert result["status"] == "skip"
+        assert "datasets" in result["reason"]
+
+
     def test_train_uses_triplet_loss_for_explicit_negatives(self, tmp_path, monkeypatch):
         """Adoption hard negatives must affect the actual trainer, not just JSONL."""
         from caveman.training.embedding import EmbeddingTrainer, EmbeddingTrainConfig
@@ -142,6 +201,7 @@ class TestEmbeddingTrainer:
         fake_torch_data.DataLoader = FakeDataLoader
         monkeypatch.setitem(sys.modules, "sentence_transformers", fake_st)
         monkeypatch.setitem(sys.modules, "sentence_transformers.losses", fake_losses)
+        monkeypatch.setitem(sys.modules, "sentence_transformers.sentence_transformer.losses", None)
         monkeypatch.setitem(sys.modules, "torch", fake_torch)
         monkeypatch.setitem(sys.modules, "torch.utils", fake_torch_utils)
         monkeypatch.setitem(sys.modules, "torch.utils.data", fake_torch_data)
@@ -218,6 +278,7 @@ class TestEmbeddingTrainer:
         fake_torch_data.DataLoader = FakeDataLoader
         monkeypatch.setitem(sys.modules, "sentence_transformers", fake_st)
         monkeypatch.setitem(sys.modules, "sentence_transformers.losses", fake_losses)
+        monkeypatch.setitem(sys.modules, "sentence_transformers.sentence_transformer.losses", None)
         monkeypatch.setitem(sys.modules, "torch", fake_torch)
         monkeypatch.setitem(sys.modules, "torch.utils", fake_torch_utils)
         monkeypatch.setitem(sys.modules, "torch.utils.data", fake_torch_data)
