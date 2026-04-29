@@ -71,6 +71,30 @@ def test_collect_rl_router_stats_ignores_malformed_arms(tmp_path, monkeypatch):
     }
 
 
+def test_collect_rl_router_stats_accepts_direct_skill_router_state(tmp_path, monkeypatch):
+    skills_dir = tmp_path / "skills"
+    skills_dir.mkdir()
+    (skills_dir / ".rl_router_state.json").write_text(
+        json.dumps(
+            {
+                "alpha_skill": {"alpha": 4, "beta": 2, "total": 4},
+                "beta_skill": {"alpha": "2", "beta": "5", "total": "5"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("caveman.training.flywheel_dashboard.SKILLS_DIR", skills_dir)
+
+    stats = FlywheelDashboard().collect_rl_router_stats()
+
+    assert stats["status"] == "ok"
+    assert stats["total_updates"] == 9
+    assert stats["arms"] == {
+        "alpha_skill": {"alpha": 4.0, "beta": 2.0, "updates": 4, "win_rate": 0.667},
+        "beta_skill": {"alpha": 2.0, "beta": 5.0, "updates": 5, "win_rate": 0.286},
+    }
+
+
 def test_collect_rl_router_stats_reports_invalid_state_file(tmp_path, monkeypatch):
     skills_dir = tmp_path / "skills"
     skills_dir.mkdir()

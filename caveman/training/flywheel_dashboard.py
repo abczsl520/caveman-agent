@@ -221,7 +221,13 @@ class FlywheelDashboard:
                 stats["status"] = "error: invalid state file"
                 self.metrics["rl_router"] = stats
                 return stats
-            arms_value = data.get("arms", {})
+            arms_value = data.get("arms")
+            if arms_value is None:
+                # Current SkillRLRouter persists the arm map directly as
+                # {skill_name: {alpha, beta, total}}. Older/alternate snapshots
+                # may wrap it under {"arms": ...}; accept both so the dashboard
+                # reflects the actual feedback signal instead of reporting zero.
+                arms_value = data
             arms = arms_value if isinstance(arms_value, dict) else {}
             for name, arm_value in arms.items():
                 if not isinstance(arm_value, dict):
@@ -230,15 +236,17 @@ class FlywheelDashboard:
                 beta = _optional_number(arm_value.get("beta", 1))
                 if alpha is None or beta is None or alpha < 0 or beta < 0:
                     continue
-                total = alpha + beta - 2  # subtract priors
+                total_value = _optional_number(arm_value.get("total"))
+                total = alpha + beta - 2 if total_value is None else total_value
                 denom = alpha + beta
                 win_rate = alpha / denom if denom > 0 else 0.0
+                updates = max(0, int(total))
                 cast(dict[str, dict[str, Any]], stats["arms"])[str(name)] = {
                     "alpha": alpha, "beta": beta,
-                    "updates": max(0, int(total)),
+                    "updates": updates,
                     "win_rate": round(win_rate, 3),
                 }
-                stats["total_updates"] += max(0, int(total))
+                stats["total_updates"] += updates
             stats["status"] = "ok"
         except Exception as e:
             stats["status"] = f"error: {e}"
