@@ -84,7 +84,7 @@ def generate_hints(
     if not root_path.exists():
         return []
 
-    hints = []
+    hints: List[DirHint] = []
     _scan_dir(root_path, root_path, hints, depth=0, max_depth=max_depth, max_files=max_files_per_dir)
     return hints
 

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
+from typing import Any, cast
 
 # Defaults — tuned for concurrent async access
 from caveman.timeouts import SQLITE_BUSY, SQLITE_CONNECT
@@ -28,14 +29,22 @@ def connect(
     foreign_keys: bool = True,
     row_factory: type | None = None,
     isolation_level: str | None = "DEFERRED",
-    **kwargs,
+    **kwargs: Any,
 ) -> sqlite3.Connection:
     """Create a SQLite connection with production-safe defaults.
 
     All PRAGMA settings are applied automatically. Callers don't need
     to remember WAL/busy_timeout/foreign_keys.
     """
-    conn = sqlite3.connect(str(path), timeout=SQLITE_CONNECT, isolation_level=isolation_level, **kwargs)
+    conn = cast(
+        sqlite3.Connection,
+        sqlite3.connect(
+            str(path),
+            timeout=SQLITE_CONNECT,
+            isolation_level=cast(Any, isolation_level),
+            **kwargs,
+        ),
+    )
     conn.execute(f"PRAGMA journal_mode={journal_mode}")
     conn.execute(f"PRAGMA busy_timeout={busy_timeout}")
     if foreign_keys:

@@ -1180,6 +1180,8 @@ Rate Limiter — token bucket algorithm for API rate limiting. Provides per-key 
 
 Redaction Engine — PII and secret detection/masking. Detects and redacts sensitive information from text before it's sent to external services or displayed. Extracted from Hermes agent/redact.py + OpenClaw redaction patt
 
+**Classes:** `DetectionFinding`
+
 **Functions:** `redact_secrets()`, `redact_pii()`, `redact_all()`, `detect_secrets()`, `detect_pii()`, `is_safe_for_external()`
 
 ## `caveman.gateway.reply_queue`

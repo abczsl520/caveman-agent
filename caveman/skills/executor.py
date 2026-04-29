@@ -47,7 +47,7 @@ class SkillExecutor:
         """
         self._dispatch = tool_dispatch_fn
 
-    async def execute(self, skill: Skill, context: dict[str, Any] = None) -> SkillResult:
+    async def execute(self, skill: Skill, context: dict[str, Any] | None = None) -> SkillResult:
         """Execute a skill's steps and check quality gates."""
         context = context or {}
         result = SkillResult(skill_name=skill.name)

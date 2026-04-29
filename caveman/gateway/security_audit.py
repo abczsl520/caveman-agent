@@ -126,7 +126,7 @@ def _check_credential_exposure() -> List[AuditFinding]:
 
 def _check_config_safety(home: Path) -> List[AuditFinding]:
     """Check configuration for unsafe settings."""
-    findings = []
+    findings: List[AuditFinding] = []
     config_path = home / "config.json"
     if not config_path.exists():
         return findings

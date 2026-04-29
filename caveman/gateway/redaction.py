@@ -7,7 +7,7 @@ agent/redact.py + OpenClaw redaction patterns.
 from __future__ import annotations
 
 import re
-from typing import Dict, List, Tuple
+from typing import List, Tuple, TypedDict
 
 __all__ = [
     "PREFIX_RE",
@@ -52,6 +52,15 @@ _PII_PATTERNS: List[Tuple[str, re.Pattern]] = [
     ("ip_address", re.compile(r"\b(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\b")),
 ]
 
+
+class DetectionFinding(TypedDict):
+    """Location and preview for a redaction detector match."""
+
+    type: str
+    start: int
+    end: int
+    preview: str
+
 # Prefix pattern for URL exfiltration detection
 PREFIX_RE = re.compile(
     r"(?:sk-[a-zA-Z0-9]|ghp_|github_pat_|AKIA|xox[bpras]-|Bearer\s)",
@@ -80,9 +89,9 @@ def redact_all(text: str) -> str:
     return text
 
 
-def detect_secrets(text: str) -> List[Dict[str, str]]:
+def detect_secrets(text: str) -> list[DetectionFinding]:
     """Detect secrets in text without redacting. Returns list of findings."""
-    findings = []
+    findings: list[DetectionFinding] = []
     for name, pattern in _SECRET_PATTERNS:
         for match in pattern.finditer(text):
             findings.append({
@@ -94,9 +103,9 @@ def detect_secrets(text: str) -> List[Dict[str, str]]:
     return findings
 
 
-def detect_pii(text: str) -> List[Dict[str, str]]:
+def detect_pii(text: str) -> list[DetectionFinding]:
     """Detect PII in text without redacting."""
-    findings = []
+    findings: list[DetectionFinding] = []
     for name, pattern in _PII_PATTERNS:
         for match in pattern.finditer(text):
             findings.append({
