@@ -16,6 +16,7 @@ import json
 import logging
 from datetime import datetime
 from pathlib import Path
+from typing import Any, cast
 
 import httpx
 from caveman.aio import aio_exists, aio_is_dir, aio_mkdir
@@ -29,9 +30,23 @@ __all__ = [
 
 
 logger = logging.getLogger(__name__)
-
 # Default hub URL (future)
 HUB_URL = "https://hub.cavemanagent.ai"
+
+
+def _json_object(resp: httpx.Response) -> dict[str, Any]:
+    data = resp.json()
+    if isinstance(data, dict):
+        return data
+    return {}
+
+
+def _dict_items(value: Any) -> list[dict[Any, Any]]:
+    if not isinstance(value, list):
+        return []
+    if not all(isinstance(item, dict) for item in value):
+        return []
+    return value
 
 
 class HubClient:
@@ -60,7 +75,7 @@ class HubClient:
                     headers=self._headers(),
                 )
                 resp.raise_for_status()
-                return resp.json().get("skills", [])
+                return _dict_items(_json_object(resp).get("skills"))
         except (httpx.ConnectError, httpx.HTTPStatusError, httpx.TimeoutException) as e:
             logger.warning("Hub unreachable: %s", e)
             return self._search_local_cache(query)
@@ -76,7 +91,8 @@ class HubClient:
                 if resp.status_code == 404:
                     return None
                 resp.raise_for_status()
-                return resp.json()
+                skill = _json_object(resp)
+                return skill or None
         except (httpx.ConnectError, httpx.HTTPStatusError, httpx.TimeoutException):
             return None
 
@@ -93,7 +109,7 @@ class HubClient:
 
         # Write skill file
         skill_file = target / "skill.yaml"
-        import yaml
+        import yaml  # type: ignore[import-untyped]
         with open(skill_file, "w", encoding="utf-8") as f:
             yaml.safe_dump(skill_data, f, default_flow_style=False, allow_unicode=True)
 
@@ -108,9 +124,12 @@ class HubClient:
         if not await aio_exists(skill_file):
             return {"ok": False, "error": f"Skill file not found: {skill_file}"}
 
-        import yaml
+        import yaml  # type: ignore[import-untyped]
         with open(skill_file, encoding="utf-8") as f:
-            skill_data = yaml.safe_load(f)
+            loaded_skill = yaml.safe_load(f)
+        if not isinstance(loaded_skill, dict):
+            return {"ok": False, "error": "Skill file must contain a mapping"}
+        skill_data = cast(dict[str, Any], loaded_skill)
 
         skill_data["published_at"] = datetime.now().isoformat()
 
@@ -122,7 +141,8 @@ class HubClient:
                     json=skill_data,
                 )
                 resp.raise_for_status()
-                return {"ok": True, "result": resp.json()}
+                result = _json_object(resp)
+                return {"ok": True, "result": result}
         except (httpx.ConnectError, httpx.HTTPStatusError, httpx.TimeoutException) as e:
             return {"ok": False, "error": str(e)}
 
@@ -136,7 +156,7 @@ class HubClient:
                     headers=self._headers(),
                 )
                 resp.raise_for_status()
-                return resp.json().get("plugins", [])
+                return _dict_items(_json_object(resp).get("plugins"))
         except (httpx.ConnectError, httpx.HTTPStatusError, httpx.TimeoutException):
             return []
 
@@ -149,7 +169,8 @@ class HubClient:
                     headers=self._headers(),
                 )
                 resp.raise_for_status()
-                return resp.json()
+                stats = _json_object(resp)
+                return stats or {"status": "offline", "note": "Hub returned invalid stats"}
         except (httpx.ConnectError, httpx.HTTPStatusError, httpx.TimeoutException):
             return {"status": "offline", "note": "Hub not reachable"}
 
@@ -159,11 +180,15 @@ class HubClient:
         try:
             with open(cache_file, encoding="utf-8") as f:
                 skills = json.load(f)
+            dict_skills = _dict_items(skills)
             if query:
                 query_lower = query.lower()
-                return [s for s in skills if query_lower in s.get("name", "").lower()
-                        or query_lower in s.get("description", "").lower()]
-            return skills
+                return [
+                    s for s in dict_skills
+                    if query_lower in str(s.get("name", "")).lower()
+                    or query_lower in str(s.get("description", "")).lower()
+                ]
+            return dict_skills
         except (json.JSONDecodeError, IOError, FileNotFoundError):
             return []
 
