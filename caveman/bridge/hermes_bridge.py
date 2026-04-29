@@ -20,6 +20,21 @@ from caveman.timeouts import HTTP_SLOW
 logger = logging.getLogger(__name__)
 
 
+def _json_object(resp: httpx.Response) -> dict[str, Any]:
+    data = resp.json()
+    if isinstance(data, dict):
+        return data
+    return {}
+
+
+def _dict_items(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    if not all(isinstance(item, dict) for item in value):
+        return []
+    return value
+
+
 class HermesBridge:
     """Bridge to Hermes Agent. Enables bidirectional skill/trajectory exchange."""
 
@@ -82,7 +97,8 @@ class HermesBridge:
             json={"task": task, "context": context or {}},
         )
         resp.raise_for_status()
-        return resp.json().get("result", "")
+        result = _json_object(resp).get("result", "")
+        return result if isinstance(result, str) else ""
 
     # --- Skill Exchange ---
 
@@ -93,7 +109,7 @@ class HermesBridge:
             f"{self.base_url}/api/skills", headers=self._headers()
         )
         resp.raise_for_status()
-        return resp.json().get("skills", [])
+        return _dict_items(_json_object(resp).get("skills"))
 
     async def import_skill(self, skill_name: str) -> dict:
         self._ensure_connected()
@@ -102,7 +118,7 @@ class HermesBridge:
             f"{self.base_url}/api/skills/{skill_name}", headers=self._headers()
         )
         resp.raise_for_status()
-        hermes_skill = resp.json()
+        hermes_skill = _json_object(resp)
         return {
             "name": hermes_skill.get("name", skill_name),
             "description": hermes_skill.get("description", ""),
@@ -140,7 +156,7 @@ class HermesBridge:
             headers=self._headers(),
             json={"trajectory": trajectory, "metadata": metadata or {}},
         )
-        return resp.status_code == 200
+        return bool(resp.status_code == 200)
 
     async def import_trajectories(self, limit: int = 100) -> list[dict]:
         self._ensure_connected()
@@ -151,7 +167,7 @@ class HermesBridge:
             params={"limit": limit},
         )
         resp.raise_for_status()
-        return resp.json().get("trajectories", [])
+        return _dict_items(_json_object(resp).get("trajectories"))
 
     def _ensure_connected(self):
         if not self._connected or not self._client:

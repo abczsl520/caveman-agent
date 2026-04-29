@@ -3,10 +3,18 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Any
 
 import httpx
 
 logger = logging.getLogger(__name__)
+
+
+def _json_object(resp: httpx.Response) -> dict[str, Any]:
+    data = resp.json()
+    if isinstance(data, dict):
+        return data
+    return {"error": "ACP response must be a JSON object"}
 
 
 class ACPClient:
@@ -28,13 +36,16 @@ class ACPClient:
             },
         )
         resp.raise_for_status()
-        task = resp.json()
+        task = _json_object(resp)
 
         while task.get("status") in ("pending", "running"):
+            task_id = task.get("id")
+            if not isinstance(task_id, str):
+                return {"error": "ACP task response missing string id"}
             await asyncio.sleep(poll_interval)
-            resp = await self._client.get(f"{self.base_url}/acp/v1/tasks/{task['id']}")
+            resp = await self._client.get(f"{self.base_url}/acp/v1/tasks/{task_id}")
             resp.raise_for_status()
-            task = resp.json()
+            task = _json_object(resp)
 
         return task
 
@@ -48,19 +59,23 @@ class ACPClient:
             },
         )
         resp.raise_for_status()
-        return resp.json()["id"]
+        task = _json_object(resp)
+        task_id = task.get("id")
+        if isinstance(task_id, str):
+            return task_id
+        raise ValueError("ACP task response missing string id")
 
     async def get_task(self, task_id: str) -> dict:
         """Get task status/result."""
         resp = await self._client.get(f"{self.base_url}/acp/v1/tasks/{task_id}")
         resp.raise_for_status()
-        return resp.json()
+        return _json_object(resp)
 
     async def cancel_task(self, task_id: str) -> dict:
         """Cancel a running task."""
         resp = await self._client.post(f"{self.base_url}/acp/v1/tasks/{task_id}/cancel")
         resp.raise_for_status()
-        return resp.json()
+        return _json_object(resp)
 
     async def close(self) -> None:
         await self._client.aclose()

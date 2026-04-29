@@ -12,7 +12,7 @@ import secrets
 import time
 from base64 import urlsafe_b64encode
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlencode
 
 from caveman.paths import CAVEMAN_HOME
@@ -87,7 +87,10 @@ async def refresh_token(
     async with httpx.AsyncClient(timeout=HTTP_DEFAULT) as client:
         resp = await client.post(token_endpoint, data=data)
         resp.raise_for_status()
-        return resp.json()
+        data = resp.json()
+        if isinstance(data, dict):
+            return cast(dict[str, Any], data)
+        return {"error": "token endpoint response must be a JSON object"}
 
 
 def save_tokens(server_name: str, tokens: dict[str, Any], token_dir: Path | None = None) -> None:
@@ -106,7 +109,10 @@ def load_tokens(server_name: str, token_dir: Path | None = None) -> dict[str, An
     if not path.exists():
         return None
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            return cast(dict[str, Any], data)
+        return None
     except Exception as e:
         logger.debug("suppressed: %s", e)
         return None
@@ -114,6 +120,11 @@ def load_tokens(server_name: str, token_dir: Path | None = None) -> dict[str, An
 
 def is_token_expired(tokens: dict[str, Any]) -> bool:
     """Check if access token is expired (with 60s buffer)."""
-    saved_at = tokens.get("saved_at", 0)
-    expires_in = tokens.get("expires_in", 3600)
+    saved_at_raw = tokens.get("saved_at", 0)
+    expires_in_raw = tokens.get("expires_in", 3600)
+    try:
+        saved_at = float(saved_at_raw)
+        expires_in = float(expires_in_raw)
+    except (TypeError, ValueError):
+        return True
     return time.time() > (saved_at + expires_in - 60)
