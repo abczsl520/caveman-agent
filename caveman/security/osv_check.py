@@ -13,7 +13,8 @@ import json
 import logging
 import re
 import urllib.request
-from typing import Any
+from collections.abc import Iterable
+from typing import Any, cast
 
 logger = logging.getLogger(__name__)
 
@@ -95,12 +96,17 @@ def _query_osv(package: str, ecosystem: str) -> list[dict[str, Any]]:
     )
 
     with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
-        data = json.loads(resp.read())
+        loaded = json.loads(resp.read())
 
-    return data.get("vulns", [])
+    if not isinstance(loaded, dict):
+        return []
+    vulns = loaded.get("vulns", [])
+    if not isinstance(vulns, Iterable) or isinstance(vulns, (str, bytes)):
+        return []
+    return [cast(dict[str, Any], item) for item in vulns if isinstance(item, dict)]
 
 
 def _is_malware(advisory: dict[str, Any]) -> bool:
     """Check if an advisory is a malware advisory (MAL-* ID)."""
     adv_id = advisory.get("id", "")
-    return adv_id.startswith("MAL-")
+    return isinstance(adv_id, str) and adv_id.startswith("MAL-")
