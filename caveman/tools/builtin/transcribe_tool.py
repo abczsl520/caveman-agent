@@ -3,10 +3,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import tempfile
 import time
 from pathlib import Path
+from typing import Any
 
 from caveman.tools.registry import tool
 from caveman.aio import aio_exists, aio_read_text, aio_stat, aio_unlink, aio_write_bytes
@@ -27,7 +27,7 @@ _MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB
     },
     required=["file_path"],
 )
-async def transcribe(file_path: str, language: str = "auto") -> dict:
+async def transcribe(file_path: str, language: str = "auto") -> dict[str, Any]:
     """Transcribe audio/video file using whisper CLI."""
     path = Path(file_path)
     if not await aio_exists(path):
@@ -84,7 +84,7 @@ async def transcribe(file_path: str, language: str = "auto") -> dict:
     },
     required=["url"],
 )
-async def transcribe_url(url: str, language: str = "auto") -> dict:
+async def transcribe_url(url: str, language: str = "auto") -> dict[str, Any]:
     """Download audio/video from URL and transcribe it."""
     import httpx
 
@@ -105,7 +105,10 @@ async def transcribe_url(url: str, language: str = "auto") -> dict:
             resp.raise_for_status()
             await aio_write_bytes(Path(tmp.name), resp.content)
 
-        return await transcribe(tmp.name, language=language)
+        result = await transcribe(tmp.name, language=language)
+        if not isinstance(result, dict):
+            return {"error": "transcribe returned invalid result"}
+        return result
     except httpx.HTTPError as e:
         return {"error": f"Download failed: {e}"}
     except Exception as e:

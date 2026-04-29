@@ -126,9 +126,12 @@ class TrajectoryRecorder:
         return save_path
 
     @staticmethod
-    def load(path: Path) -> dict:
+    def load(path: Path) -> dict[str, Any]:
         """Load a saved trajectory."""
-        return json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError("trajectory file must contain a JSON object")
+        return data
 
     @staticmethod
     def batch_export(

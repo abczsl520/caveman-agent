@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from caveman.tools.registry import tool
 
@@ -61,12 +62,17 @@ async def mcp_connect(
     params={},
     required=[],
 )
-async def mcp_list_tools(_context: dict | None = None) -> list[dict]:
+async def mcp_list_tools(_context: dict | None = None) -> list[dict[str, Any]]:
     """List all tools from all connected MCP servers."""
     mgr = (_context or {}).get("mcp_manager")
     if not mgr:
         return [{"error": "mcp_manager not available"}]
-    return mgr.get_all_tools()
+    tools = mgr.get_all_tools()
+    if not isinstance(tools, list):
+        return [{"error": "mcp_manager returned invalid tool list"}]
+    if not all(isinstance(item, dict) for item in tools):
+        return [{"error": "mcp_manager returned malformed tool item"}]
+    return tools
 
 
 @tool(
