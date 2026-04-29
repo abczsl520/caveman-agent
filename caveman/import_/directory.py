@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any
 
 from .base import (
     BaseImporter, ImportItem, ImportManifest,
@@ -30,10 +29,11 @@ class DirectoryImporter(BaseImporter):
 
     def scan(self) -> ImportManifest:
         manifest = ImportManifest(source="directory")
-        if not self.detect():
+        directory = self.directory
+        if directory is None or not directory.is_dir():
             return manifest
 
-        for md in sorted(self.directory.rglob("*.md")):
+        for md in sorted(directory.rglob("*.md")):
             content = self._read_safe(md)
             if not content:
                 continue

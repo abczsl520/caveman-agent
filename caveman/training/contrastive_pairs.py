@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from caveman.paths import TRAJECTORIES_DIR, TRAINING_DIR
 
@@ -53,7 +53,7 @@ def _load_trajectory(path: Path) -> dict | None:
         convs = data.get("conversations", [])
         if len(convs) < 2:
             return None
-        return data
+        return cast(dict[str, Any], data)
     except (json.JSONDecodeError, OSError):
         return None
 
@@ -63,7 +63,8 @@ def _extract_prompt(traj: dict) -> str:
     convs = traj.get("conversations", [])
     for turn in convs:
         if turn.get("from") == "human":
-            return turn.get("value", "")
+            value = turn.get("value", "")
+            return value if isinstance(value, str) else ""
     return ""
 
 
@@ -72,14 +73,16 @@ def _extract_response(traj: dict) -> str:
     convs = traj.get("conversations", [])
     for turn in reversed(convs):
         if turn.get("from") == "gpt":
-            return turn.get("value", "")
+            value = turn.get("value", "")
+            return value if isinstance(value, str) else ""
     return ""
 
 
 def _get_quality(traj: dict) -> float:
     """Get quality score from trajectory metadata."""
     meta = traj.get("metadata", {})
-    return meta.get("quality_score", 0.5)
+    quality = meta.get("quality_score", 0.5) if isinstance(meta, dict) else 0.5
+    return float(quality) if isinstance(quality, (int, float)) else 0.5
 
 
 def generate_contrastive_pairs(
