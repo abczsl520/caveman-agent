@@ -111,14 +111,20 @@ class WorkspaceMemorySync:
             Path("~/.openclaw/workspace").expanduser(),
         ]
 
-    def _load_manifest(self) -> dict:
+    def _load_manifest(self) -> dict[str, Any]:
         """Load the sync manifest (tracks what's been synced)."""
+        default: dict[str, Any] = {"version": 1, "files": {}}
         if self._manifest_path.is_file():
             try:
-                return json.loads(self._manifest_path.read_text(encoding="utf-8"))
+                data = json.loads(self._manifest_path.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    files = data.get("files")
+                    if not isinstance(files, dict):
+                        data["files"] = {}
+                    return data
             except (json.JSONDecodeError, OSError) as exc:
                 logger.debug("Failed to load sync manifest: %s", exc)
-        return {"version": 1, "files": {}}
+        return default
 
     def _save_manifest(self, manifest: dict) -> None:
         """Persist the sync manifest."""

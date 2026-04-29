@@ -17,7 +17,7 @@ import shutil
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, TypedDict
 
 __all__ = [
     "SKILLS_DIR",
@@ -49,6 +49,14 @@ SYNC_STATE_FILE = SKILLS_DIR / ".sync_state.json"
 
 
 # ── Data classes ───────────────────────────────────────────────────────────
+
+class _SyncAllResult(TypedDict):
+    synced: int
+    unchanged: int
+    conflicts: int
+    errors: int
+    details: list[dict[str, Any]]
+
 
 @dataclass
 class SkillManifest:
@@ -311,9 +319,16 @@ def sync_all_bundled(*, force: bool = False, quiet: bool = False) -> Dict[str, A
     """
     bundled = _discover_bundled_skills(BUNDLED_DIR)
     if not bundled:
-        return {"synced": 0, "unchanged": 0, "errors": 0, "message": "No bundled skills found."}
+        return {
+            "synced": 0,
+            "unchanged": 0,
+            "conflicts": 0,
+            "errors": 0,
+            "details": [],
+            "message": "No bundled skills found.",
+        }
 
-    results = {"synced": 0, "unchanged": 0, "conflicts": 0, "errors": 0, "details": []}
+    results: _SyncAllResult = {"synced": 0, "unchanged": 0, "conflicts": 0, "errors": 0, "details": []}
     state = load_sync_state()
 
     for name, source_path in bundled:
@@ -345,7 +360,7 @@ def sync_all_bundled(*, force: bool = False, quiet: bool = False) -> Dict[str, A
             "Sync complete: %d synced, %d unchanged, %d conflicts, %d errors",
             results["synced"], results["unchanged"], results["conflicts"], results["errors"],
         )
-    return results
+    return dict(results)
 
 
 def get_sync_status() -> Dict[str, Any]:

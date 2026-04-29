@@ -200,7 +200,10 @@ class ACPClient:
             "sessionKey": session_key,
             "message": message,
         })
-        return result.get("result", str(result))
+        reply = result.get("result")
+        if isinstance(reply, str):
+            return reply
+        return str(reply if reply is not None else result)
 
     def list_spawned(self) -> list[dict]:
         return list(self._sessions.values())
