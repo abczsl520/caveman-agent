@@ -52,7 +52,7 @@ _CAVEMAN_ENV_PREFIX = "CAVEMAN_"
 
 # Variables to preserve even if they match foreign prefixes
 # (e.g., if user explicitly set them for interop)
-_PRESERVE_VARS = frozenset({
+_PRESERVE_VARS: frozenset[str] = frozenset({
     # None currently — add here if needed
 })
 

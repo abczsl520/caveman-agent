@@ -141,7 +141,7 @@ class ACPEventEmitter:
 
         display = result or ""
         if len(display) > 5000:
-            display = display[:4900] + f"\n... ({len(result)} chars, truncated)"
+            display = display[:4900] + f"\n... ({len(display)} chars, truncated)"
 
         await self._emit(ACPEvent("tool_call_result", {
             "tool_call_id": tc_id,
