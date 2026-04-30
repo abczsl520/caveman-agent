@@ -23,6 +23,7 @@ import subprocess
 import time
 from datetime import datetime
 from pathlib import Path
+from typing import Any, cast
 
 from caveman.operator_output import operator_literal
 
@@ -423,7 +424,7 @@ async def run_flywheel_parallel(
     targets: list[str],
     max_iterations: int = 20,
     round_timeout_s: float | None = 900,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """Run multiple subsystem audits in parallel using asyncio.gather."""
     tasks = [
         run_flywheel(
@@ -435,11 +436,20 @@ async def run_flywheel_parallel(
         for t in targets
     ]
     results = await asyncio.gather(*tasks, return_exceptions=True)
-    return [
-        r if not isinstance(r, Exception)
-        else {"target": t, "error": str(r), "success": False, "successful": 0, "rounds_completed": 0, "results": []}
-        for t, r in zip(targets, results)
-    ]
+    typed_results: list[dict[str, Any]] = []
+    for target, result in zip(targets, results):
+        if isinstance(result, BaseException):
+            typed_results.append({
+                "target": target,
+                "error": str(result),
+                "success": False,
+                "successful": 0,
+                "rounds_completed": 0,
+                "results": [],
+            })
+        else:
+            typed_results.append(cast(dict[str, Any], result))
+    return typed_results
 
 
 # ── Auto-Discovery ──
@@ -511,10 +521,10 @@ class FlywheelStats:
             "subsystems_audited": sorted(set(s["target"] for s in stats)),
         }
 
-    def _load(self) -> list:
+    def _load(self) -> list[Any]:
         if self.stats_file.exists():
             try:
-                return json.loads(self.stats_file.read_text())
+                return cast(list[Any], json.loads(self.stats_file.read_text()))
             except (json.JSONDecodeError, OSError):
                 return []
         return []
