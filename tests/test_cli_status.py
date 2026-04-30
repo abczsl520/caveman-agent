@@ -1,10 +1,6 @@
 """Tests for CLI status dashboard."""
 import json
-import tempfile
-from pathlib import Path
 from unittest.mock import patch
-
-import pytest
 
 from caveman.cli.status import (
     _count_memories,
@@ -78,3 +74,20 @@ def test_status_text_contains_key_info():
     assert "Memory:" in text
     assert "Sessions:" in text
     assert "Engines:" in text
+
+
+def test_status_text_escapes_configured_model_control_characters(monkeypatch):
+    """Config-derived model names are operator-facing and must not spoof lines."""
+    from caveman.cli import status
+
+    monkeypatch.setattr(
+        status,
+        "_get_model_info",
+        lambda: ("safe-model\nSPOOF_MODEL\x1b[31m", "Unknown"),
+    )
+
+    text = status_text()
+
+    assert "'safe-model\\nSPOOF_MODEL\\x1b[31m'" in text
+    assert "\nSPOOF_MODEL" not in text
+    assert "\x1b[31m" not in text

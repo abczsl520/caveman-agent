@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 
+from caveman.operator_output import operator_literal
 from caveman.paths import CAVEMAN_HOME, MEMORY_DIR, SESSIONS_DIR, SKILLS_DIR, PROJECTS_DIR
 
 logger = logging.getLogger(__name__)
@@ -129,7 +130,7 @@ def status_text(include_gateway: bool = False) -> str:
 
     lines = [
         "🦴 Caveman v0.3.0-dev",
-        f"  Model: {model} ({provider})",
+        f"  Model: {operator_literal(model)} ({provider})",
         f"  Memory: {total_mem:,} entries" + (f" ({mem_detail})" if mem_detail else ""),
         f"  Sessions: {sessions} essences",
         f"  Skills: {active_skills} active, {draft_skills} draft",
