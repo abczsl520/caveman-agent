@@ -29,6 +29,7 @@ from caveman.events import EventBus, EventType, Event
 
 if TYPE_CHECKING:
     from caveman.engines.manager import EngineSet
+    from caveman.memory.decay import MemoryDecay
 
 logger = logging.getLogger(__name__)
 
@@ -244,7 +245,7 @@ def wire_inner_flywheel(
     _decay_task_count = [0]
     _DECAY_INTERVAL = 10  # run decay every 10 tasks
     # Reuse single instance to preserve internal state across invocations
-    _decay_instance = [None]
+    _decay_instance: list[MemoryDecay | None] = [None]
 
     async def _on_loop_end_decay(event: Event) -> None:
         """Periodically run memory decay after N tasks."""
@@ -254,9 +255,11 @@ def wire_inner_flywheel(
         _decay_task_count[0] = 0
         try:
             from caveman.memory.decay import MemoryDecay
-            if _decay_instance[0] is None:
-                _decay_instance[0] = MemoryDecay()
-            result = _decay_instance[0].run()
+            decay = _decay_instance[0]
+            if decay is None:
+                decay = MemoryDecay()
+                _decay_instance[0] = decay
+            result = decay.run()
             if (
                 result.memories_decayed > 0
                 or result.memories_pruned > 0

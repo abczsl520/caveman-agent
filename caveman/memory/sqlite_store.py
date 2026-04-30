@@ -14,19 +14,11 @@ from typing import List, Optional
 
 from .types import MemoryType, MemoryEntry
 from .metadata import validate_metadata
-from .store_helpers import row_to_entry, migrate_schema, is_quarantined
+from .store_helpers import row_to_entry, migrate_schema, is_quarantined, active_memory_sql, cleanup_related_refs
 from caveman.utils import cosine_similarity as _cosine_similarity
 from caveman.memory.sqlite_schema import SCHEMA
 
 logger = logging.getLogger(__name__)
-
-_ACTIVE_MEMORY_SQL = (
-    "(metadata_json IS NULL "
-    "OR NOT json_valid(metadata_json) "
-    "OR json_extract(metadata_json, '$.governance_state') IS NULL "
-    "OR lower(json_extract(metadata_json, '$.governance_state')) != 'quarantined')"
-)
-
 
 class SQLiteMemoryStore:
     """SQLite + FTS5 backed memory store."""
@@ -136,11 +128,9 @@ class SQLiteMemoryStore:
                 all_entries.setdefault(e.id, e)
 
         if not all_entries:
-            # Fallback: no FTS/vector match — return recent high-trust memories
-            # Better than empty: gives LLM some context to work with
             fallback_rows = conn.execute(
                 "SELECT id, content, type, created_at, metadata_json, trust_score, retrieval_count, last_accessed "
-                "FROM memories WHERE trust_score >= 0.5 AND " + _ACTIVE_MEMORY_SQL + " "
+                "FROM memories WHERE trust_score >= 0.5 AND " + active_memory_sql() + " "
                 "ORDER BY trust_score DESC, COALESCE(last_accessed, created_at) DESC LIMIT ?",
                 (top_k,),
             ).fetchall()
@@ -176,7 +166,7 @@ class SQLiteMemoryStore:
             async with self._write_lock:
                 now = datetime.now().isoformat()
                 ph = ",".join("?" * len(returned_ids))
-                # Batch update: retrieval count, last_accessed, and small trust boost
+                # Batch update retrieval count, access time, and a small trust boost
                 conn.execute(
                     f"UPDATE memories SET retrieval_count = retrieval_count + 1, "
                     f"last_accessed = ?, "
@@ -186,7 +176,6 @@ class SQLiteMemoryStore:
                     f"END) WHERE id IN ({ph})",
                     [now, *returned_ids],
                 )
-                # Batch update last_accessed in metadata
                 for mid in returned_ids:
                     row = conn.execute(
                         "SELECT metadata_json FROM memories WHERE id = ?", (mid,)
@@ -215,7 +204,7 @@ class SQLiteMemoryStore:
             base = ("SELECT m.id, m.content, m.type, m.created_at, m.metadata_json, "
                     "rank, m.trust_score, m.retrieval_count, m.last_accessed FROM memories m "
                     "JOIN memories_fts ON m.rowid = memories_fts.rowid "
-                    "WHERE memories_fts MATCH ? AND " + _ACTIVE_MEMORY_SQL.replace("metadata_json", "m.metadata_json"))
+                    "WHERE memories_fts MATCH ? AND " + active_memory_sql("m.metadata_json"))
             if memory_type:
                 rows = conn.execute(
                     base + " AND m.type = ? ORDER BY rank LIMIT ?",
@@ -245,7 +234,7 @@ class SQLiteMemoryStore:
             conditions.append("type = ?")
             params.append(memory_type.value)
         where = " AND ".join(conditions) if conditions else "1=1"
-        where = f"({where}) AND {_ACTIVE_MEMORY_SQL}"
+        where = f"({where}) AND {active_memory_sql()}"
         rows = conn.execute(
             f"SELECT id, content, type, created_at, metadata_json, trust_score, retrieval_count, last_accessed "
             f"FROM memories WHERE {where} LIMIT ?",
@@ -269,7 +258,7 @@ class SQLiteMemoryStore:
                 "FROM memories m JOIN embeddings e ON m.id = e.memory_id")
         if candidate_ids:
             ph = ",".join("?" * len(candidate_ids))
-            where = f" WHERE e.memory_id IN ({ph}) AND " + _ACTIVE_MEMORY_SQL.replace("metadata_json", "m.metadata_json")
+            where = f" WHERE e.memory_id IN ({ph}) AND " + active_memory_sql("m.metadata_json")
             params: list = list(candidate_ids)
             if memory_type:
                 where += " AND m.type = ?"
@@ -277,12 +266,12 @@ class SQLiteMemoryStore:
             rows = conn.execute(base + where, params).fetchall()
         elif memory_type:
             rows = conn.execute(
-                base + " WHERE m.type = ? AND " + _ACTIVE_MEMORY_SQL.replace("metadata_json", "m.metadata_json") + " LIMIT ?",
+                base + " WHERE m.type = ? AND " + active_memory_sql("m.metadata_json") + " LIMIT ?",
                 (memory_type.value, cap),
             ).fetchall()
         else:
             rows = conn.execute(
-                base + " WHERE " + _ACTIVE_MEMORY_SQL.replace("metadata_json", "m.metadata_json") + " LIMIT ?",
+                base + " WHERE " + active_memory_sql("m.metadata_json") + " LIMIT ?",
                 (cap,),
             ).fetchall()
 
@@ -309,7 +298,7 @@ class SQLiteMemoryStore:
             rows = conn.execute(
                 "SELECT m.id FROM memories m "
                 "JOIN memories_fts ON m.rowid = memories_fts.rowid "
-                "WHERE memories_fts MATCH ? AND " + _ACTIVE_MEMORY_SQL.replace("metadata_json", "m.metadata_json") + " LIMIT ?", (fts_q, cap),
+                "WHERE memories_fts MATCH ? AND " + active_memory_sql("m.metadata_json") + " LIMIT ?", (fts_q, cap),
             ).fetchall()
             return [r[0] for r in rows] if rows else None
         except Exception as e:
@@ -340,7 +329,7 @@ class SQLiteMemoryStore:
         conn = self._get_conn()
         rows = conn.execute(
             "SELECT id, content, type, created_at, metadata_json, trust_score, retrieval_count, last_accessed FROM memories "
-            f"WHERE entities_json LIKE ? AND {_ACTIVE_MEMORY_SQL} ORDER BY trust_score DESC LIMIT ?",
+            f"WHERE entities_json LIKE ? AND {active_memory_sql()} ORDER BY trust_score DESC LIMIT ?",
             (f'%"{entity}"%', top_k),
         ).fetchall()
         return [entry for row in rows if not is_quarantined(entry := row_to_entry(row))]
@@ -365,24 +354,7 @@ class SQLiteMemoryStore:
     async def forget(self, memory_id: str) -> bool:
         async with self._write_lock:
             conn = self._get_conn()
-            # Clean up cross-refs pointing to this memory (prevent dangling refs)
-            rows = conn.execute(
-                "SELECT id, metadata_json FROM memories WHERE metadata_json LIKE ?",
-                (f'%{memory_id}%',),
-            ).fetchall()
-            for row in rows:
-                try:
-                    meta = json.loads(row[1]) if row[1] else {}
-                    related = meta.get("related", [])
-                    if memory_id in related:
-                        related.remove(memory_id)
-                        meta["related"] = related
-                        conn.execute(
-                            "UPDATE memories SET metadata_json = ? WHERE id = ?",
-                            (json.dumps(meta, ensure_ascii=False), row[0]),
-                        )
-                except Exception as exc:
-                    logger.debug("forget: suppressed %s", exc)
+            cleanup_related_refs(conn, memory_id)
             cursor = conn.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
             conn.execute("DELETE FROM embeddings WHERE memory_id = ?", (memory_id,))
             conn.commit()
@@ -416,7 +388,7 @@ class SQLiteMemoryStore:
     def all_entries(self) -> List[MemoryEntry]:
         rows = self._get_conn().execute(
             "SELECT id, content, type, created_at, metadata_json, trust_score, retrieval_count, helpful_count, last_accessed "
-            f"FROM memories WHERE {_ACTIVE_MEMORY_SQL} ORDER BY created_at"
+            f"FROM memories WHERE {active_memory_sql()} ORDER BY created_at"
         ).fetchall()
         entries = []
         for row in rows:
@@ -444,7 +416,7 @@ class SQLiteMemoryStore:
         params = [f"%{w}%" for w in words]
         rows = self._get_conn().execute(
             f"SELECT id, content, type, created_at, metadata_json, trust_score, retrieval_count, last_accessed "
-            f"FROM memories WHERE ({' AND '.join(conditions)}) AND {_ACTIVE_MEMORY_SQL} LIMIT ?",
+            f"FROM memories WHERE ({' AND '.join(conditions)}) AND {active_memory_sql()} LIMIT ?",
             params + [limit],
         ).fetchall()
         return [entry for row in rows if not is_quarantined(entry := row_to_entry(row))]
@@ -452,7 +424,7 @@ class SQLiteMemoryStore:
     def recent(self, limit: int = 20) -> List[MemoryEntry]:
         rows = self._get_conn().execute(
             "SELECT id, content, type, created_at, metadata_json, trust_score, retrieval_count, last_accessed "
-            f"FROM memories WHERE {_ACTIVE_MEMORY_SQL} "
+            f"FROM memories WHERE {active_memory_sql()} "
             "ORDER BY COALESCE(last_accessed, created_at) DESC LIMIT ?", (limit,),
         ).fetchall()
         return [entry for row in rows if not is_quarantined(entry := row_to_entry(row))]

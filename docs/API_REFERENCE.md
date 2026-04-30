@@ -1690,7 +1690,7 @@ SQLite + FTS5 memory backend.
 
 SQLite memory store helpers — extracted to keep sqlite_store.py under 400 lines. Schema versioning (PRD §8.9.6 + §8.12): Current: SCHEMA_VERSION = 2 Migration: schema_version table + numbered, transactional migration fun
 
-**Functions:** `get_schema_version()`, `pending_migrations()`, `row_to_entry()`, `migrate_schema()`
+**Functions:** `get_schema_version()`, `pending_migrations()`, `row_to_entry()`, `is_quarantined()`, `active_memory_sql()`, `cleanup_related_refs()`, `migrate_schema()`
 
 ## `caveman.memory.types`
 
