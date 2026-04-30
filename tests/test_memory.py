@@ -705,6 +705,15 @@ def test_operator_literal_has_security_purpose_docstring():
     assert "operator" in doc.lower()
 
 
+def test_operator_literal_rejects_non_positive_max_length():
+    """Public operator formatter should reject ambiguous truncation bounds."""
+    from caveman.operator_output import operator_literal
+
+    with pytest.raises(ValueError, match="max_length must be positive"):
+        operator_literal("unsafe", max_length=0)
+    with pytest.raises(ValueError, match="max_length must be positive"):
+        operator_literal("unsafe", max_length=-1)
+
 def test_operator_literal_helper_is_shared_across_cli_and_dashboard():
     """CLI and dashboard reports should depend on one literal safety boundary."""
     from caveman.cli import source_governance
