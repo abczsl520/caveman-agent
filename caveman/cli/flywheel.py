@@ -24,6 +24,8 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+from caveman.operator_output import operator_literal
+
 __all__ = [
     "SUBSYSTEMS",
     "AUDIT_PROMPT",
@@ -532,13 +534,14 @@ def flywheel_cli(
     """Dispatch flywheel CLI subcommands."""
     if stats:
         s = FlywheelStats().summary()
-        print(f"Flywheel Stats:")
+        print("Flywheel Stats:")
         print(f"  Rounds: {s['total_rounds']}")
         print(f"  P0 found: {s['total_p0_found']}")
         print(f"  P1 found: {s['total_p1_found']}")
         print(f"  Fixed: {s['total_fixed']}")
         print(f"  Avg duration: {s['avg_duration_s']:.1f}s")
-        print(f"  Subsystems: {', '.join(s['subsystems_audited']) or 'none'}")
+        subsystems = ", ".join(operator_literal(source) for source in s["subsystems_audited"])
+        print(f"  Subsystems: {subsystems or 'none'}")
         return
 
     if parallel:
