@@ -1,23 +1,46 @@
 # Caveman 优化 HANDOFF
 
-更新时间: 2026-04-30 15:15 CST
+更新时间: 2026-04-30 16:16 CST
 
 ## 当前最终状态
-- Round 8 已完成、提交并推送到 `main`。
-- 最新 commit: `9624ce069d74efa063e2c8c2aa4fef0feef80604` (`Normalize imported memory source metadata`)。
+- Round 9 已完成、提交并推送到 `main`。
+- 最新 code commit: `23df73debb9c113251eb0390515c47dbca9d5aa5` (`Protect decay with canonical access timestamps`)。
 - `origin/main` 已同步到最新 SHA。
-- GitHub Actions 对最新 SHA 全绿：`docs` success、`test (3.12)` success、install smoke macOS/Ubuntu/Windows success。
+- GitHub Actions 对 Round 9 code SHA 全绿：run `25154718044`，`https://github.com/abczsl520/caveman-agent/actions/runs/25154718044`。
+- Round 8 handoff commit: `f4a07bcde9f67e3d283dc43fda4dbe559a174a36`；Round 8 code commit: `9624ce069d74efa063e2c8c2aa4fef0feef80604` (`Normalize imported memory source metadata`)。
 - Round 7 handoff commit: `be73746`；Round 7 code commits: `92d6819` (`[verified] fix quarantine lifecycle CI gates`)、`b2c0169` (`[verified] add reversible memory quarantine lifecycle`)。
 - Round 6 code commit: `5e98357f06f34a4e6b28716ab5414c436378dea4` (`[verified] surface source governance in flywheel dashboard`)；Round 6 handoff commit: `1ceef53`。
 - Round 5 commit: `7de8ff65a156c924fc9af2d74452bd24e8e39f77` (`[verified] add source-aware memory quarantine policy`)。
-- Round 4 code commit: `90ee17f75cbe5ca78a8c7335c6051ccf19962829`；Round 4 handoff commit: `a70d3f5552d6aed51e3f07549915283f001b727a`。
-- Gateway 最后已知未运行：`curl http://localhost:4201/health` 失败；日志显示 09:37 用户停止并移除 PID。这不是代码失败，但下轮若需要交互验证要按 gateway SOP 安全启动。
+- Gateway 最后已知未运行：需要交互验证时按 gateway SOP 安全启动，避免 `nohup caveman serve &` 触发 Hermes terminal exit-130 loop。
 
 ## 下次启动时做
-1. Round 9/50：helpfulness/retrieval 反馈质量与 decay scheduling/observability 闭环：确认 quarantine 后 recall 候选减少和 helpful memory 不被误伤。优先从真实 memory DB/dashboard 指标出发，闭环“检索→helpful feedback→decay/quarantine protection→dashboard 可观测”。
-2. Round 10：quarantine restore 的 operator guardrails：dry-run bulk restore、source/reason scoped restore preview、恢复后 dashboard impact report。
-3. Round 11：import/source taxonomy 更严格治理：把 normalized source 枚举、导入入口、dashboard/decay allowlist 统一成单一来源，避免未来拼写漂移。
-4. Rounds 12-50：按“证据→TDD→实现→门禁→review→commit/push→监控”小步推进；不要虚构完成 50 轮，每轮必须有验证与提交或明确 no-op 证据。
+1. Round 10/50：quarantine restore 的 operator guardrails：dry-run bulk restore、source/reason scoped restore preview、恢复后 dashboard impact report。优先从真实 DB 中 quarantined/source distribution 出发，补 TDD 后实现。
+2. Round 11：import/source taxonomy 更严格治理：把 normalized source 枚举、导入入口、dashboard/decay allowlist 统一成单一来源，避免未来拼写漂移。
+3. Round 12：decay scheduling/observability 的 operator report：定时 dry-run summary、source impact trend、quarantine candidate drift，避免治理静默。
+4. Rounds 13-50：按“证据→TDD→实现→门禁→review→commit/push→监控”小步推进；不要虚构完成 50 轮，每轮必须有验证与提交或明确 no-op 证据。
+
+## Round 9 做了什么
+- 聚焦 helpfulness/retrieval feedback 对 decay protection 的真实闭环：此前 decay 只读取 `metadata_json.last_accessed`，但实际 SQLite schema 有 canonical `memories.last_accessed` 列。若 recall/update 只写 canonical column、metadata 没同步，最近访问的 helpful/retrieved memory 可能被 decay 误伤。
+- `MemoryDecay.run()` 现在会优先读取 `memories.last_accessed` canonical column，并保留 legacy `metadata_json.last_accessed` fallback。
+- 为旧 DB/schema copy 增加容错：运行前通过 `PRAGMA table_info(memories)` 判断是否存在 `last_accessed` 列；不存在时用 `NULL AS last_accessed`，避免 `no such column: last_accessed` 崩溃，同时保持旧 metadata fallback/age-based decay 行为。
+- 新增 TDD 覆盖：
+  - `test_last_accessed_column_without_metadata_is_immune`：canonical column 有近期 access、metadata 为空时不 decay。
+  - `test_decay_tolerates_legacy_schema_without_last_accessed_column`：legacy schema 没有 `last_accessed` 列时 decay 不崩溃且仍治理旧未访问 memory。
+- 测试 helper `_create_test_db()` / `_insert_memory()` 补齐 `last_accessed` 列，后续 decay tests 更贴近生产 schema。
+
+## Round 9 验证结果
+- RED：新增 legacy schema test 初始失败，错误为 `sqlite3.OperationalError: no such column: last_accessed`，确认不是无效测试。
+- Focused regression：`tests/test_memory_decay.py tests/test_flywheel_dashboard_boundaries.py tests/test_memory.py` 共 `39 passed`。
+- Expanded focused gate：`tests/test_memory_decay.py tests/test_flywheel_dashboard_boundaries.py tests/test_memory.py tests/test_memory_metadata_quality_wiring.py` 共 `43 passed`。
+- Ruff changed files：`caveman/memory/decay.py tests/test_memory_decay.py` pass。
+- Ruff CI parity：`ruff check --select E9,F63,F7,F82 caveman tests` pass。
+- Mypy changed-file sanity：`caveman/memory/decay.py tests/test_memory_decay.py` pass。
+- Coverage gate：`3310 passed, 8 skipped`；observed coverage `69.23%` > baseline `68.25%`，80% 长期债务继续可见。
+- API reference generation：`scripts/generate_api_reference.py` 后 `docs/API_REFERENCE.md` 无 diff。
+- Live DB dry-run smoke：对 `/Users/yeren64g/.caveman/memory/caveman.db` dry-run，`Decay: scanned=2000, decayed=0, pruned=0, quarantined=0, trust_reduced=0.000`，无 mutation。
+- Security scan：changed files added-line pattern scan clean；push hook safety checks passed。
+- Independent review：passed，无 blocker/important；确认 f-string SQL 只在固定 literal `last_accessed` / `NULL AS last_accessed` 中选择，低风险。
+- Remote CI：Round 9 code commit `23df73debb9c113251eb0390515c47dbca9d5aa5` GitHub Actions run `25154718044` completed success。
 
 ## Round 8 做了什么
 - 聚焦 import metadata normalization/backfill，修复 dashboard 中大量 `<missing>` source 导致治理策略、source breakdown 和 quarantine policy 无法稳定聚合的问题。
@@ -46,7 +69,7 @@
 - Live DB copy smoke：对 `/Users/yeren64g/.caveman/memory/caveman.db` copy 执行 v3，`<missing>` source 从 624 降到 547，v3 changed 77，未直接修改生产 DB。
 - Security scan：changed files pattern scan clean；push hook safety checks passed。
 - Independent review：第一次建议避免 organic `Task:` 文本误判；已增加负例并把 legacy task-result 判定收紧到显式 `\nResult:` 或 ` Result:`。第二次 re-review passed，无 blocker。
-- Remote CI：最新 SHA `9624ce069d74efa063e2c8c2aa4fef0feef80604` GitHub Actions 全绿（docs、test 3.12、install smoke macOS/Ubuntu/Windows）。
+- Remote CI：code SHA `9624ce069d74efa063e2c8c2aa4fef0feef80604` GitHub Actions 全绿（docs、test 3.12、install smoke macOS/Ubuntu/Windows）。
 
 ## Round 7 做了什么
 - 补齐 reversible quarantine lifecycle operator path，避免 Round 4-6 只会自动隔离、缺少安全查看/恢复/审计路径。
@@ -142,7 +165,8 @@
 - Round 5 source-policy 边界：30-89 天走 `source_policy_low_signal_import`；>=90 天保留旧的 `stale_low_signal_import` 语义。后续补 boundary/idempotence 测试时不要误改原因语义。
 - Round 6 dashboard source-governance 不能基于 top-N displayed breakdown 生成；必须扫描所有 sources，否则小但 actionable 的 source 会被隐藏。
 - Dashboard source policy 口径要和 `MemoryDecay` 对齐：使用 decay 后 `new_trust`、30-89 天 age window、retrieval/helpful 保护，而不是只看当前 trust。
-- Round 7 CLI touched `caveman/cli/main.py`，触发 mypy baseline-aware gate 对该文件的既有 `yaml` import-untyped 债务；已加 targeted ignore。后续触碰 baseline-heavy 文件时要先跑 `scripts/ci_mypy_gate.py`，不要只跑局部 mypy。
+- Round 7 CLI touched `caveman/cli/main.py`，触发 mypy baseline-aware gate 对该文件的既有 `yaml` import-untyped` 债务；已加 targeted ignore。后续触碰 baseline-heavy 文件时要先跑 `scripts/ci_mypy_gate.py`，不要只跑局部 mypy。
 - Quarantine list/restore 的任何 metadata JSON 查询都必须使用 malformed-safe `CASE WHEN json_valid(...)`；review 已抓到一次 source filter 直接 `json_extract` 的 regression。
 - API reference 是 CI docs gate 的 committed artifact。新增/导出函数或改模块 docstring 后要运行 `scripts/generate_api_reference.py` 并提交 `docs/API_REFERENCE.md`，不要把 docs diff 当成失败回滚。
 - Legacy task-result source normalization 不能只看 `content.startswith("Task:")`；必须要求显式 `\nResult:` 或 ` Result:`，否则会误伤 organic “Task:” 笔记。
+- Round 9 decay 不能只读 `metadata_json.last_accessed`；生产 schema 的 canonical `memories.last_accessed` 才是 recall/access 更新主路径。查询时也要兼容没有该列的旧 DB copy。
