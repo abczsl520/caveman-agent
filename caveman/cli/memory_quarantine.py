@@ -11,6 +11,7 @@ from caveman.memory.sqlite_store import SQLiteMemoryStore
 from caveman.memory.quarantine import list_quarantined as quarantine_list
 from caveman.memory.quarantine import preview_restore_quarantined as quarantine_preview
 from caveman.memory.quarantine import restore_quarantined as quarantine_restore
+from caveman.operator_output import operator_literal as _operator_literal
 from caveman.paths import MEMORY_DB_PATH
 
 app = typer.Typer(help="Review and restore quarantined memories.")
@@ -35,9 +36,10 @@ def list_quarantined(
             return
         for entry in rows:
             meta = entry.metadata
-            reason = meta.get("quarantine_reason", "")
-            source_label = meta.get("source", "")
-            typer.echo(f"{entry.id}	{source_label}	{reason}	{entry.content[:120]}")
+            reason = _operator_literal(meta.get("quarantine_reason", ""))
+            source_label = _operator_literal(meta.get("source", ""))
+            content = _operator_literal(entry.content, max_length=120)
+            typer.echo(f"{entry.id}\t{source_label}\t{reason}\t{content}")
     finally:
         store.close()
 
@@ -57,19 +59,25 @@ def preview_restore(
         if preview.by_source:
             typer.echo(
                 "sources "
-                + " ".join(f"{key}={value}" for key, value in sorted(preview.by_source.items()))
+                + " ".join(
+                    f"{_operator_literal(key)}={value}"
+                    for key, value in sorted(preview.by_source.items())
+                )
             )
         if preview.by_reason:
             typer.echo(
                 "reasons "
-                + " ".join(f"{key}={value}" for key, value in sorted(preview.by_reason.items()))
+                + " ".join(
+                    f"{_operator_literal(key)}={value}"
+                    for key, value in sorted(preview.by_reason.items())
+                )
             )
         for entry in preview.entries:
             meta = entry.metadata
-            typer.echo(
-                f"{entry.id}\t{meta.get('source', '')}\t"
-                f"{meta.get('quarantine_reason', '')}\t{entry.content[:120]}"
-            )
+            source_label = _operator_literal(meta.get("source", ""))
+            reason_label = _operator_literal(meta.get("quarantine_reason", ""))
+            content = _operator_literal(entry.content, max_length=120)
+            typer.echo(f"{entry.id}\t{source_label}\t{reason_label}\t{content}")
     finally:
         store.close()
 
