@@ -1,17 +1,18 @@
 # Caveman 优化 HANDOFF
 
-更新时间: 2026-05-01 01:20 CST
+更新时间: 2026-05-01 01:13 CST
 
 ## 当前最终状态
+- Round 19 已完成、提交并推送到 `main`。
 - Round 18 已完成、提交并推送到 `main`。
 - Round 17 已完成、提交并推送到 `main`。
 - Round 16 已完成、提交并推送到 `main`。
 - Round 15 已完成、提交并推送到 `main`。
 - Round 14 已完成、提交并推送到 `main`。
-- 最新 code commit: `c3196e429e70cba5d737db25970418b9b2b5a517` (`[verified] report total source drift candidates`)。
+- 最新 code commit: `7062e3414fc52d4e5e11773570fa0e3020aab4de` (`[verified] add source drift policy workflow`)。
 - Round 14 handoff/docs content commit: `da1059ba3a61aba476a576547c2a4898627b082a` (`docs: update caveman handoff after round 14`)；本文件可能随后有 metadata-only 校正提交。
 - `origin/main` 已同步到最新 SHA。
-- GitHub Actions 对 Round 14 code SHA 全绿：run `25174683621`，`https://github.com/abczsl520/caveman-agent/actions/runs/25174683621`。
+- GitHub Actions 对 Round 19 code SHA 全绿：run `25179439795`，`https://github.com/abczsl520/caveman-agent/actions/runs/25179439795`。
 - 自动续跑已配置：cron job `36500447cc33` (`Caveman 50轮自动续跑`)，每 5 分钟触发，最多 240 次，目标回发当前 Discord thread；preflight 脚本 `/Users/yeren64g/.hermes/scripts/caveman_50round_preflight.py`，互斥锁 `/tmp/caveman-50round.lock`。preflight 已具备 stale lock 自愈：lock pid 不存在或 lock 超过 90 分钟会自动清理，避免死锁后永久跳过。
 - Round 13 code commit: `edae36bf747baa7cb55e5addce47a9ba1044ba7e` (`[verified] report restorable quarantine impact`)；Round 13 docs/handoff commit: `b8e3794693a47f62bb33dc032e51957b7446c603`。
 - Round 9 code commit: `23df73debb9c113251eb0390515c47dbca9d5aa5` (`Protect decay with canonical access timestamps`)；Round 9 handoff commit: `ba76a2d93f5db3f08d60e6e34d17798555ea619d`。
@@ -22,9 +23,29 @@
 - Gateway 最后已知未运行：需要交互验证时按 gateway SOP 安全启动，避免 `nohup caveman serve &` 触发 Hermes terminal exit-130 loop。
 
 ## 下次启动时做
-1. Round 19/50：继续 source governance/operator tooling；优先把 `source-governance preview-drift` 输出升级为更清晰的 copy/paste policy workflow（例如明确 `add_to_SOURCE_POLICY_LOW_SIGNAL_IMPORTS=...` 或 grouped candidate block），仍保持只读，不自动 mutate allowlist。先用数据/测试证明缺口，再 TDD 小步修。
+1. Round 20/50：继续 source governance/operator tooling；优先把 `source-governance preview-drift` 的 copy/paste workflow 进一步做成更精确的复现/审查入口（例如 re-run command 保留 `--db`，或输出 grouped candidates / reviewed checklist），仍保持只读，不自动 mutate allowlist。先用数据/测试证明缺口，再 TDD 小步修。
 2. Dashboard 主文件已在 450 行 hard limit；继续 dashboard 方向必须优先抽 helper，不要在 `flywheel_dashboard.py` 主文件堆逻辑。
-3. Rounds 19-50：按“证据→TDD→实现→门禁→review→commit/push→监控”小步推进；不要虚构完成 50 轮，每轮必须有验证与提交或明确 no-op 证据。
+3. Rounds 20-50：按“证据→TDD→实现→门禁→review→commit/push→监控”小步推进；不要虚构完成 50 轮，每轮必须有验证与提交或明确 no-op 证据。
+
+## Round 19 做了什么
+- 聚焦 Round 18 handoff 指定的 `source-governance preview-drift` operator workflow：旧 CLI 已有 candidate identity，但 operator 仍需要自己判断如何安全复制到 `SOURCE_POLICY_LOW_SIGNAL_IMPORTS`，容易误贴或遗漏只读边界。
+- RED 新增 CLI regression：要求 preview 输出 `Policy workflow (copy/paste)`、明确 read-only review 步骤、给出可直接复制的 allowlist entry、re-run 命令与 `auto_mutation=disabled`。初始失败显示旧输出只有 candidate 行，没有 workflow block。
+- Independent review 首轮指出 copy/paste entry 直接插入双引号字符串存在 malformed source label / quote / backslash 破坏 Python literal 的风险。
+- 按 review 再 TDD 新增 unsafe source regression，先看失败，再改为 `{candidate_policy_entry!r}` 输出安全 Python literal；保持 CLI 只读，不写 memory rows、不修改 source allowlist、不触碰 quarantine state。
+
+## Round 19 验证结果
+- Baseline focused before change：`tests/test_memory.py` → `16 passed`。
+- RED：`tests/test_memory.py::test_source_governance_cli_prints_copy_paste_policy_workflow` 初始失败，旧输出缺少 `Policy workflow (copy/paste)`。
+- Review-driven RED：`tests/test_memory.py::test_source_governance_cli_escapes_copy_paste_policy_entries` 初始失败，旧 output 对 quote/backslash source 不是安全 Python literal。
+- GREEN focused：新增 workflow / escaping / limit tests → `3 passed`。
+- Focused suite after change：`tests/test_memory.py tests/test_flywheel_dashboard.py tests/test_flywheel_dashboard_boundaries.py tests/test_memory_decay.py` → `61 passed`。
+- Full suite（排除已知 NFR）：`.venv/bin/python -m pytest tests/ -q --ignore=tests/test_nfr_compliance.py --tb=short` → `3305 passed, 8 skipped`。
+- Py compile：`caveman/cli/source_governance.py tests/test_memory.py` pass。
+- Ruff changed files：pass。
+- Docs/API：`scripts/generate_api_reference.py --check` 无 diff。
+- Security scan：added-line hardcoded secret/shell/eval/pickle/SQL-string-format patterns 0 matches；push hook safety checks passed。
+- Independent review：首轮 failed（unsafe literal），已修复并加 regression；二轮 passed，无 security/logic blocker，仅建议 future 可以把 diagnostic `candidate_policy_entry=` 也 quote 以减少 operator confusion。
+- Remote CI：Round 19 code commit `7062e3414fc52d4e5e11773570fa0e3020aab4de` GitHub Actions run `25179439795` completed success。
 
 ## Round 18 做了什么
 - 聚焦 Round 17 handoff 指定的 `source-governance preview-drift` limit/排序 regression：旧 CLI 在 `--limit N` 后输出 `candidate_count=len(shown)`，operator 会误以为未展示的 drift candidates 不存在。
