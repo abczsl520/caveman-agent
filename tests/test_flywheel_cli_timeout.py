@@ -230,3 +230,24 @@ async def test_flywheel_target_uses_deterministic_self_audit_without_agent_loop(
     assert result["successful"] == 1
     assert result["results"][0]["subsystem"] == "flywheel"
     assert result["results"][0]["success"] is True
+
+
+def test_flywheel_stats_cli_escapes_subsystem_labels(monkeypatch, capsys):
+    class FakeStats:
+        def summary(self):
+            return {
+                "total_rounds": 1,
+                "total_p0_found": 0,
+                "total_p1_found": 0,
+                "total_fixed": 0,
+                "avg_duration_s": 0.0,
+                "subsystems_audited": ["safe\n\x1b[31mP0"],
+            }
+
+    monkeypatch.setattr(flywheel, "FlywheelStats", FakeStats)
+
+    flywheel.flywheel_cli(stats=True)
+
+    out = capsys.readouterr().out
+    assert "safe\\n\\x1b[31mP0" in out
+    assert "safe\n\x1b[31mP0" not in out
