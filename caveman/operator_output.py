@@ -1,0 +1,10 @@
+"""Operator-facing literal formatting helpers."""
+from __future__ import annotations
+
+
+def operator_literal(value: object, max_length: int | None = None) -> str:
+    """Return repr() for operator output so control characters stay escaped."""
+    text = str(value if value is not None else "<missing>")
+    if max_length is not None and len(text) > max_length:
+        text = text[: max_length - 1] + "…"
+    return repr(text)

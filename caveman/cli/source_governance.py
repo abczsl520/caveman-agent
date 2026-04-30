@@ -10,6 +10,7 @@ import typer
 from click.core import ParameterSource
 
 from caveman.memory.sqlite_store import SQLiteMemoryStore
+from caveman.operator_output import operator_literal
 from caveman.paths import MEMORY_DB_PATH
 from caveman.training._flywheel_memory_diagnostics import _collect_memory_source_policy_drift
 
@@ -18,7 +19,7 @@ app = typer.Typer(help="Preview memory source policy candidates.")
 
 def _operator_literal(value: object) -> str:
     """Return repr() for operator output so control characters stay escaped."""
-    return repr(value)
+    return operator_literal(value)
 
 
 def _store(db: Optional[Path]) -> SQLiteMemoryStore:

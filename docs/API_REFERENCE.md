@@ -1726,6 +1726,12 @@ Memory type definitions. Two classification dimensions (PRD §4.1 + §5.2): - Me
 
 **Functions:** `resolve_memory_type()`, `get_turn_text()`
 
+## `caveman.operator_output`
+
+Operator-facing literal formatting helpers.
+
+**Functions:** `operator_literal()`
+
 ## `caveman.paths`
 
 Centralized constants — single source of truth for paths, defaults, and magic numbers. All hardcoded "~/.caveman/..." paths, timeout values, token limits, and other repeated constants should reference this module. Changi

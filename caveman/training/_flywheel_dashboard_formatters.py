@@ -2,13 +2,12 @@ from __future__ import annotations
 
 from typing import Any
 
+from caveman.operator_output import operator_literal
+
 
 def _operator_literal(value: object, max_length: int = 160) -> str:
     """Return a repr-style literal safe for terminal/operator reports."""
-    text = str(value if value is not None else "<missing>")
-    if len(text) > max_length:
-        text = text[: max_length - 1] + "…"
-    return repr(text)
+    return operator_literal(value, max_length=max_length)
 
 
 def _format_source_policy_drift(mem: dict[str, Any]) -> list[str]:
