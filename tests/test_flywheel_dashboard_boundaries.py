@@ -22,6 +22,10 @@ def _make_memory_db(path):
             '{"source":"import:openclaw"}', 0.05, 0, 0,
         ),
         (
+            "os-alias", "openclaw session alias", "semantic", "2026-03-16T00:00:00+00:00",
+            '{"source":"import:openclaw_sessions"}', 0.05, 0, 0,
+        ),
+        (
             "oq", "openclaw quarantined", "semantic", "2026-03-16T00:00:00+00:00",
             '{"source":"import:openclaw","governance_state":"quarantined"}', 0.01, 0, 0,
         ),
@@ -64,8 +68,8 @@ def test_collect_memory_stats_stratifies_by_source_and_type(tmp_path, monkeypatc
     stats = dashboard.collect_memory_stats()
 
     assert stats["status"] == "ok"
-    assert stats["total"] == 10
-    assert stats["avg_trust"] == 0.183
+    assert stats["total"] == 11
+    assert stats["avg_trust"] == 0.171
     assert stats["source_breakdown"][:3] == [
         {
             "label": "import:hermes",
@@ -80,6 +84,18 @@ def test_collect_memory_stats_stratifies_by_source_and_type(tmp_path, monkeypatc
             "eligible_for_source_policy": 1,
         },
         {
+            "label": "import:openclaw",
+            "total": 3,
+            "avg_trust": 0.037,
+            "never_recalled": 3,
+            "never_recalled_pct": 1.0,
+            "helpful": 0,
+            "helpful_pct": 0.0,
+            "active": 2,
+            "quarantined": 1,
+            "eligible_for_source_policy": 2,
+        },
+        {
             "label": "nudge",
             "total": 2,
             "avg_trust": 0.4,
@@ -91,25 +107,13 @@ def test_collect_memory_stats_stratifies_by_source_and_type(tmp_path, monkeypatc
             "quarantined": 0,
             "eligible_for_source_policy": 0,
         },
-        {
-            "label": "<missing>",
-            "total": 2,
-            "avg_trust": 0.25,
-            "never_recalled": 1,
-            "never_recalled_pct": 0.5,
-            "helpful": 0,
-            "helpful_pct": 0.0,
-            "active": 2,
-            "quarantined": 0,
-            "eligible_for_source_policy": 0,
-        },
     ]
     assert stats["type_breakdown"] == [
         {
             "label": "semantic",
-            "total": 6,
-            "avg_trust": 0.055,
-            "never_recalled": 6,
+            "total": 7,
+            "avg_trust": 0.054,
+            "never_recalled": 7,
             "never_recalled_pct": 1.0,
             "helpful": 0,
             "helpful_pct": 0.0,
@@ -136,12 +140,12 @@ def test_collect_memory_stats_stratifies_by_source_and_type(tmp_path, monkeypatc
     assert stats["source_governance"][:2] == [
         {
             "label": "import:openclaw",
-            "total": 2,
-            "active": 1,
+            "total": 3,
+            "active": 2,
             "quarantined": 1,
-            "eligible_for_source_policy": 1,
+            "eligible_for_source_policy": 2,
             "noise_score": 1.0,
-            "recall_candidate_reduction_pct": 0.5,
+            "recall_candidate_reduction_pct": 0.333,
         },
         {
             "label": "import:hermes",
@@ -157,7 +161,7 @@ def test_collect_memory_stats_stratifies_by_source_and_type(tmp_path, monkeypatc
     report = dashboard.format_report()
     assert "By source (top):" in report
     assert "nudge: n=2, active=2, quarantined=0, eligible=0, noise=25%, recall-reduction=0%" in report
-    assert "import:openclaw: n=2, active=1, quarantined=1, eligible=1, noise=100%, recall-reduction=50%" in report
+    assert "import:openclaw: n=3, active=2, quarantined=1, eligible=2, noise=100%, recall-reduction=33%" in report
     assert "Source governance actions:" in report
     long_label = next(row["label"] for row in stats["source_breakdown"] if row["label"].startswith("very-long"))
     assert "\n" not in long_label
@@ -224,6 +228,37 @@ def test_source_governance_includes_actionable_sources_beyond_source_breakdown_l
             "recall_candidate_reduction_pct": 0.0,
         }
     ]
+
+
+def test_source_governance_uses_canonical_identity_not_display_truncation(tmp_path, monkeypatch):
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir()
+    db_path = memory_dir / "caveman.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "CREATE TABLE memories ("
+        "id TEXT PRIMARY KEY, content TEXT NOT NULL, type TEXT NOT NULL, created_at TEXT NOT NULL, "
+        "metadata_json TEXT DEFAULT '{}', trust_score REAL DEFAULT 0.5, "
+        "retrieval_count INTEGER DEFAULT 0, helpful_count INTEGER DEFAULT 0)"
+    )
+    long_source = "import:" + "x" * 120
+    conn.execute(
+        "INSERT INTO memories (id, content, type, created_at, metadata_json, trust_score, retrieval_count, helpful_count) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        ("long-src", "long source", "semantic", "2026-03-16T00:00:00+00:00", json.dumps({"source": long_source}), 0.04, 0, 0),
+    )
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr("caveman.training.flywheel_dashboard.MEMORY_DIR", memory_dir)
+    monkeypatch.setattr(
+        "caveman.training._flywheel_memory_diagnostics.SOURCE_POLICY_LOW_SIGNAL_IMPORTS",
+        frozenset({long_source}),
+    )
+
+    stats = FlywheelDashboard().collect_memory_stats()
+
+    assert stats["source_governance"][0]["eligible_for_source_policy"] == 1
+    assert len(stats["source_governance"][0]["label"]) == 80
 
 
 def test_collect_memory_stats_keeps_legacy_schema_working(tmp_path, monkeypatch):

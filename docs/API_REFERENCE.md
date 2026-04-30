@@ -1690,6 +1690,12 @@ Memory content security scanner. Ported from Hermes memory_tool.py (MIT, Nous Re
 
 **Functions:** `scan_memory_content()`, `is_safe()`
 
+## `caveman.memory.sources`
+
+Canonical memory source taxonomy and source governance policy. Centralizing these labels prevents decay, dashboard diagnostics, migrations and importers from drifting into subtly different source spellings.
+
+**Functions:** `canonicalize_memory_source()`
+
 ## `caveman.memory.sqlite_schema`
 
 SQLite schema for the memory backend.

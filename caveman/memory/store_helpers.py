@@ -13,6 +13,7 @@ import sqlite3
 from datetime import datetime
 from typing import Callable
 
+from caveman.memory.sources import canonicalize_memory_source
 from .types import MemoryType, MemoryEntry
 
 __all__ = [
@@ -109,7 +110,7 @@ def _migration_002_last_accessed_column(conn: sqlite3.Connection) -> None:
 def _infer_import_source_from_metadata(metadata: dict) -> str | None:
     raw_source = metadata.get("source")
     if isinstance(raw_source, str) and raw_source.strip() and raw_source.strip() != "<missing>":
-        return raw_source.strip()
+        return canonicalize_memory_source(raw_source)
 
     evidence = " ".join(
         str(metadata.get(key, ""))
