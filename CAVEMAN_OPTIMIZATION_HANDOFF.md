@@ -5,7 +5,7 @@
 ## 当前最终状态
 - Round 14 已完成、提交并推送到 `main`。
 - 最新 code commit: `8575c9e191ba3a4c392d9ac319c4ef1a9f571dbe` (`[verified] decouple restorable quarantine reporting`)。
-- 最新 handoff/docs commit: `8575c9e191ba3a4c392d9ac319c4ef1a9f571dbe`（本轮无需 API docs 变更，handoff commit 将在下一条提交更新）。
+- Round 14 handoff/docs content commit: `da1059ba3a61aba476a576547c2a4898627b082a` (`docs: update caveman handoff after round 14`)；本文件可能随后有 metadata-only 校正提交。
 - `origin/main` 已同步到最新 SHA。
 - GitHub Actions 对 Round 14 code SHA 全绿：run `25174683621`，`https://github.com/abczsl520/caveman-agent/actions/runs/25174683621`。
 - 自动续跑已配置：cron job `36500447cc33` (`Caveman 50轮自动续跑`)，每 30 分钟触发，最多 48 次，目标回发当前 Discord thread；preflight 脚本 `/Users/yeren64g/.hermes/scripts/caveman_50round_preflight.py`，互斥锁 `/tmp/caveman-50round.lock`。
