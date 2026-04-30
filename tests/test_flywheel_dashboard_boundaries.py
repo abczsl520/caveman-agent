@@ -513,3 +513,58 @@ def test_collect_wiki_stats_accepts_list_and_object_shapes(tmp_path, monkeypatch
     assert stats["status"] == "ok"
     assert stats["tiers"] == {"working": 2, "episodic": 1, "semantic": 3, "procedural": 0}
     assert stats["total_entries"] == 6
+
+
+def test_decay_dry_run_reports_restorable_quarantine_sources(tmp_path, monkeypatch):
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir()
+    db_path = memory_dir / "caveman.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "CREATE TABLE memories ("
+        "id TEXT PRIMARY KEY, content TEXT NOT NULL, type TEXT NOT NULL, created_at TEXT NOT NULL, "
+        "metadata_json TEXT DEFAULT '{}', trust_score REAL DEFAULT 0.5, "
+        "retrieval_count INTEGER DEFAULT 0, helpful_count INTEGER DEFAULT 0)"
+    )
+    rows = [
+        (
+            "q-openclaw", "quarantined openclaw", "semantic", "2026-03-16T00:00:00+00:00",
+            '{"source":"import:openclaw","governance_state":"quarantined","quarantine_reason":"source_policy_low_signal_import"}',
+            0.01, 0, 0,
+        ),
+        (
+            "q-hermes", "quarantined hermes", "semantic", "2026-03-16T00:00:00+00:00",
+            '{"source":"import:hermes","governance_state":"quarantined","quarantine_reason":"stale_low_signal_import"}',
+            0.01, 0, 0,
+        ),
+        (
+            "active-openclaw", "active openclaw", "semantic", "2026-03-16T00:00:00+00:00",
+            '{"source":"import:openclaw"}', 0.05, 0, 0,
+        ),
+    ]
+    conn.executemany(
+        "INSERT INTO memories (id, content, type, created_at, metadata_json, trust_score, retrieval_count, helpful_count) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        rows,
+    )
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr("caveman.training.flywheel_dashboard.MEMORY_DIR", memory_dir)
+
+    stats = FlywheelDashboard().collect_memory_stats()
+
+    assert stats["decay_dry_run"]["restorable_quarantine_by_source"] == {
+        "import:hermes": 1,
+        "import:openclaw": 1,
+    }
+    assert stats["decay_dry_run"]["restorable_quarantine_by_reason"] == {
+        "source_policy_low_signal_import": 1,
+        "stale_low_signal_import": 1,
+    }
+    formatted = FlywheelDashboard()
+    formatted.metrics["memory"] = stats
+    formatted.metrics["trajectories"] = {}
+    formatted.metrics["rl_router"] = {}
+    formatted.metrics["wiki"] = {}
+    report = formatted.format_report()
+    assert "Restorable quarantine: import:hermes=1, import:openclaw=1" in report
