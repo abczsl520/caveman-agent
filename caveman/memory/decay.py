@@ -102,9 +102,11 @@ class MemoryDecay:
         conn.row_factory = sqlite3.Row
 
         try:
+            columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(memories)").fetchall()}
+            last_accessed_expr = "last_accessed" if "last_accessed" in columns else "NULL AS last_accessed"
             rows = conn.execute(
                 "SELECT id, content, type, created_at, trust_score, "
-                "retrieval_count, helpful_count, metadata_json "
+                f"retrieval_count, helpful_count, metadata_json, {last_accessed_expr} "
                 "FROM memories ORDER BY trust_score ASC LIMIT ?",
                 (_MAX_DECAY_PER_RUN,),
             ).fetchall()
@@ -131,7 +133,7 @@ class MemoryDecay:
                 except (ValueError, TypeError):
                     created = now - timedelta(days=365)  # assume old
 
-                last_accessed = metadata.get("last_accessed")
+                last_accessed = row["last_accessed"] or metadata.get("last_accessed")
                 if last_accessed:
                     try:
                         la = datetime.fromisoformat(last_accessed)

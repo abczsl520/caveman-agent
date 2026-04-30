@@ -23,6 +23,7 @@ def _create_test_db(tmp_path: Path) -> Path:
             trust_score REAL DEFAULT 0.5,
             retrieval_count INTEGER DEFAULT 0,
             helpful_count INTEGER DEFAULT 0,
+            last_accessed TEXT,
             entities_json TEXT DEFAULT '[]'
         )
     """)
@@ -43,16 +44,18 @@ def _insert_memory(
     now = datetime.now(timezone.utc)
     created = now - timedelta(days=created_days_ago)
     metadata = dict(metadata or {})
+    last_accessed = None
     if last_accessed_days_ago is not None:
         la = now - timedelta(days=last_accessed_days_ago)
+        last_accessed = la.isoformat()
         metadata["last_accessed"] = la.isoformat()
 
     conn = sqlite3.connect(str(db_path))
     conn.execute(
         "INSERT INTO memories (id, content, type, created_at, metadata_json, "
-        "trust_score, retrieval_count, helpful_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "trust_score, retrieval_count, helpful_count, last_accessed) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (mid, content, "fact", created.isoformat(),
-         json.dumps(metadata), trust, retrieval_count, helpful_count),
+         json.dumps(metadata), trust, retrieval_count, helpful_count, last_accessed),
     )
     conn.commit()
     conn.close()
@@ -91,6 +94,48 @@ class TestMemoryDecay:
         result = decay.run()
         assert result.memories_decayed == 0
         assert _get_trust(db_path, "recent") == 0.5
+
+    def test_last_accessed_column_without_metadata_is_immune(self, tmp_path):
+        """Decay should honor canonical last_accessed column, not only duplicated metadata."""
+        db_path = _create_test_db(tmp_path)
+        _insert_memory(db_path, "recent-column", trust=0.5, created_days_ago=120)
+        recent = (datetime.now(timezone.utc) - timedelta(days=5)).isoformat()
+        conn = sqlite3.connect(str(db_path))
+        conn.execute("UPDATE memories SET last_accessed = ?, metadata_json = '{}' WHERE id = ?", (recent, "recent-column"))
+        conn.commit()
+        conn.close()
+        decay = MemoryDecay(db_path=db_path, archive_dir=tmp_path / "archive")
+
+        result = decay.run()
+
+        assert result.memories_decayed == 0
+        assert _get_trust(db_path, "recent-column") == 0.5
+
+    def test_decay_tolerates_legacy_schema_without_last_accessed_column(self, tmp_path):
+        """Older DB copies without last_accessed should still decay instead of crashing."""
+        db_path = tmp_path / "legacy.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.execute("""
+            CREATE TABLE memories (
+                id TEXT PRIMARY KEY, content TEXT NOT NULL, type TEXT NOT NULL, created_at TEXT NOT NULL,
+                metadata_json TEXT DEFAULT '{}', trust_score REAL DEFAULT 0.5,
+                retrieval_count INTEGER DEFAULT 0, helpful_count INTEGER DEFAULT 0
+            )
+        """)
+        created = (datetime.now(timezone.utc) - timedelta(days=60)).isoformat()
+        conn.execute(
+            "INSERT INTO memories (id, content, type, created_at, metadata_json, trust_score, retrieval_count, helpful_count) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            ("legacy", "legacy memory", "fact", created, "{}", 0.5, 0, 0),
+        )
+        conn.commit()
+        conn.close()
+        decay = MemoryDecay(db_path=db_path, archive_dir=tmp_path / "archive")
+
+        result = decay.run()
+
+        assert result.memories_decayed == 1
+        assert _get_trust(db_path, "legacy") < 0.5
 
     def test_old_unused_memory_decays(self, tmp_path):
         """Memories unused for >30 days should lose trust."""
