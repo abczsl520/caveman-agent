@@ -561,6 +561,52 @@ def test_source_governance_cli_preview_rows_escape_control_characters(monkeypatc
         assert "reason='unmanaged\\n\\x1b[32mreason'" in preview.output
 
 
+def test_source_governance_cli_uses_shared_literal_formatter(monkeypatch):
+    """Operator-facing literals should share one formatter instead of scattering inline reprs."""
+    import asyncio
+
+    from typer.testing import CliRunner
+
+    from caveman.cli.main import app
+    from caveman.cli import source_governance
+
+    seen = []
+
+    def tracking_literal(value):
+        seen.append(value)
+        return f"SAFE<{str(value).replace(chr(10), chr(92) + 'n')}>"
+
+    monkeypatch.setattr(source_governance, "_operator_literal", tracking_literal)
+    with tempfile.TemporaryDirectory() as td:
+        monkeypatch.setenv("CAVEMAN_HOME", td)
+        mgr = MemoryManager.with_sqlite(base_dir=td)
+        try:
+            store = mgr.backend
+            for idx in range(3):
+                asyncio.run(store.store(
+                    f"shared literal low-signal source {idx}",
+                    MemoryType.SEMANTIC,
+                    metadata={"source": "import:shared-literal", "trust_score": 0.05},
+                    trusted=True,
+                ))
+        finally:
+            _close_manager(mgr)
+
+        preview = CliRunner().invoke(app, [
+            "source-governance", "preview-drift",
+            "--db", f"{td}/caveman.db",
+            "--min-rows", "3",
+        ])
+
+    assert preview.exit_code == 0, preview.output
+    assert "source=SAFE<import:shared-literal>" in preview.output
+    assert "reason=SAFE<unmanaged_low_signal_import>" in preview.output
+    assert "   SAFE<import:shared-literal>," in preview.output
+    assert "[ ] SAFE<import:shared-literal> — reason=SAFE<unmanaged_low_signal_import> total=3" in preview.output
+    assert seen.count("import:shared-literal") >= 4
+    assert "unmanaged_low_signal_import" in seen
+
+
 def test_memory_types():
     assert MemoryType.EPISODIC.value == "episodic"
     assert MemoryType.WORKING.value == "working"
