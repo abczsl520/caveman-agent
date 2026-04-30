@@ -361,7 +361,8 @@ def test_source_governance_cli_prints_copy_paste_policy_workflow(monkeypatch):
         assert "1. Review source quality outside the CLI; this command is read-only." in preview.output
         assert "2. If approved, add to caveman.memory.sources.SOURCE_POLICY_LOW_SIGNAL_IMPORTS:" in preview.output
         assert "   'import:operator-feed'," in preview.output
-        assert "3. Re-run: caveman source-governance preview-drift --min-rows 3" in preview.output
+        assert "3. Re-run: caveman source-governance preview-drift --db" in preview.output
+        assert "--min-rows 3 --limit 8" in preview.output
         assert "auto_mutation=disabled" in preview.output
 
 
@@ -398,6 +399,42 @@ def test_source_governance_cli_escapes_copy_paste_policy_entries(monkeypatch):
         assert preview.exit_code == 0, preview.output
         assert f"   {unsafe_source!r}," in preview.output
         assert f'   "{unsafe_source}",' not in preview.output
+
+
+def test_source_governance_cli_rerun_command_shell_quotes_custom_db_path(monkeypatch):
+    """Operators should be able to copy the review command without losing the audited DB scope."""
+    import asyncio
+    import shlex
+
+    from typer.testing import CliRunner
+
+    from caveman.cli.main import app
+
+    with tempfile.TemporaryDirectory() as td:
+        data_dir = f"{td}/copy'quoted"
+        mgr = MemoryManager.with_sqlite(base_dir=data_dir)
+        try:
+            store = mgr.backend
+            for idx in range(3):
+                asyncio.run(store.store(
+                    f"custom-db low-signal source {idx}",
+                    MemoryType.SEMANTIC,
+                    metadata={"source": "import:custom-db-feed", "trust_score": 0.05},
+                    trusted=True,
+                ))
+        finally:
+            _close_manager(mgr)
+
+        db_path = f"{data_dir}/caveman.db"
+        preview = CliRunner().invoke(app, [
+            "source-governance", "preview-drift",
+            "--db", db_path,
+            "--min-rows", "3",
+            "--limit", "1",
+        ])
+
+        assert preview.exit_code == 0, preview.output
+        assert f"3. Re-run: caveman source-governance preview-drift --db {shlex.quote(db_path)} --min-rows 3 --limit 1" in preview.output
 
 
 def test_memory_types():
