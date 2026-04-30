@@ -2578,6 +2578,12 @@ Tool result persistence — preserves large outputs instead of truncating. Inspi
 
 Training & data pipeline — embedding fine-tuning + data export for researchers.
 
+## `caveman.training._flywheel_quarantine_preview`
+
+Quarantine restore-preview helpers for FlywheelDashboard.
+
+**Functions:** `collect_restorable_quarantine_preview()`
+
 ## `caveman.training.backfill_trajectories`
 
 Backfill trajectory metadata — recount tool_calls from conversation data. Fixes trajectories saved before the tools_exec.py recording fix (commit 69f24d3). Those trajectories have tool_calls=0 because the recorder was ch
