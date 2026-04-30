@@ -389,6 +389,9 @@ def plugins(
 from caveman.cli.utility_commands import register_utility_commands
 register_utility_commands(app)
 
+from caveman.cli.memory_quarantine import app as memory_quarantine_app
+app.add_typer(memory_quarantine_app, name="memory-quarantine")
+
 import caveman.cli.acp_cli  # noqa: F401, E402
 
 __all__ = ["main_callback", "run", "skills", "version", "tools", "setup", "serve", "export", "import_cmd", "doctor", "adapt_workspace_cmd", "train", "hub", "plugins"]
