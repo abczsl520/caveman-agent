@@ -1,6 +1,6 @@
 # Caveman 优化 HANDOFF
 
-更新时间: 2026-05-01 03:54 CST
+更新时间: 2026-05-01 04:02 CST
 
 ## 当前最终状态
 - Round 26 已完成、提交并推送到 `main`；GitHub Actions run `25185877026`，`https://github.com/abczsl520/caveman-agent/actions/runs/25185877026`，completed success。
@@ -16,6 +16,7 @@
 - Round 16 已完成、提交并推送到 `main`。
 - 最新 code commit: `2ee79fa` (`[verified] share operator literal formatter`)。
 - Round 26 code commit: `2ee79fa9c0675cf97cb6e662eb5feee5d8708e48` (`[verified] share operator literal formatter`)；GitHub Actions run `25185877026` completed success。
+- Round 26 handoff/docs commit: `30303b1013d53428de88810eafba492c89bf88bb` (`docs: update caveman handoff after round 26`)；GitHub Actions run `25186258099` completed success。
 - Round 25 code commit: `3d393ae` (`[verified] escape source drift operator literals`)；GitHub Actions run 待补查（本机无 GitHub token/gh auth）。
 - Round 24 code commit: `4c8ea7cbfa8e08309a3a6da3955533cbd6e6c341` (`[verified] document source governance literal safety`)；GitHub Actions run 待补查（GitHub API rate limit）。
 - Round 23 code commit: `2578fbabe2f1a99b1f3030667f8761610cc2ba04` (`[verified] centralize source governance literals`)；GitHub Actions run 待补查（GitHub API rate limit）。
