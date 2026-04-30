@@ -1,12 +1,13 @@
 # Caveman 优化 HANDOFF
 
-更新时间: 2026-05-01 00:44 CST
+更新时间: 2026-05-01 00:57 CST
 
 ## 当前最终状态
+- Round 17 已完成、提交并推送到 `main`。
 - Round 16 已完成、提交并推送到 `main`。
 - Round 15 已完成、提交并推送到 `main`。
 - Round 14 已完成、提交并推送到 `main`。
-- 最新 code commit: `f51d66939b96ea5a2f8504f76b599c72d7070a4b` (`[verified] surface source drift policy candidates`)。
+- 最新 code commit: `b3ee3b33ea7d9b6c477cd5dca737d1d156256490` (`[verified] add source governance drift preview CLI`)；docs/API commit: `d5f854fd28f78b135b773f6a03ed537b94717e9f` (`docs: update API reference for source governance CLI`)。
 - Round 14 handoff/docs content commit: `da1059ba3a61aba476a576547c2a4898627b082a` (`docs: update caveman handoff after round 14`)；本文件可能随后有 metadata-only 校正提交。
 - `origin/main` 已同步到最新 SHA。
 - GitHub Actions 对 Round 14 code SHA 全绿：run `25174683621`，`https://github.com/abczsl520/caveman-agent/actions/runs/25174683621`。
@@ -20,9 +21,28 @@
 - Gateway 最后已知未运行：需要交互验证时按 gateway SOP 安全启动，避免 `nohup caveman serve &` 触发 Hermes terminal exit-130 loop。
 
 ## 下次启动时做
-1. Round 17/50：继续 source governance / quarantine observability；优先把 `source_policy_drift` candidate 从“报告建议”推进到只读 CLI/API preview（例如列出 candidate allowlist entries + impact），或审计 source casing/alias normalization 的漏网数据。先用数据/测试证明缺口，再 TDD 小步修。
+1. Round 18/50：继续 source governance/operator tooling；优先补 `source-governance preview-drift` 的空结果/limit 排序 regression，或把 preview 输出接入更清晰的 operator copy/paste policy workflow（仍保持只读，不自动 mutate allowlist）。先用数据/测试证明缺口，再 TDD 小步修。
 2. Dashboard 主文件已在 450 行 hard limit；继续 dashboard 方向必须优先抽 helper，不要在 `flywheel_dashboard.py` 主文件堆逻辑。
-3. Rounds 17-50：按“证据→TDD→实现→门禁→review→commit/push→监控”小步推进；不要虚构完成 50 轮，每轮必须有验证与提交或明确 no-op 证据。
+3. Rounds 18-50：按“证据→TDD→实现→门禁→review→commit/push→监控”小步推进；不要虚构完成 50 轮，每轮必须有验证与提交或明确 no-op 证据。
+
+## Round 17 做了什么
+- 聚焦 Round 16 的下一步：`source_policy_drift` candidate 已在 dashboard/report 中出现，但 operator 仍缺少无需打开 Python/DB 的只读 CLI 入口来复制 candidate allowlist entry 与 impact。
+- 新增 `caveman.cli.source_governance` Typer sub-app，注册为 `caveman source-governance preview-drift`。
+- CLI 复用 `_collect_memory_source_policy_drift()`，支持 `--db`、`--min-rows`、`--limit`，输出 `candidate_count`、source、total/active、avg_trust、never/helpful pct、reason、recommended_action、`candidate_policy_entry`。
+- 保持治理模型为 operator-assisted：preview 只读，不写 memory rows、不修改 source policy、不触碰 quarantine state。
+- 更新 `docs/API_REFERENCE.md` 以满足 docs/API gate。
+
+## Round 17 验证结果
+- RED：新增 CLI regression 初始失败：测试不存在/命令模块未注册，随后实现后通过，证明旧系统缺少 operator CLI preview 入口。
+- Focused baseline before change：`tests/test_flywheel_dashboard.py tests/test_flywheel_dashboard_boundaries.py tests/test_memory_decay.py tests/test_memory.py` → `57 passed`。
+- Focused tests after change：同一集合 → `58 passed`。
+- Full suite（排除已知 NFR）：`.venv/bin/python -m pytest tests/ -q --ignore=tests/test_nfr_compliance.py --tb=short` → `3302 passed, 8 skipped`。
+- Py compile：`caveman/cli/source_governance.py caveman/cli/main.py` pass。
+- Ruff changed files：`caveman/cli/source_governance.py tests/test_memory.py` pass；`caveman/cli/main.py` 仍有既有 E402/F841/F541 baseline，未作为本轮新增 blocker。
+- Docs/API：`scripts/generate_api_reference.py` 更新 `docs/API_REFERENCE.md`，已提交 docs commit。
+- Security scan：changed added-line hardcoded secret/shell/eval/pickle/SQL-string-format patterns 0 matches；push hook safety checks passed。
+- Independent review：passed，无 security/logic blocker；确认 CLI 只读、Typer option validation、SQLiteStore close、固定 SQL diagnostic helper。
+- Remote CI：本环境 `gh` 未认证且 unauthenticated GitHub API rate limit 已用尽（HTTP 403），无法读取 run id；code/docs commits 已成功 push，下一轮先检查 `d5f854f` 的 Actions 状态。
 
 ## Round 16 做了什么
 - 聚焦 Round 15 的下一步：`source_policy_drift` 已能发现 unmanaged low-signal import source，但 operator report 仍只显示“有漂移”，缺少可复制/审批的 policy candidate identity，尤其长 source label 被截断时无法安全加入 allowlist。
