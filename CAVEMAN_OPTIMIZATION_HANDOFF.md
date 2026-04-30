@@ -10,7 +10,7 @@
 - Round 17 已完成、提交并推送到 `main`。
 - Round 16 已完成、提交并推送到 `main`。
 - 最新 code commit: `4cfa33540927fc9a7cbd97bbaed1f16a928c6444` (`[verified] add source drift review checklist`)。
-- Round 21 GitHub Actions run: push 已成功；本环境 `gh` 未认证且 unauthenticated GitHub API rate limit 仍用尽，无法读取 run id/结论。下一轮先检查该 SHA 的 Actions 状态。
+- Round 21 GitHub Actions run: `25182107564`，`https://github.com/abczsl520/caveman-agent/actions/runs/25182107564`，completed success。
 - Round 20 code commit: `fd234095a4f0d6ab20ca9bf33a0c099418b31382` (`[verified] preserve source drift rerun scope`)；run `25180742729` 最终结论本轮仍因 unauthenticated API rate limit 无法读取。
 - Round 19 code commit: `7062e3414fc52d4e5e11773570fa0e3020aab4de` (`[verified] add source drift policy workflow`)；GitHub Actions run `25179439795` completed success。
 - Round 14 handoff/docs content commit: `da1059ba3a61aba476a576547c2a4898627b082a` (`docs: update caveman handoff after round 14`)；本文件可能随后有 metadata-only 校正提交。
@@ -19,7 +19,7 @@
 - Gateway 最后已知未运行：需要交互验证时按 gateway SOP 安全启动，避免 shell background 启动触发 Hermes terminal exit-130 loop。
 
 ## 下次启动时做
-1. 先检查 Round 21 code SHA `4cfa33540927fc9a7cbd97bbaed1f16a928c6444` 的 GitHub Actions 状态；若失败，按 CI logs 修。顺手补查 Round 20 run `25180742729`，因为本环境连续遇到 unauthenticated API rate limit。
+1. Round 21 code SHA `4cfa33540927fc9a7cbd97bbaed1f16a928c6444` 的 GitHub Actions run `25182107564` 已 success；下一轮可直接继续 Round 22/50。顺手补查 Round 20 run `25180742729`（此前 API rate limit 未确认）。
 2. Round 22/50：继续 source governance/operator tooling；优先把 pre-existing preview rows 的 source/reason/candidate 输出也做一致的 safe display helper（reviewer 非阻塞建议），或抽出 shared formatter 覆盖 candidate detail/workflow/checklist，保持只读，不自动 mutate allowlist。
 3. Dashboard 主文件已在 450 行 hard limit；继续 dashboard 方向必须优先抽 helper，不要在 `flywheel_dashboard.py` 主文件堆逻辑。
 4. Rounds 22-50：按“证据→TDD→实现→门禁→review→commit/push→监控”小步推进；不要虚构完成 50 轮，每轮必须有验证与提交或明确 no-op 证据。
@@ -42,7 +42,7 @@
 - Docs/API：`scripts/generate_api_reference.py --check` 无 diff。
 - Security scan：added-line hardcoded secret/shell/eval/pickle/SQL-string-format patterns 0 matches；push hook safety checks passed。
 - Independent review：最终 passed，无 security/logic blocker；非阻塞建议是后续把 pre-existing preview rows 也统一 safe display。
-- Remote CI：code commit `4cfa33540927fc9a7cbd97bbaed1f16a928c6444` 已 push；本环境 `gh` 未认证且 unauthenticated GitHub API rate limit 用尽，无法读取 run id/结论，下一轮先查。
+- Remote CI：code commit `4cfa33540927fc9a7cbd97bbaed1f16a928c6444` 的 GitHub Actions run `25182107564` 已完成 success。
 
 ## Round 20 做了什么
 - 聚焦 Round 19 handoff 指定的 `source-governance preview-drift` operator workflow：旧 copy/paste re-run command 没保留显式 `--db`，也没保留 `--limit`，operator 审查临时/非默认 DB 时复制命令会悄悄切回默认 memory DB。
