@@ -234,7 +234,7 @@ def _collect_memory_source_governance(cur: Any, limit: int = 8) -> list[dict[str
     )[:limit]
 
 
-def _collect_memory_source_policy_drift(cur: Any, min_rows: int = 3, limit: int = 8) -> list[dict[str, Any]]:
+def _collect_memory_source_policy_drift(cur: Any, min_rows: int = 3, limit: int | None = 8) -> list[dict[str, Any]]:
     """Find unmanaged import sources that look like low-signal bulk imports."""
     drift = []
     for row in _collect_source_rows(cur):
@@ -264,4 +264,5 @@ def _collect_memory_source_policy_drift(cur: Any, min_rows: int = 3, limit: int 
                 "recommended_action": "review_for_low_signal_allowlist",
                 "candidate_policy_entry": identity,
             })
-    return sorted(drift, key=lambda row: (-int(row["total"]), row["label"]))[:limit]
+    ordered = sorted(drift, key=lambda row: (-int(row["total"]), row["label"]))
+    return ordered if limit is None else ordered[:limit]

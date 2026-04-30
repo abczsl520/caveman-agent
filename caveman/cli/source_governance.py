@@ -27,15 +27,17 @@ def preview_drift(
     store = _store(db)
     try:
         conn = store._get_conn()  # noqa: SLF001 - CLI needs dashboard diagnostic connection.
-        candidates = _collect_memory_source_policy_drift(conn, min_rows=min_rows, limit=limit)
+        all_candidates = _collect_memory_source_policy_drift(conn, min_rows=min_rows, limit=None)
     finally:
         store.close()
 
-    if not candidates:
+    if not all_candidates:
         typer.echo("No unmanaged low-signal import source drift candidates found.")
         return
 
-    typer.echo(f"candidate_count={len(candidates)}")
+    candidates = all_candidates[:limit]
+    typer.echo(f"candidate_count={len(all_candidates)}")
+    typer.echo(f"showing_count={len(candidates)}")
     for idx, row in enumerate(candidates, 1):
         typer.echo(f"{idx}. source={row['label']} total={row['total']} active={row['active']}")
         typer.echo(
