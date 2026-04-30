@@ -392,6 +392,9 @@ register_utility_commands(app)
 from caveman.cli.memory_quarantine import app as memory_quarantine_app
 app.add_typer(memory_quarantine_app, name="memory-quarantine")
 
+from caveman.cli.source_governance import app as source_governance_app
+app.add_typer(source_governance_app, name="source-governance")
+
 import caveman.cli.acp_cli  # noqa: F401, E402
 
 __all__ = ["main_callback", "run", "skills", "version", "tools", "setup", "serve", "export", "import_cmd", "doctor", "adapt_workspace_cmd", "train", "hub", "plugins"]

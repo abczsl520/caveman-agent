@@ -243,6 +243,51 @@ def test_quarantine_cli_preview_is_dry_run_and_reports_impact(monkeypatch):
             _close_manager(mgr)
 
 
+def test_source_governance_cli_previews_policy_drift_without_mutating_rows(monkeypatch):
+    """Operators need a copyable allowlist candidate preview before changing source policy."""
+    from typer.testing import CliRunner
+
+    from caveman.cli.main import app
+
+    with tempfile.TemporaryDirectory() as td:
+        monkeypatch.setenv("CAVEMAN_HOME", td)
+        mgr = MemoryManager.with_sqlite(base_dir=td)
+        try:
+            store = mgr.backend
+            import asyncio
+            for idx in range(3):
+                asyncio.run(store.store(
+                    f"cli unmanaged low-signal source {idx}",
+                    MemoryType.SEMANTIC,
+                    metadata={"source": "import:new-bulk-feed", "trust_score": 0.05},
+                    trusted=True,
+                ))
+        finally:
+            _close_manager(mgr)
+
+        runner = CliRunner()
+        preview = runner.invoke(app, [
+            "source-governance", "preview-drift",
+            "--db", f"{td}/caveman.db",
+            "--min-rows", "3",
+        ])
+
+        assert preview.exit_code == 0, preview.output
+        assert "candidate_count=1" in preview.output
+        assert "candidate_policy_entry" in preview.output
+        assert "import:new-bulk-feed" in preview.output
+        assert "review_for_low_signal_allowlist" in preview.output
+
+        mgr = MemoryManager.with_sqlite(base_dir=td)
+        try:
+            entries = mgr.backend.all_entries()
+            assert len(entries) == 3
+            assert {entry.metadata.get("source") for entry in entries} == {"import:new-bulk-feed"}
+            assert {entry.metadata.get("governance_state") for entry in entries} == {None}
+        finally:
+            _close_manager(mgr)
+
+
 def test_memory_types():
     assert MemoryType.EPISODIC.value == "episodic"
     assert MemoryType.WORKING.value == "working"
