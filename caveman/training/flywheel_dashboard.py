@@ -14,10 +14,12 @@ from __future__ import annotations
 
 import json
 import logging
+import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, cast
 
+from caveman.memory.decay import MemoryDecay
 from caveman.paths import (
     MEMORY_DIR, MEMORY_DB_PATH, TRAJECTORIES_DIR,
     SKILLS_DIR, WIKI_DIR,
@@ -139,6 +141,27 @@ class FlywheelDashboard:
             if {"metadata_json", "created_at", "trust_score", "retrieval_count", "helpful_count"}.issubset(columns):
                 stats["source_breakdown"] = collect_memory_source_breakdown(cur)
                 stats["source_governance"] = collect_memory_source_governance(cur)
+                try:
+                    decay_preview = MemoryDecay(db_path=db_path).run(dry_run=True)
+                except (json.JSONDecodeError, OSError, sqlite3.Error, TypeError, ValueError) as e:
+                    logger.debug("Memory decay preview skipped: %s", e)
+                    decay_preview = None
+                if decay_preview is not None:
+                    stats["decay_dry_run"] = {
+                        "scanned": decay_preview.memories_scanned,
+                        "would_decay": decay_preview.memories_decayed,
+                        "would_prune": decay_preview.memories_pruned,
+                        "would_quarantine": decay_preview.memories_quarantined,
+                        "trust_total_reduced": round(decay_preview.trust_total_reduced, 3),
+                        "would_quarantine_by_source": decay_preview.quarantined_by_source,
+                        "eligible_by_source": decay_preview.eligible_by_source,
+                    }
+                cur.execute(
+                    "SELECT COUNT(*) FROM memories "
+                    "WHERE json_valid(metadata_json) "
+                    "AND json_extract(metadata_json, '$.governance_state') = 'quarantined'"
+                )
+                stats["already_quarantined"] = cur.fetchone()[0]
 
             # Decay candidates
             cur.execute(
@@ -337,6 +360,15 @@ class FlywheelDashboard:
             f"   Recalled: {mem.get('recalled', 0)}, Never recalled: {mem.get('never_recalled', 0)}, "
             f"Helpful: {mem.get('helpful', 0)}, Prune candidates: {mem.get('prune_candidates', 0)}"
         )
+        decay_dry_run = mem.get("decay_dry_run", {})
+        if decay_dry_run:
+            lines.append(
+                "   Decay dry-run: "
+                f"scan={decay_dry_run.get('scanned', 0)}, "
+                f"would_decay={decay_dry_run.get('would_decay', 0)}, "
+                f"would_prune={decay_dry_run.get('would_prune', 0)}, "
+                f"would_quarantine={decay_dry_run.get('would_quarantine', 0)}"
+            )
         source_breakdown = mem.get("source_breakdown", [])
         if source_breakdown:
             lines.append("   By source (top):")
