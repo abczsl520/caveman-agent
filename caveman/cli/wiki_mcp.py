@@ -6,6 +6,8 @@ __all__ = ["register_wiki_commands", "register_mcp_commands"]
 import typer
 from typing import Optional
 
+from caveman.operator_output import operator_literal
+
 
 def register_wiki_commands(app: typer.Typer) -> None:
     """Register wiki subcommands on the main app."""
@@ -59,8 +61,10 @@ def register_wiki_commands(app: typer.Typer) -> None:
                 typer.echo("No results found.")
                 return
             for entry in results:
-                typer.echo(f"  [{entry.tier}] [{entry.confidence:.2f}] {entry.title}")
-                typer.echo(f"    {entry.content[:120]}")
+                title = operator_literal(entry.title)
+                preview = operator_literal(entry.content, max_length=120)
+                typer.echo(f"  [{entry.tier}] [{entry.confidence:.2f}] {title}")
+                typer.echo(f"    {preview}")
                 typer.echo()
 
         elif action == "export":
