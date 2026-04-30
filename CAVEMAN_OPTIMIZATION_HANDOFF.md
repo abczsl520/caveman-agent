@@ -1,14 +1,15 @@
 # Caveman 优化 HANDOFF
 
-更新时间: 2026-04-30 23:08 CST
+更新时间: 2026-04-30 23:44 CST
 
 ## 当前最终状态
-- Round 13 已完成、提交并推送到 `main`。
-- 最新 code commit: `edae36bf747baa7cb55e5addce47a9ba1044ba7e` (`[verified] report restorable quarantine impact`)。
-- 最新 handoff/docs commit: `60161563a3a5e242749604a0a7214bc535c6b2f5` (`docs: update api reference for quarantine preview`)。
+- Round 14 已完成、提交并推送到 `main`。
+- 最新 code commit: `8575c9e191ba3a4c392d9ac319c4ef1a9f571dbe` (`[verified] decouple restorable quarantine reporting`)。
+- 最新 handoff/docs commit: `8575c9e191ba3a4c392d9ac319c4ef1a9f571dbe`（本轮无需 API docs 变更，handoff commit 将在下一条提交更新）。
 - `origin/main` 已同步到最新 SHA。
-- GitHub Actions 对 Round 13 docs/handoff 最新 SHA 全绿：run `25173026185`，`https://github.com/abczsl520/caveman-agent/actions/runs/25173026185`。
+- GitHub Actions 对 Round 14 code SHA 全绿：run `25174683621`，`https://github.com/abczsl520/caveman-agent/actions/runs/25174683621`。
 - 自动续跑已配置：cron job `36500447cc33` (`Caveman 50轮自动续跑`)，每 30 分钟触发，最多 48 次，目标回发当前 Discord thread；preflight 脚本 `/Users/yeren64g/.hermes/scripts/caveman_50round_preflight.py`，互斥锁 `/tmp/caveman-50round.lock`。
+- Round 13 code commit: `edae36bf747baa7cb55e5addce47a9ba1044ba7e` (`[verified] report restorable quarantine impact`)；Round 13 docs/handoff commit: `b8e3794693a47f62bb33dc032e51957b7446c603`。
 - Round 9 code commit: `23df73debb9c113251eb0390515c47dbca9d5aa5` (`Protect decay with canonical access timestamps`)；Round 9 handoff commit: `ba76a2d93f5db3f08d60e6e34d17798555ea619d`。
 - Round 8 handoff commit: `f4a07bcde9f67e3d283dc43fda4dbe559a174a36`；Round 8 code commit: `9624ce069d74efa063e2c8c2aa4fef0feef80604` (`Normalize imported memory source metadata`)。
 - Round 7 handoff commit: `be73746`；Round 7 code commits: `92d6819` (`[verified] fix quarantine lifecycle CI gates`)、`b2c0169` (`[verified] add reversible memory quarantine lifecycle`)。
@@ -17,9 +18,27 @@
 - Gateway 最后已知未运行：需要交互验证时按 gateway SOP 安全启动，避免 `nohup caveman serve &` 触发 Hermes terminal exit-130 loop。
 
 ## 下次启动时做
-1. Round 14/50：优先考虑 reviewer 留下的 operator semantics 问题：restorable quarantine preview 是否应脱离 `MemoryDecay` dry-run 成功路径独立展示；或继续补 source impact trend / quarantine candidate drift。先用 dashboard 数据/测试证明缺口，再 TDD 小步修。
-2. Round 14 也可处理 source taxonomy 后续大小写策略/unknown source report；Round 11 reviewer 仅建议文档化 unknown casing，不是 blocker。
-3. Rounds 15-50：按“证据→TDD→实现→门禁→review→commit/push→监控”小步推进；不要虚构完成 50 轮，每轮必须有验证与提交或明确 no-op 证据。
+1. Round 15/50：继续 source governance / quarantine observability 的 operator 语义治理；优先考虑 source impact trend、quarantine candidate drift，或把 unknown/casing source policy 明文化并接入 dashboard diagnostics。先用数据/测试证明缺口，再 TDD 小步修。
+2. 若继续 dashboard 方向，注意 `flywheel_dashboard.py` 450 行 hard limit；优先抽 helper，不要在 dashboard 主文件继续堆逻辑。
+3. Rounds 16-50：按“证据→TDD→实现→门禁→review→commit/push→监控”小步推进；不要虚构完成 50 轮，每轮必须有验证与提交或明确 no-op 证据。
+
+## Round 14 做了什么
+- 聚焦 Round 13 reviewer 留下的 operator semantics 问题：restorable quarantine preview 不应依赖 `MemoryDecay` dry-run 成功才展示。
+- 根因：`collect_restorable_quarantine_preview(cur)` 原本只在 `decay_preview is not None` 分支里执行；如果 decay dry-run 因 sqlite lock/schema/IO 错误被 best-effort 跳过，dashboard 会同时丢失“当前已 quarantined 且可恢复”的 operator 视角。
+- 新增 regression：模拟 `MemoryDecay.run(dry_run=True)` 抛 `sqlite3.OperationalError("database is locked")`，要求 dashboard 仍输出 top-level `restorable_quarantine_by_source/reason` 并在 report 展示 `Restorable quarantine: ...`。
+- 实现：把 restorable quarantine collection 移到 decay preview 成功路径之外；成功时仍回填到 `decay_dry_run` 兼容旧消费者，同时 top-level stats 也提供独立字段。
+- 为满足 NFR-502，压缩 `flywheel_dashboard.py` 到 450 行以内；没有新增 API docs 变更。
+
+## Round 14 验证结果
+- RED：新增 `test_restorable_quarantine_report_survives_decay_preview_failure` 初始失败，错误为 `KeyError: 'restorable_quarantine_by_source'`，证明旧实现把 restore observability 绑死在 decay dry-run 成功路径上。
+- GREEN focused tests：`tests/test_flywheel_dashboard.py tests/test_flywheel_dashboard_boundaries.py tests/test_memory_decay.py` + god-file gates 共 `43 passed`。
+- Full suite（排除已知 NFR）：`.venv/bin/python -m pytest tests/ -q --ignore=tests/test_nfr_compliance.py --tb=short` → `3299 passed, 8 skipped`。
+- Py compile：`caveman/training/flywheel_dashboard.py tests/test_flywheel_dashboard_boundaries.py` pass。
+- Ruff changed files：pass。
+- Docs/API：`scripts/generate_api_reference.py` 后 `docs/API_REFERENCE.md` 无 diff。
+- Security scan：added-line hardcoded secret/shell/eval/pickle/SQL-string-format patterns 0 matches；push hook safety checks passed。
+- Independent review：passed，无 security/logic blocker；仅建议可读性/ordering 文档化，非阻塞。
+- Remote CI：Round 14 code commit `8575c9e191ba3a4c392d9ac319c4ef1a9f571dbe` GitHub Actions run `25174683621` completed success。
 
 ## Round 13 做了什么
 - 聚焦 quarantine restore observability：Round 10 已有 dry-run preview API，但 dashboard 只展示 decay 会新增 quarantine 的影响，缺少“当前已 quarantined 且可恢复”的 operator 视角。
