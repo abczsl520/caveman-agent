@@ -1,8 +1,9 @@
 # Caveman 优化 HANDOFF
 
-更新时间: 2026-05-01 02:44 CST
+更新时间: 2026-05-01 03:05 CST
 
 ## 当前最终状态
+- Round 23 已完成、提交并推送到 `main`；GitHub Actions 查询受 unauthenticated API rate limit 限制，run id/结论待下一轮补查。
 - Round 22 已完成、提交并推送到 `main`。
 - Round 21 已完成、提交并推送到 `main`。
 - Round 20 已完成、提交并推送到 `main`。
@@ -10,8 +11,9 @@
 - Round 18 已完成、提交并推送到 `main`。
 - Round 17 已完成、提交并推送到 `main`。
 - Round 16 已完成、提交并推送到 `main`。
-- 最新 code commit: `163417f8e70fa7b72153bc0dc636d5fc38bb0b93` (`[verified] harden source governance preview output`)。
-- Round 22 GitHub Actions run: `25182925025`，`https://github.com/abczsl520/caveman-agent/actions/runs/25182925025`，completed success。
+- 最新 code commit: `2578fbabe2f1a99b1f3030667f8761610cc2ba04` (`[verified] centralize source governance literals`)。
+- Round 23 code commit: `2578fbabe2f1a99b1f3030667f8761610cc2ba04` (`[verified] centralize source governance literals`)；GitHub Actions run 待补查（GitHub API rate limit）。
+- Round 22 code commit: `163417f8e70fa7b72153bc0dc636d5fc38bb0b93` (`[verified] harden source governance preview output`)；GitHub Actions run `25182925025`，`https://github.com/abczsl520/caveman-agent/actions/runs/25182925025`，completed success。
 - Round 21 code commit: `4cfa33540927fc9a7cbd97bbaed1f16a928c6444` (`[verified] add source drift review checklist`)；GitHub Actions run `25182107564` completed success。
 - Round 20 code commit: `fd234095a4f0d6ab20ca9bf33a0c099418b31382` (`[verified] preserve source drift rerun scope`)；GitHub Actions run `25180742729` completed success（Round 22 已补查）。
 - Round 19 code commit: `7062e3414fc52d4e5e11773570fa0e3020aab4de` (`[verified] add source drift policy workflow`)；GitHub Actions run `25179439795` completed success。
@@ -21,10 +23,27 @@
 - Gateway 最后已知未运行：需要交互验证时按 gateway SOP 安全启动，避免 shell background 启动触发 Hermes terminal exit-130 loop。
 
 ## 下次启动时做
-1. Round 22 code SHA `163417f8e70fa7b72153bc0dc636d5fc38bb0b93` 的 GitHub Actions run `25182925025` 已 success；下一轮可直接继续 Round 23/50。
-2. Round 23/50：继续 source governance/operator tooling；优先抽一个 shared safe display / literal formatting helper，覆盖 candidate detail、workflow、checklist，避免后续再散落 `!r` inline；保持 CLI 只读，不自动 mutate allowlist。
+1. 先补查 Round 23 code SHA `2578fbabe2f1a99b1f3030667f8761610cc2ba04` 的 GitHub Actions run id/结论；本轮 push 后查询 GitHub Actions 时 unauthenticated API rate limit exceeded。
+2. 若 Round 23 CI success，继续 Round 24/50：把 `_operator_literal()` 从 `caveman.cli.source_governance` 提升/迁移为更通用的 operator-display helper，并评估 dashboard/source-governance 是否还有 DB-derived plaintext output 可复用；保持 CLI 只读，不自动 mutate allowlist。
 3. Dashboard 主文件已在 450 行 hard limit；继续 dashboard 方向必须优先抽 helper，不要在 `flywheel_dashboard.py` 主文件堆逻辑。
-4. Rounds 23-50：按“证据→TDD→实现→门禁→review→commit/push→监控”小步推进；不要虚构完成 50 轮，每轮必须有验证与提交或明确 no-op 证据。
+4. Rounds 24-50：按“证据→TDD→实现→门禁→review→commit/push→监控”小步推进；不要虚构完成 50 轮，每轮必须有验证与提交或明确 no-op 证据。
+
+## Round 23 做了什么
+- 聚焦 Round 22 reviewer 建议：source-governance preview 已用 `!r` 防控制字符 spoofing，但 candidate detail、copy/paste workflow、review checklist 的 Python literal 输出分散在多个 inline `!r`，后续新增 operator-facing DB-derived output 容易漏掉统一安全语义。
+- RED 新增 regression：monkeypatch 期望存在并调用 shared `_operator_literal()`，旧代码无该 helper，测试先失败 `AttributeError`。
+- 实现：新增 `_operator_literal(value: object) -> str`，当前语义保持 `repr(value)`；把 source/reason/candidate_policy_entry/workflow/checklist 的 literal 输出全部改为调用该 helper，保持 CLI 只读，不写 memory rows、不修改 allowlist、不触碰 quarantine state。
+
+## Round 23 验证结果
+- Baseline focused before change：`tests/test_memory.py tests/test_flywheel_dashboard.py tests/test_flywheel_dashboard_boundaries.py tests/test_memory_decay.py` → `65 passed`。
+- RED：`tests/test_memory.py::test_source_governance_cli_uses_shared_literal_formatter` 初始失败，旧模块没有 `_operator_literal`，证明 literal formatting 仍是散落 inline。
+- GREEN focused：shared literal + existing escaping/checklist/preview rows tests → `5 passed`；expanded focused suite → `66 passed`。
+- Full suite（排除已知 NFR）：`.venv/bin/python -m pytest tests/ -q --ignore=tests/test_nfr_compliance.py --tb=short` → `3310 passed, 8 skipped`。
+- Py compile：`caveman/cli/source_governance.py tests/test_memory.py` pass。
+- Ruff changed files：pass。
+- Docs/API：`.venv/bin/python scripts/generate_api_reference.py --check` 生成无 diff。
+- Security scan：added-line hardcoded secret/shell/eval/pickle/SQL-string-format patterns 0 matches；push hook safety checks passed。
+- Independent review：passed，无 security/logic blocker；建议给 `_operator_literal` 补 purpose docstring，后续可在 Round 24 做。
+- Remote CI：code commit `2578fbabe2f1a99b1f3030667f8761610cc2ba04` 已 push；GitHub API rate limit exceeded，Actions run id/结论待下一轮补查。
 
 ## Round 22 做了什么
 - 先补查历史 CI：Round 20 run `25180742729` 与 Round 21 run `25182107564` 都已 completed success。
