@@ -1,9 +1,11 @@
 # Caveman 优化 HANDOFF
 
-更新时间: 2026-05-01 05:40 CST
+更新时间: 2026-05-01 06:06 CST
 
 ## 当前最终状态
-- Round 29 已完成、提交并推送到 `main`；GitHub Actions run `25189817175`，`https://github.com/abczsl520/caveman-agent/actions/runs/25189817175`，completed success。
+- Round 30 已完成、提交并推送到 `main`；code commit `596c7d8ff2a3ac01ce583a0c161d14ab7ae4b95d` (`[verified] escape wiki search operator output`)；GitHub Actions run `25191456061`，`https://github.com/abczsl520/caveman-agent/actions/runs/25191456061`，completed success。
+- Round 29 handoff/docs commit `8490c84` (`docs: update caveman handoff after round 29`) 已在当前 git log 中可见；Round 29 后续 fix commit `e3d5114` (`fix: satisfy flywheel typing gate`) 也已在 main。
+- Round 29 code commit `82dccd1a0cbea776ac5750c71031bcf4d14574e9` (`[verified] enforce operator literal bound types`)；GitHub Actions run `25189817175` completed success。
 - Round 28 handoff/docs commit `6a3ea3037ada3ec0ba2f2e1c6b823996c7f86e02` (`docs: update caveman handoff after round 28`) 已推送；GitHub Actions run `25189463356` completed success。
 - Round 28 code commit `bc8f32f59831853bbdf10fa309e5cd76f72580cc` (`[verified] validate operator literal truncation bounds`)；GitHub Actions run `25189144126` completed success。
 - Round 27 code commit `c2aa9379646f6d6b1917215ff7a49d5277ead967` (`[verified] escape quarantine operator output`)；GitHub Actions run `25187256050` completed success。
@@ -18,47 +20,47 @@
 - Gateway 最后已知未运行；本轮未重启 gateway，优化任务不依赖 gateway。
 
 ## 下次启动时做
-1. 先补查 Round 29 handoff/docs commit 的 GitHub Actions 结论（本轮后会生成 docs commit）；如果 code commit `82dccd1` 的 run 已记录 success，不要重复等待。
-2. 继续 Round 30/50：沿 operator-facing DB-derived output 安全边界深挖，优先扫描 dashboard/source-governance/memory-quarantine 之外的 plaintext diagnostics 是否还有 raw DB-derived fields 未统一委托 `operator_literal`；若无明显候选，再补 `operator_literal` API docs/type annotation examples。
+1. 先确认本 handoff docs commit 的 GitHub Actions 结论；如果 code commit `596c7d8` 的 run `25191456061` 已记录 success，不要重复等待。
+2. 继续 Round 31/50：沿 operator-facing DB/file-derived output 安全边界深挖，优先补 independent reviewer 建议的 ANSI escape 覆盖，或扫描 wiki/source-governance/flywheel dashboard 之外的 plaintext diagnostics 是否还有 raw DB-derived fields 未统一委托 `operator_literal`。
 3. Dashboard 主文件仍有 450 行 hard limit；继续 dashboard 方向必须优先抽 helper，不要在 `flywheel_dashboard.py` 主文件堆逻辑。
-4. Rounds 30-50：按“证据→TDD→实现→门禁→review→commit/push→监控”小步推进；不要虚构完成 50 轮，每轮必须有验证与提交或明确 no-op 证据。
+4. Rounds 31-50：按“证据→TDD→实现→门禁→review→commit/push→监控”小步推进；不要虚构完成 50 轮，每轮必须有验证与提交或明确 no-op 证据。
 
-## Round 29 做了什么
-- 先补查 Round 28 handoff/docs commit：commit `6a3ea3037ada3ec0ba2f2e1c6b823996c7f86e02`，GitHub Actions run `25189463356` completed success。
-- 聚焦 Round 28 independent reviewer 建议：`operator_literal(value, max_length=...)` 已拒绝 non-positive bound，但非整数 bound（`True`/`False`/`3.5`/`"3"`）仍存在隐式 Python 行为；尤其 bool 是 int 子类，会被当作 `1/0` 处理，导致共享 operator-output 安全边界语义不清。
-- RED 新增 regression：`test_operator_literal_rejects_non_integer_max_length` 要求 bool、float、str 类型的 `max_length` 明确抛出 `TypeError("max_length must be an int")`；旧代码初始失败 `DID NOT RAISE`。
-- 实现：在 `caveman.operator_output.operator_literal()` 中先检查 `max_length` 类型，显式拒绝非 `int` 和 `bool`，再执行 positive bound 校验与截断；合法 `int` 调用行为不变。
+## Round 30 做了什么
+- 先确认 Round 30 前真实状态：`main` 最新包含 `e3d5114`、`1ee23a5`、Round 29 handoff/docs commit `8490c84`，工作树起始干净；gateway health 不可达但本轮不依赖 gateway。
+- 扫描 operator-facing 输出边界后，选中 `caveman/cli/wiki_mcp.py` 的 `wiki search`：它直接输出 `WikiEntry.title` 和 `entry.content[:120]`，这些字段来自 wiki DB/编译内容，可能包含换行、控制字符或 ANSI escape，存在终端/日志欺骗风险。
+- RED 新增 regression：`test_wiki_search_cli_escapes_entry_title_and_preview` 使用 fake `WikiStore`/`WikiCompiler` 返回带换行的 `WikiEntry(title="Safe title\nSPOOF_TITLE", content="Safe content\nSPOOF_CONTENT")`，要求 CLI 输出 literal escaped `\\n`，且不产生真实下一行 spoof。
+- 实现：`wiki search` 复用共享 `caveman.operator_output.operator_literal`；title 走 `operator_literal(entry.title)`，preview 走 `operator_literal(entry.content, max_length=120)`，避免局部 replace 和截断后残留控制字符。
 
-## Round 29 验证结果
-- Baseline focused before change：`tests/test_memory.py::test_operator_literal_rejects_non_positive_max_length` → `1 passed`。
-- RED：`tests/test_memory.py::test_operator_literal_rejects_non_integer_max_length` 初始失败，旧 helper 没有拒绝 bool/float/str `max_length`。
-- GREEN focused：non-integer / non-positive / shared helper tests → `3 passed`。
-- Expanded focused suite：`tests/test_memory.py tests/test_flywheel_dashboard.py tests/test_flywheel_dashboard_boundaries.py tests/test_memory_decay.py` → `73 passed`。
-- Full suite（排除已知 NFR）：`.venv/bin/python -m pytest tests/ -q --ignore=tests/test_nfr_compliance.py --tb=short` → `3317 passed, 8 skipped`。
-- Py compile：`caveman/operator_output.py tests/test_memory.py` pass。
-- Ruff changed files：pass。
-- Docs/API：`.venv/bin/python scripts/generate_api_reference.py --check` pass，无需提交 API diff。
-- Security scan：added-line hardcoded secret/shell/eval/pickle/SQL-string-format patterns 0 matches；push hook safety checks passed。
-- Independent review：passed，无 security_concerns、无 logic_errors。
-- Remote CI：code commit `82dccd1a0cbea776ac5750c71031bcf4d14574e9` GitHub Actions run `25189817175` completed success。
+## Round 30 验证结果
+- RED/GREEN focused：`tests/test_memory.py::test_wiki_search_cli_escapes_entry_title_and_preview` → `1 passed`。
+- Focused operator-output suite：wiki search regression + `operator_literal` shared/non-positive/non-integer tests → passed。
+- Py compile：`caveman/cli/wiki_mcp.py tests/test_memory.py` pass。
+- Full suite（排除已知 NFR）：`.venv/bin/python -m pytest tests/ -q --ignore=tests/test_nfr_compliance.py --tb=short` → `3319 passed, 8 skipped in 116.12s`。
+- Ruff changed files：`ruff check caveman/cli/wiki_mcp.py tests/test_memory.py` → pass。
+- Docs/API：`.venv/bin/python scripts/generate_api_reference.py --check` 生成检查通过；`docs/API_REFERENCE.md` 无需提交 diff。
+- Security scan：added-line/final scan hardcoded secret/token/password、shell injection、eval/exec、pickle、SQL string-format patterns 0 matches；push hook safety checks passed。
+- Independent review：passed，无 `security_concerns`、无 `logic_errors`；non-blocking suggestion 是后续可补 ANSI escape sequence 覆盖。
+- Remote CI：code commit `596c7d8ff2a3ac01ce583a0c161d14ab7ae4b95d` GitHub Actions run `25191456061` completed success。
 
-## Round 29 什么 work 了
-- TDD 小切片继续有效：先红 `DID NOT RAISE`，再补最小类型校验，避免共享 operator-output 边界把 Python 隐式 bool/int 语义暴露给调用者。
-- 本轮同时补齐 Round 28 docs commit CI + Round 29 code CI，GitHub API quota 足够且两者均 success。
-- Full local gate clean：3317 passed / 8 skipped，ruff/API/security scan 全过，工作区提交前后干净。
+## Round 30 什么 work 了
+- 沿共享 `operator_literal` 安全边界继续推进，小切片只改 wiki search 的 operator-facing 输出，复用现有 helper，避免新增第二套 escaping 语义。
+- Fake store/compiler + Typer `CliRunner` 可稳定覆盖 wiki CLI，不依赖真实 wiki DB 或文件系统状态。
+- 本地 full suite、ruff、security scan、independent review、push 和 GitHub Actions 均通过；CI polling 修复了 heredoc/stdin 与 `set -e` 提前退出问题。
 
-## Round 29 什么没做/没work
+## Round 30 什么没做/没work
+- 尚未提交本 handoff 更新的 docs commit；当前文件更新后还需单独 commit/push/CI 监控。
+- 尚未补 independent reviewer 建议的 ANSI escape sequence 专项测试；可作为 Round 31 的低风险 TDD 入口。
 - 尚未补查 Round 25/24/23 的历史 Actions run id/结论；优先级低于当前轮推进，可在后续有 API quota 时补。
-- 尚未扫描 dashboard/source-governance/memory-quarantine 之外的全部 plaintext diagnostics；这是 Round 30 候选。
 - 未重启 gateway（当前自动续跑不依赖 gateway，且 SOP 要避免不必要启动）。
 
-## Round 29 已知坑
-- `bool` 是 `int` 子类；任何 public numeric contract 若不想接受 `True/False`，必须显式 `isinstance(x, bool)` 拒绝。
-- `operator_literal` 是多个 operator-facing 报告共享的安全边界；任何参数语义变更都必须先写 regression，避免 CLI/dashboard 输出同时漂移。
-- GitHub unauthenticated Actions API 可能在连续 cron run 中 rate limit；能查就补查，失败就记录 blocker，不要忙等或重复推送空变更。
+## Round 30 已知坑
+- `curl | python - <<'PY'` 会让 heredoc 占用 Python stdin，导致 JSON 没传给 Python；CI polling 需要把 API 响应写 temp file 或用 `python -c`。
+- `set -e` 下 Python 用 exit 2 表示“CI 仍在运行”会提前中断 shell loop；轮询脚本必须显式捕获 rc 后再决定 sleep/retry。
+- `WikiEntry` title/content 属于 DB/file-derived operator output；任何 CLI/dashboard 输出这些字段时都必须使用共享 `operator_literal` 或等效统一 formatter。
 - 必须使用 `/Users/yeren64g/projects/caveman/.venv/bin/python`；cron run 禁止递归创建/修改 cron jobs；结束前释放 `/tmp/caveman-50round.lock`。
 
 ## 历史摘要
+- Round 29：`operator_literal` 拒绝 non-integer `max_length`（含 bool/float/str），commit `82dccd1`，CI success。
 - Round 28：`operator_literal` 拒绝 non-positive `max_length`，commit `bc8f32f`，CI success。
 - Round 27：复用 `operator_literal` escape memory-quarantine list/preview 的 source/reason/content，commit `c2aa937`，CI success。
 - Round 26：新增共享 `caveman.operator_output.operator_literal()` 并让 source-governance CLI 与 dashboard formatter 委托，commit `2ee79fa`，CI success。
