@@ -5,11 +5,112 @@ import tempfile
 from caveman.memory.flywheel_metrics import FlywheelHealth
 from caveman.memory.types import MemoryType
 from caveman.memory.manager import MemoryManager
+from caveman.memory.quarantine import list_quarantined, restore_quarantined
 
 
 def _close_manager(mgr: MemoryManager) -> None:
     if mgr.backend:
         mgr.backend.close()
+
+
+@pytest.mark.asyncio
+async def test_quarantine_lifecycle_can_list_and_restore_entries_with_audit_reason():
+    """Operators need a reversible path from dashboard quarantine evidence to active recall."""
+    with tempfile.TemporaryDirectory() as td:
+        mgr = MemoryManager.with_sqlite(base_dir=td)
+        try:
+            store = mgr.backend
+            quarantined_id = await store.store(
+                "reversible openclaw quarantine memory",
+                MemoryType.SEMANTIC,
+                metadata={
+                    "source": "import:openclaw",
+                    "governance_state": "quarantined",
+                    "quarantine_reason": "source_policy_low_signal_import",
+                    "quarantined_at": "2026-04-30T00:00:00+00:00",
+                },
+                trusted=True,
+            )
+            active_id = await store.store(
+                "active openclaw memory",
+                MemoryType.SEMANTIC,
+                metadata={"source": "import:openclaw"},
+                trusted=True,
+            )
+
+            listed = list_quarantined(store, source="import:openclaw")
+
+            assert [entry.id for entry in listed] == [quarantined_id]
+            assert active_id not in {entry.id for entry in listed}
+
+            restored = await restore_quarantined(
+                store,
+                quarantined_id,
+                restored_by="operator",
+                restore_reason="manual false positive",
+            )
+            assert restored is True
+            restored_entry = await store.get_by_id(quarantined_id)
+            assert restored_entry is not None
+            assert restored_entry.metadata["governance_state"] == "active"
+            assert restored_entry.metadata["previous_governance_state"] == "quarantined"
+            assert restored_entry.metadata["restored_by"] == "operator"
+            assert restored_entry.metadata["restore_reason"] == "manual false positive"
+            assert "restored_at" in restored_entry.metadata
+            assert list_quarantined(store, source="import:openclaw") == []
+        finally:
+            _close_manager(mgr)
+
+
+def test_quarantine_cli_lists_and_restores_entries_with_audit_metadata(monkeypatch):
+    """The operator-facing CLI should expose list/restore without deleting evidence."""
+    from typer.testing import CliRunner
+
+    from caveman.cli.main import app
+
+    with tempfile.TemporaryDirectory() as td:
+        monkeypatch.setenv("CAVEMAN_HOME", td)
+        mgr = MemoryManager.with_sqlite(base_dir=td)
+        try:
+            store = mgr.backend
+            import asyncio
+            quarantined_id = asyncio.run(store.store(
+                "cli reversible openclaw quarantine memory",
+                MemoryType.SEMANTIC,
+                metadata={
+                    "source": "import:openclaw",
+                    "governance_state": "quarantined",
+                    "quarantine_reason": "source_policy_low_signal_import",
+                    "quarantined_at": "2026-04-30T00:00:00+00:00",
+                },
+                trusted=True,
+            ))
+        finally:
+            _close_manager(mgr)
+
+        runner = CliRunner()
+        listed = runner.invoke(app, ["memory-quarantine", "list", "--db", f"{td}/caveman.db", "--source", "import:openclaw"])
+        assert listed.exit_code == 0, listed.output
+        assert quarantined_id in listed.output
+        assert "source_policy_low_signal_import" in listed.output
+
+        restored = runner.invoke(app, [
+            "memory-quarantine", "restore", quarantined_id,
+            "--db", f"{td}/caveman.db",
+            "--by", "operator",
+            "--reason", "manual false positive",
+        ])
+        assert restored.exit_code == 0, restored.output
+        assert "restored" in restored.output.lower()
+
+        mgr = MemoryManager.with_sqlite(base_dir=td)
+        try:
+            entry = asyncio.run(mgr.backend.get_by_id(quarantined_id))
+            assert entry.metadata["governance_state"] == "active"
+            assert entry.metadata["restored_by"] == "operator"
+            assert entry.metadata["restore_reason"] == "manual false positive"
+        finally:
+            _close_manager(mgr)
 
 
 def test_memory_types():

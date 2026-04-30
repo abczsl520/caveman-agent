@@ -19,6 +19,7 @@ __all__ = [
     "SCHEMA_VERSION",
     "row_to_entry",
     "is_quarantined",
+    "quarantine_memory_sql",
     "active_memory_sql",
     "cleanup_related_refs",
     "get_schema_version",
@@ -173,6 +174,16 @@ def row_to_entry(row, fts_rank: float | None = None, trust: float | None = None,
 def is_quarantined(entry: MemoryEntry) -> bool:
     """Return True when a memory has been removed from active recall."""
     return str(entry.metadata.get("governance_state", "")).lower() == "quarantined"
+
+
+def quarantine_memory_sql(metadata_column: str = "metadata_json") -> str:
+    """Return a json-safe SQL predicate for memories currently in quarantine."""
+    return (
+        f"({metadata_column} IS NOT NULL "
+        f"AND CASE WHEN json_valid({metadata_column}) THEN "
+        f"lower(json_extract({metadata_column}, '$.governance_state')) = 'quarantined' "
+        "ELSE 0 END)"
+    )
 
 
 def active_memory_sql(metadata_column: str = "metadata_json") -> str:
