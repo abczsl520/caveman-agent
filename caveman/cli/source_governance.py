@@ -62,4 +62,7 @@ def preview_drift(
         rerun_parts.extend(["--db", shlex.quote(str(db))])
     rerun_parts.extend(["--min-rows", str(min_rows), "--limit", str(limit)])
     typer.echo(f"3. Re-run: {' '.join(rerun_parts)}")
+    typer.echo("Review checklist:")
+    for row in candidates:
+        typer.echo(f"   [ ] {row['candidate_policy_entry']!r} — reason={row['reason']!r} total={row['total']}")
     typer.echo("auto_mutation=disabled")
