@@ -1,12 +1,12 @@
 # Caveman 优化 HANDOFF
 
-更新时间: 2026-04-30 22:18 CST
+更新时间: 2026-04-30 22:28 CST
 
 ## 当前最终状态
-- Round 11 已完成、提交并推送到 `main`。
-- 最新 code/docs commit: `fe013ad84e58cb5c4ebbeef97d34c9465268a8ff` (`[verified] centralize memory source taxonomy`)。
+- Round 12 已完成、提交并推送到 `main`。
+- 最新 code commit: `19fc4348b8dbaae6cba5119c34bf04f5358d04aa` (`[verified] surface decay dry-run in dashboard`)。
 - `origin/main` 已同步到最新 SHA。
-- GitHub Actions 对 Round 11 最新 SHA 全绿：run `25169126875`，`https://github.com/abczsl520/caveman-agent/actions/runs/25169126875`。
+- GitHub Actions 对 Round 12 最新 SHA 全绿：run `25170776976`，`https://github.com/abczsl520/caveman-agent/actions/runs/25170776976`。
 - 自动续跑已配置：cron job `36500447cc33` (`Caveman 50轮自动续跑`)，每 30 分钟触发，最多 48 次，目标回发当前 Discord thread；preflight 脚本 `/Users/yeren64g/.hermes/scripts/caveman_50round_preflight.py`，互斥锁 `/tmp/caveman-50round.lock`。
 - Round 9 code commit: `23df73debb9c113251eb0390515c47dbca9d5aa5` (`Protect decay with canonical access timestamps`)；Round 9 handoff commit: `ba76a2d93f5db3f08d60e6e34d17798555ea619d`。
 - Round 8 handoff commit: `f4a07bcde9f67e3d283dc43fda4dbe559a174a36`；Round 8 code commit: `9624ce069d74efa063e2c8c2aa4fef0feef80604` (`Normalize imported memory source metadata`)。
@@ -16,10 +16,26 @@
 - Gateway 最后已知未运行：需要交互验证时按 gateway SOP 安全启动，避免 `nohup caveman serve &` 触发 Hermes terminal exit-130 loop。
 
 ## 下次启动时做
-1. Round 12/50：decay scheduling/observability 的 operator report：定时 dry-run summary、source impact trend、quarantine candidate drift，避免治理静默。
-2. Round 13：quarantine restore 批量执行路径（若需要）必须建立在 Round 10 preview guardrail 之上：先 preview、再要求显式 scope、再 audit。
-3. Round 14：source taxonomy 后续可补大小写策略/unknown source report；本轮 reviewer 仅建议文档化 unknown casing，不是 blocker。
-4. Rounds 15-50：按“证据→TDD→实现→门禁→review→commit/push→监控”小步推进；不要虚构完成 50 轮，每轮必须有验证与提交或明确 no-op 证据。
+1. Round 13/50：quarantine restore 批量执行路径（若需要）必须建立在 Round 10 preview guardrail 之上：先 preview、再要求显式 scope、再 audit；若不做批量 restore，则继续补 operator observability 的 source impact trend/quarantine candidate drift。
+2. Round 14：source taxonomy 后续可补大小写策略/unknown source report；Round 11 reviewer 仅建议文档化 unknown casing，不是 blocker。
+3. Rounds 15-50：按“证据→TDD→实现→门禁→review→commit/push→监控”小步推进；不要虚构完成 50 轮，每轮必须有验证与提交或明确 no-op 证据。
+
+## Round 12 做了什么
+- 聚焦 decay scheduling/observability 的 operator report，避免 memory governance 只在后台静默执行。
+- `FlywheelDashboard.collect_memory_stats()` 现在复用 `MemoryDecay(db_path).run(dry_run=True)` 生成只读 decay preview，输出 `scanned`、`would_decay`、`would_prune`、`would_quarantine`、`trust_total_reduced`、`would_quarantine_by_source`、`eligible_by_source`。
+- dashboard report 新增 `Decay dry-run: scan=..., would_decay=..., would_prune=..., would_quarantine=...` 行，便于 operator 在运行实际 decay 前看到影响面。
+- 新增 `already_quarantined` 直接全表统计，避免只看 top source breakdown 导致 omitted source 下 quarantined 数量被低估。
+- dry-run preview 对 malformed metadata / sqlite lock / IO error 失败保持 best-effort：跳过 preview，不破坏基础 dashboard memory stats。
+
+## Round 12 验证结果
+- RED：新增 decay dry-run dashboard test 初始失败，错误为 `KeyError: 'decay_dry_run'`，证明旧 dashboard 没有 operator preview。
+- GREEN focused tests：`tests/test_flywheel_dashboard.py tests/test_flywheel_dashboard_boundaries.py tests/test_memory_decay.py` 共 `39 passed`。
+- Full suite（排除已知 NFR）：`.venv/bin/python -m pytest tests/ -q --ignore=tests/test_nfr_compliance.py` → `3297 passed, 8 skipped`。
+- Py compile：`caveman/training/flywheel_dashboard.py tests/test_flywheel_dashboard_boundaries.py` pass。
+- Ruff changed files：pass。
+- Security scan：added-line hardcoded secret/shell/eval/pickle/SQL-string-format patterns 0 matches；push hook safety checks passed。
+- Independent review：第一次指出 sqlite lock preview 会破坏 dashboard，已 catch `sqlite3.Error`/`OSError` 并加 regression；第二次指出 `already_quarantined` top-N undercount 与 fixed-date test，已改为全表 query 和相对日期；最终 review passed，无 blocker。
+- Remote CI：Round 12 commit `19fc4348b8dbaae6cba5119c34bf04f5358d04aa` GitHub Actions run `25170776976` completed success。
 
 ## Round 11 做了什么
 - 聚焦 import/source taxonomy 漂移：把 decay allowlist、dashboard source-governance、migration normalization 的 source 字符串收敛到单一模块 `caveman.memory.sources`。
