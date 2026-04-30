@@ -108,3 +108,16 @@ def test_status_text_escapes_memory_type_names(monkeypatch):
     assert "'safe\\nSPOOF_MEMORY\\x1b[31m': 2" in text
     assert "\nSPOOF_MEMORY" not in text
     assert "\x1b[31m" not in text
+
+
+def test_status_text_escapes_home_path_control_characters(monkeypatch):
+    """Configured home paths are operator-facing and must not spoof status lines."""
+    from caveman.cli import status
+
+    monkeypatch.setattr(status, "CAVEMAN_HOME", "safe-home\nSPOOF_HOME\x1b[31m")
+
+    text = status_text()
+
+    assert "Home: 'safe-home\\nSPOOF_HOME\\x1b[31m'" in text
+    assert "\nSPOOF_HOME" not in text
+    assert "\x1b[31m" not in text

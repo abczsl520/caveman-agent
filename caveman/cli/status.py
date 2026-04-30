@@ -136,7 +136,7 @@ def status_text(include_gateway: bool = False) -> str:
         f"  Skills: {active_skills} active, {draft_skills} draft",
         f"  Projects: {projects} tracked",
         f"  Engines: {engine_str}",
-        f"  Home: {CAVEMAN_HOME}",
+        f"  Home: {operator_literal(CAVEMAN_HOME)}",
     ]
     if include_gateway:
         lines.extend(_format_gateway_status())
