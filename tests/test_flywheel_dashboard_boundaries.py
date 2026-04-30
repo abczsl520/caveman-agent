@@ -2,6 +2,8 @@
 
 import json
 import sqlite3
+from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 
 from caveman.training.flywheel_dashboard import FlywheelDashboard
 
@@ -312,6 +314,87 @@ def test_collect_memory_stats_keeps_partial_legacy_source_schema_working(tmp_pat
     assert stats["total"] == 1
     assert stats["source_breakdown"] == []
     assert stats.get("source_governance", []) == []
+
+
+def test_memory_stats_include_decay_dry_run_operator_report(tmp_path, monkeypatch):
+    eligible_date = (datetime.now(timezone.utc) - timedelta(days=45)).isoformat()
+    prune_date = (datetime.now(timezone.utc) - timedelta(days=120)).isoformat()
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir()
+    db_path = memory_dir / "caveman.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "CREATE TABLE memories ("
+        "id TEXT PRIMARY KEY, content TEXT NOT NULL, type TEXT NOT NULL, created_at TEXT NOT NULL, "
+        "metadata_json TEXT DEFAULT '{}', trust_score REAL DEFAULT 0.5, "
+        "retrieval_count INTEGER DEFAULT 0, helpful_count INTEGER DEFAULT 0)"
+    )
+    rows = [
+        (
+            "openclaw-eligible", "openclaw eligible", "semantic", eligible_date,
+            '{"source":"import:openclaw"}', 0.05, 0, 0,
+        ),
+        (
+            "hermes-quarantined", "hermes quarantined", "semantic", eligible_date,
+            '{"source":"import:hermes","governance_state":"quarantined"}', 0.01, 0, 0,
+        ),
+        (
+            "generic-prune", "generic prune", "semantic", prune_date,
+            '{"source":"manual"}', 0.01, 0, 0,
+        ),
+        (
+            "helpful-protected", "helpful protected", "semantic", eligible_date,
+            '{"source":"import:openclaw"}', 0.05, 0, 1,
+        ),
+    ]
+    conn.executemany(
+        "INSERT INTO memories (id, content, type, created_at, metadata_json, trust_score, retrieval_count, helpful_count) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        rows,
+    )
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr("caveman.training.flywheel_dashboard.MEMORY_DIR", memory_dir)
+
+    stats = FlywheelDashboard().collect_memory_stats()
+
+    report = stats["decay_dry_run"]
+    assert report["scanned"] == 4
+    assert report["would_decay"] >= 2
+    assert report["would_prune"] == 1
+    assert report["would_quarantine"] == 1
+    assert report["would_quarantine_by_source"] == {"import:openclaw": 1}
+    assert report["eligible_by_source"] == {"import:openclaw": 1}
+    assert stats["already_quarantined"] == 1
+    formatted = FlywheelDashboard()
+    formatted.metrics["memory"] = stats
+    formatted.metrics["trajectories"] = {}
+    formatted.metrics["rl_router"] = {}
+    formatted.metrics["wiki"] = {}
+    assert "Decay dry-run: scan=4, would_decay=" in formatted.format_report()
+    assert "would_prune=1, would_quarantine=1" in formatted.format_report()
+
+    persisted = sqlite3.connect(db_path).execute(
+        "SELECT trust_score, metadata_json FROM memories WHERE id = ?",
+        ("openclaw-eligible",),
+    ).fetchone()
+    assert persisted[0] == 0.05
+    assert "governance_state" not in json.loads(persisted[1])
+
+
+def test_memory_stats_skips_decay_preview_on_sqlite_error(tmp_path, monkeypatch):
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir()
+    _make_memory_db(memory_dir / "caveman.db")
+    monkeypatch.setattr("caveman.training.flywheel_dashboard.MEMORY_DIR", memory_dir)
+
+    with patch("caveman.training.flywheel_dashboard.MemoryDecay") as decay_cls:
+        decay_cls.return_value.run.side_effect = sqlite3.OperationalError("database is locked")
+        stats = FlywheelDashboard().collect_memory_stats()
+
+    assert stats["status"] == "ok"
+    assert stats["total"] == 11
+    assert "decay_dry_run" not in stats
 
 
 def test_collect_trajectory_stats_skips_malformed_and_normalizes_numeric_fields(tmp_path, monkeypatch):
