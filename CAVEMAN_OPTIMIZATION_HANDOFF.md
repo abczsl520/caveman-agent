@@ -1,8 +1,9 @@
 # Caveman 优化 HANDOFF
 
-更新时间: 2026-05-01 04:02 CST
+更新时间: 2026-05-01 04:35 CST
 
 ## 当前最终状态
+- Round 27 已完成、提交并推送到 `main`；GitHub Actions run `25187256050`，`https://github.com/abczsl520/caveman-agent/actions/runs/25187256050`，已触发并曾查询到 in_progress；随后 unauthenticated GitHub API rate limit exceeded，最终结论待补查。
 - Round 26 已完成、提交并推送到 `main`；GitHub Actions run `25185877026`，`https://github.com/abczsl520/caveman-agent/actions/runs/25185877026`，completed success。
 - Round 25 已完成、提交并推送到 `main`；GitHub Actions run 待补查（当前仅补查了 Round 26）。
 - Round 24 已完成、提交并推送到 `main`；GitHub Actions run 待补查。
@@ -14,7 +15,8 @@
 - Round 18 已完成、提交并推送到 `main`。
 - Round 17 已完成、提交并推送到 `main`。
 - Round 16 已完成、提交并推送到 `main`。
-- 最新 code commit: `2ee79fa` (`[verified] share operator literal formatter`)。
+- 最新 code commit: `c2aa9379646f6d6b1917215ff7a49d5277ead967` (`[verified] escape quarantine operator output`)。
+- Round 27 code commit: `c2aa9379646f6d6b1917215ff7a49d5277ead967` (`[verified] escape quarantine operator output`)；GitHub Actions run `25187256050` last seen in_progress，final conclusion blocked by unauthenticated API rate limit。
 - Round 26 code commit: `2ee79fa9c0675cf97cb6e662eb5feee5d8708e48` (`[verified] share operator literal formatter`)；GitHub Actions run `25185877026` completed success。
 - Round 26 handoff/docs commit: `30303b1013d53428de88810eafba492c89bf88bb` (`docs: update caveman handoff after round 26`)；GitHub Actions run `25186258099` completed success。
 - Round 25 code commit: `3d393ae` (`[verified] escape source drift operator literals`)；GitHub Actions run 待补查（本机无 GitHub token/gh auth）。
@@ -30,10 +32,30 @@
 - Gateway 最后已知未运行：需要交互验证时按 gateway SOP 安全启动，避免 shell background 启动触发 Hermes terminal exit-130 loop。
 
 ## 下次启动时做
-1. 先补查 Round 25 code SHA `3d393ae`、Round 24 code SHA `4c8ea7cbfa8e08309a3a6da3955533cbd6e6c341` 与 Round 23 code SHA `2578fbabe2f1a99b1f3030667f8761610cc2ba04` 的 GitHub Actions run id/结论；Round 26 CI 已确认 success。
-2. 继续 Round 27/50：扫描其它 operator-facing DB-derived plaintext output（memory quarantine list/preview、diagnostics/dashboard sections 等）是否仍有 raw control-character/newline spoofing 风险；优先复用 `caveman.operator_output.operator_literal()`，保持 CLI/dashboard 只读，不自动 mutate allowlist/quarantine。
+1. 先补查 Round 27 code SHA `c2aa9379646f6d6b1917215ff7a49d5277ead967` / GitHub Actions run `25187256050` 的最终结论；若仍受 rate limit，记录 blocker，不重复推送空变更。
+2. 继续 Round 28/50：沿 “quarantine/source-impact/operator-output 边界安全” 深挖；优先补 reviewer 建议的 carriage return/backspace/tab-delimited field injection 覆盖，或抽出统一 DB-derived CLI formatting helper，防止相邻 quarantine 命令漏用 `operator_literal`。
 3. Dashboard 主文件已在 450 行 hard limit；继续 dashboard 方向必须优先抽 helper，不要在 `flywheel_dashboard.py` 主文件堆逻辑。
-4. Rounds 27-50：按“证据→TDD→实现→门禁→review→commit/push→监控”小步推进；不要虚构完成 50 轮，每轮必须有验证与提交或明确 no-op 证据。
+4. Rounds 28-50：按“证据→TDD→实现→门禁→review→commit/push→监控”小步推进；不要虚构完成 50 轮，每轮必须有验证与提交或明确 no-op 证据。
+
+## Round 27 做了什么
+- 按 TDD 修复 `memory-quarantine` operator-facing 输出边界：先添加 list/preview 的 terminal-spoofing 回归测试，验证 raw newline/ANSI 会污染输出。
+- 实现侧复用 `caveman.operator_output.operator_literal()`，对 DB-derived `source`、`quarantine_reason`、content snippet 以及 preview aggregate keys 做安全 literal 化，避免控制字符/ANSI escape 伪造终端行。
+- 验证：focused escaping tests 2 passed；相关 memory/flywheel subset 71 passed；full suite（忽略 NFR）3315 passed, 8 skipped；ruff changed files passed；py_compile passed；API reference check passed；added-diff static security scan passed。
+- Independent reviewer JSON verdict passed：无 security_concerns、无 logic_errors；建议 Round 28 继续补 CR/backspace/tab field-injection 或抽统一 DB-derived CLI formatter。
+- Commit/push：`c2aa9379646f6d6b1917215ff7a49d5277ead967` `[verified] escape quarantine operator output` 已推送 `origin/main`。
+- CI：GitHub Actions run `25187256050` / `https://github.com/abczsl520/caveman-agent/actions/runs/25187256050` 已发现，最后一次可查为 in_progress；后续查询被 unauthenticated GitHub API rate limit 403 阻断，`gh` 不可用且无可用 token。
+
+## Round 27 什么 work 了
+- `operator_literal` 复用效果好：不用新增 sanitizer，测试能直接断言 `\n` / `\x1b` 被字面量化，且没有 raw spoofed standalone rows。
+- Full local gate clean：3315 passed / 8 skipped，ruff/API/security scan 全过，工作区提交前后干净。
+
+## Round 27 什么没做/没work
+- 没能确认 Round 27 CI 最终结论：GitHub unauthenticated API rate limit exceeded；本环境没有 `gh` 和可用 token。
+- reviewer 提出的 CR/backspace/tab field-injection 扩展覆盖尚未做，留给 Round 28。
+
+## Round 27 已知坑
+- GitHub unauthenticated Actions API 会在连续 cron run 中很快 403 rate limit；下轮应先尝试轻量查询一次，失败就记录 blocker，不要忙等。
+- `operator_literal` 会给字符串加 Python-style quotes，已有 expected output 需要同步改为 `"'source'=N"` 形式。
 
 ## Round 26 做了什么
 - 先按 handoff 检查真实状态：main 已到 Round 25，工作区干净；`gh` 不可用，但 unauthenticated GitHub Actions API 可查，Round 26 后续 run 可监控。
