@@ -607,6 +607,17 @@ def test_source_governance_cli_uses_shared_literal_formatter(monkeypatch):
     assert "unmanaged_low_signal_import" in seen
 
 
+
+def test_operator_literal_has_security_purpose_docstring():
+    """Shared literal formatter should document why repr-style output is a safety boundary."""
+    from caveman.cli.source_governance import _operator_literal
+
+    doc = _operator_literal.__doc__ or ""
+
+    assert "control" in doc.lower()
+    assert "repr" in doc
+    assert "operator" in doc.lower()
+
 def test_memory_types():
     assert MemoryType.EPISODIC.value == "episodic"
     assert MemoryType.WORKING.value == "working"
@@ -819,3 +830,4 @@ async def test_malformed_metadata_does_not_break_active_memory_queries():
             assert memory_id in all_ids
         finally:
             _close_manager(mgr)
+

@@ -17,6 +17,7 @@ app = typer.Typer(help="Preview memory source policy candidates.")
 
 
 def _operator_literal(value: object) -> str:
+    """Return repr() for operator output so control characters stay escaped."""
     return repr(value)
 
 
