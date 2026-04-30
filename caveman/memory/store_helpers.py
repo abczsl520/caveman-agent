@@ -19,6 +19,8 @@ __all__ = [
     "SCHEMA_VERSION",
     "row_to_entry",
     "is_quarantined",
+    "active_memory_sql",
+    "cleanup_related_refs",
     "get_schema_version",
     "pending_migrations",
     "migrate_schema",
@@ -171,6 +173,41 @@ def row_to_entry(row, fts_rank: float | None = None, trust: float | None = None,
 def is_quarantined(entry: MemoryEntry) -> bool:
     """Return True when a memory has been removed from active recall."""
     return str(entry.metadata.get("governance_state", "")).lower() == "quarantined"
+
+
+def active_memory_sql(metadata_column: str = "metadata_json") -> str:
+    """Return a json-safe SQL predicate for memories exposed to recall/search.
+
+    Legacy rows may contain malformed metadata JSON. Guard json_extract with
+    json_valid so one corrupt import row cannot crash active memory queries.
+    """
+    return (
+        f"({metadata_column} IS NULL "
+        f"OR CASE WHEN json_valid({metadata_column}) THEN "
+        f"COALESCE(lower(json_extract({metadata_column}, '$.governance_state')) != 'quarantined', 1) "
+        "ELSE 1 END)"
+    )
+
+
+def cleanup_related_refs(conn: sqlite3.Connection, memory_id: str) -> None:
+    """Remove a memory id from other rows' metadata.related lists."""
+    rows = conn.execute(
+        "SELECT id, metadata_json FROM memories WHERE metadata_json LIKE ?",
+        (f"%{memory_id}%",),
+    ).fetchall()
+    for row_id, metadata_json in rows:
+        try:
+            meta = json.loads(metadata_json) if metadata_json else {}
+            related = meta.get("related", [])
+            if memory_id in related:
+                related.remove(memory_id)
+                meta["related"] = related
+                conn.execute(
+                    "UPDATE memories SET metadata_json = ? WHERE id = ?",
+                    (json.dumps(meta, ensure_ascii=False), row_id),
+                )
+        except Exception as exc:
+            logger.debug("forget: suppressed %s", exc)
 
 
 def migrate_schema(conn: sqlite3.Connection, dry_run: bool = False) -> list[tuple[int, str]]:
