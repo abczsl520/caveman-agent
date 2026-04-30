@@ -540,6 +540,8 @@ def test_source_policy_drift_flags_unmanaged_low_signal_import_sources(tmp_path,
             "helpful_pct": 0.0,
             "avg_trust": 0.05,
             "reason": "unmanaged_low_signal_import",
+            "recommended_action": "review_for_low_signal_allowlist",
+            "candidate_policy_entry": "import:claude-code",
         }
     ]
     formatted = FlywheelDashboard()
@@ -548,7 +550,7 @@ def test_source_policy_drift_flags_unmanaged_low_signal_import_sources(tmp_path,
     formatted.metrics["rl_router"] = {}
     formatted.metrics["wiki"] = {}
     assert "Source policy drift:" in formatted.format_report()
-    assert "import:claude-code: unmanaged low-signal import source (n=3, never=100%, helpful=0%)" in formatted.format_report()
+    assert "import:claude-code: unmanaged low-signal import source (n=3, never=100%, helpful=0%, candidate=import:claude-code)" in formatted.format_report()
 
 def test_source_policy_drift_keeps_truncated_import_identities_separate(tmp_path, monkeypatch):
     memory_dir = tmp_path / "memory"
@@ -599,6 +601,8 @@ def test_source_policy_drift_keeps_truncated_import_identities_separate(tmp_path
             "helpful_pct": 0.0,
             "avg_trust": 0.05,
             "reason": "unmanaged_low_signal_import",
+            "recommended_action": "review_for_low_signal_allowlist",
+            "candidate_policy_entry": noisy_source,
         }
     ]
 

@@ -261,5 +261,7 @@ def _collect_memory_source_policy_drift(cur: Any, min_rows: int = 3, limit: int 
                 "helpful_pct": row["helpful_pct"],
                 "avg_trust": row["avg_trust"],
                 "reason": "unmanaged_low_signal_import",
+                "recommended_action": "review_for_low_signal_allowlist",
+                "candidate_policy_entry": identity,
             })
     return sorted(drift, key=lambda row: (-int(row["total"]), row["label"]))[:limit]
