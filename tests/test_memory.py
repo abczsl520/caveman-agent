@@ -437,6 +437,81 @@ def test_source_governance_cli_rerun_command_shell_quotes_custom_db_path(monkeyp
         assert f"3. Re-run: caveman source-governance preview-drift --db {shlex.quote(db_path)} --min-rows 3 --limit 1" in preview.output
 
 
+def test_source_governance_cli_prints_review_checklist_for_each_candidate(monkeypatch):
+    """Operators need a per-candidate checklist so preview output can be reviewed without losing items."""
+    import asyncio
+
+    from typer.testing import CliRunner
+
+    from caveman.cli.main import app
+
+    with tempfile.TemporaryDirectory() as td:
+        monkeypatch.setenv("CAVEMAN_HOME", td)
+        mgr = MemoryManager.with_sqlite(base_dir=td)
+        try:
+            store = mgr.backend
+            for source, rows in [("import:largest", 5), ("import:middle", 4)]:
+                for idx in range(rows):
+                    asyncio.run(store.store(
+                        f"{source} checklist low-signal source {idx}",
+                        MemoryType.SEMANTIC,
+                        metadata={"source": source, "trust_score": 0.05},
+                        trusted=True,
+                    ))
+        finally:
+            _close_manager(mgr)
+
+        preview = CliRunner().invoke(app, [
+            "source-governance", "preview-drift",
+            "--db", f"{td}/caveman.db",
+            "--min-rows", "3",
+            "--limit", "2",
+        ])
+
+        assert preview.exit_code == 0, preview.output
+        assert "Review checklist:" in preview.output
+        assert "   [ ] 'import:largest' — reason='unmanaged_low_signal_import' total=5" in preview.output
+        assert "   [ ] 'import:middle' — reason='unmanaged_low_signal_import' total=4" in preview.output
+        assert preview.output.index("Review checklist:") < preview.output.index("auto_mutation=disabled")
+
+
+def test_source_governance_cli_checklist_escapes_control_characters(monkeypatch):
+    """Checklist source labels must not let data-controlled control chars spoof output rows."""
+    import asyncio
+
+    from typer.testing import CliRunner
+
+    from caveman.cli.main import app
+
+    unsafe_source = "import:operator\n\x1b[31mspoof"
+    with tempfile.TemporaryDirectory() as td:
+        monkeypatch.setenv("CAVEMAN_HOME", td)
+        mgr = MemoryManager.with_sqlite(base_dir=td)
+        try:
+            store = mgr.backend
+            for idx in range(3):
+                asyncio.run(store.store(
+                    f"unsafe checklist low-signal source {idx}",
+                    MemoryType.SEMANTIC,
+                    metadata={"source": unsafe_source, "trust_score": 0.05},
+                    trusted=True,
+                ))
+        finally:
+            _close_manager(mgr)
+
+        preview = CliRunner().invoke(app, [
+            "source-governance", "preview-drift",
+            "--db", f"{td}/caveman.db",
+            "--min-rows", "3",
+        ])
+
+        assert preview.exit_code == 0, preview.output
+        checklist = preview.output.split("Review checklist:", 1)[1]
+        assert "operator\n" not in checklist
+        assert "\x1b[31m" not in checklist
+        assert "'import:operator\\n\\x1b[31mspoof'" in checklist
+
+
 def test_memory_types():
     assert MemoryType.EPISODIC.value == "episodic"
     assert MemoryType.WORKING.value == "working"
