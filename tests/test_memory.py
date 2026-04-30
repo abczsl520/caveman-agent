@@ -322,7 +322,7 @@ def test_source_governance_cli_reports_total_candidates_separately_from_limit(mo
         assert preview.exit_code == 0, preview.output
         assert "candidate_count=3" in preview.output
         assert "showing_count=1" in preview.output
-        assert "1. source=import:largest total=5" in preview.output
+        assert "1. source='import:largest' total=5" in preview.output
         assert "import:middle" not in preview.output
         assert "import:smallest" not in preview.output
 
@@ -510,6 +510,55 @@ def test_source_governance_cli_checklist_escapes_control_characters(monkeypatch)
         assert "operator\n" not in checklist
         assert "\x1b[31m" not in checklist
         assert "'import:operator\\n\\x1b[31mspoof'" in checklist
+def test_source_governance_cli_preview_rows_escape_control_characters(monkeypatch):
+    """All data-derived preview rows should be safe against terminal/output spoofing."""
+    import asyncio
+
+    from typer.testing import CliRunner
+
+    from caveman.cli.main import app
+
+    unsafe_source = "import:operator\n\x1b[31mspoof"
+    unsafe_reason = "unmanaged\n\x1b[32mreason"
+    with tempfile.TemporaryDirectory() as td:
+        monkeypatch.setenv("CAVEMAN_HOME", td)
+        mgr = MemoryManager.with_sqlite(base_dir=td)
+        try:
+            store = mgr.backend
+            for idx in range(3):
+                asyncio.run(store.store(
+                    f"unsafe preview low-signal source {idx}",
+                    MemoryType.SEMANTIC,
+                    metadata={"source": unsafe_source, "trust_score": 0.05},
+                    trusted=True,
+                ))
+        finally:
+            _close_manager(mgr)
+
+        from caveman.cli import source_governance
+
+        original_collect = source_governance._collect_memory_source_policy_drift
+
+        def collect_with_unsafe_reason(*args, **kwargs):
+            rows = original_collect(*args, **kwargs)
+            for row in rows:
+                row["reason"] = unsafe_reason
+            return rows
+
+        monkeypatch.setattr(source_governance, "_collect_memory_source_policy_drift", collect_with_unsafe_reason)
+        preview = CliRunner().invoke(app, [
+            "source-governance", "preview-drift",
+            "--db", f"{td}/caveman.db",
+            "--min-rows", "3",
+        ])
+
+        assert preview.exit_code == 0, preview.output
+        for line in preview.output.splitlines():
+            assert "\x1b[" not in line
+            assert line.strip() != "spoof"
+            assert line.strip() != "reason"
+        assert "source='import:operator\\n\\x1b[31mspoof'" in preview.output
+        assert "reason='unmanaged\\n\\x1b[32mreason'" in preview.output
 
 
 def test_memory_types():

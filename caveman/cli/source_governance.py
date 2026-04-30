@@ -43,14 +43,14 @@ def preview_drift(
     typer.echo(f"candidate_count={len(all_candidates)}")
     typer.echo(f"showing_count={len(candidates)}")
     for idx, row in enumerate(candidates, 1):
-        typer.echo(f"{idx}. source={row['label']} total={row['total']} active={row['active']}")
+        typer.echo(f"{idx}. source={row['candidate_policy_entry']!r} total={row['total']} active={row['active']}")
         typer.echo(
             "   "
             f"avg_trust={row['avg_trust']} never_recalled_pct={row['never_recalled_pct']} "
             f"helpful_pct={row['helpful_pct']}"
         )
-        typer.echo(f"   reason={row['reason']} recommended_action={row['recommended_action']}")
-        typer.echo(f"   candidate_policy_entry={row['candidate_policy_entry']}")
+        typer.echo(f"   reason={row['reason']!r} recommended_action={row['recommended_action']}")
+        typer.echo(f"   candidate_policy_entry={row['candidate_policy_entry']!r}")
 
     typer.echo("Policy workflow (copy/paste):")
     typer.echo("1. Review source quality outside the CLI; this command is read-only.")
