@@ -5,7 +5,11 @@ import tempfile
 from caveman.memory.flywheel_metrics import FlywheelHealth
 from caveman.memory.types import MemoryType
 from caveman.memory.manager import MemoryManager
-from caveman.memory.quarantine import list_quarantined, restore_quarantined
+from caveman.memory.quarantine import (
+    list_quarantined,
+    preview_restore_quarantined,
+    restore_quarantined,
+)
 
 
 def _close_manager(mgr: MemoryManager) -> None:
@@ -109,6 +113,132 @@ def test_quarantine_cli_lists_and_restores_entries_with_audit_metadata(monkeypat
             assert entry.metadata["governance_state"] == "active"
             assert entry.metadata["restored_by"] == "operator"
             assert entry.metadata["restore_reason"] == "manual false positive"
+        finally:
+            _close_manager(mgr)
+
+
+@pytest.mark.asyncio
+async def test_quarantine_restore_preview_filters_without_mutating_rows():
+    """Bulk restore needs a dry-run preview before any quarantined row becomes active."""
+    with tempfile.TemporaryDirectory() as td:
+        mgr = MemoryManager.with_sqlite(base_dir=td)
+        try:
+            store = mgr.backend
+            match_id = await store.store(
+                "preview matching openclaw quarantine memory",
+                MemoryType.SEMANTIC,
+                metadata={
+                    "source": "import:openclaw",
+                    "governance_state": "quarantined",
+                    "quarantine_reason": "source_policy_low_signal_import",
+                },
+                trusted=True,
+            )
+            other_source_id = await store.store(
+                "preview hermes quarantine memory",
+                MemoryType.SEMANTIC,
+                metadata={
+                    "source": "import:hermes",
+                    "governance_state": "quarantined",
+                    "quarantine_reason": "source_policy_low_signal_import",
+                },
+                trusted=True,
+            )
+            other_reason_id = await store.store(
+                "preview stale openclaw quarantine memory",
+                MemoryType.SEMANTIC,
+                metadata={
+                    "source": "import:openclaw",
+                    "governance_state": "quarantined",
+                    "quarantine_reason": "stale_low_signal_import",
+                },
+                trusted=True,
+            )
+            active_id = await store.store(
+                "preview active openclaw memory",
+                MemoryType.SEMANTIC,
+                metadata={"source": "import:openclaw"},
+                trusted=True,
+            )
+
+            preview = preview_restore_quarantined(
+                store,
+                source="import:openclaw",
+                reason="source_policy_low_signal_import",
+                limit=10,
+            )
+
+            assert preview.total_matches == 1
+            assert preview.by_source == {"import:openclaw": 1}
+            assert preview.by_reason == {"source_policy_low_signal_import": 1}
+            assert [entry.id for entry in preview.entries] == [match_id]
+            for memory_id in [match_id, other_source_id, other_reason_id]:
+                entry = await store.get_by_id(memory_id)
+                assert entry is not None
+                assert entry.metadata["governance_state"] == "quarantined"
+            active = await store.get_by_id(active_id)
+            assert active is not None
+            assert active.metadata.get("governance_state") != "quarantined"
+        finally:
+            _close_manager(mgr)
+
+
+def test_quarantine_cli_preview_is_dry_run_and_reports_impact(monkeypatch):
+    """Operators should see restore impact by source/reason before running mutation."""
+    from typer.testing import CliRunner
+
+    from caveman.cli.main import app
+
+    with tempfile.TemporaryDirectory() as td:
+        monkeypatch.setenv("CAVEMAN_HOME", td)
+        mgr = MemoryManager.with_sqlite(base_dir=td)
+        try:
+            store = mgr.backend
+            import asyncio
+            first_id = asyncio.run(store.store(
+                "cli preview first openclaw quarantine memory",
+                MemoryType.SEMANTIC,
+                metadata={
+                    "source": "import:openclaw",
+                    "governance_state": "quarantined",
+                    "quarantine_reason": "source_policy_low_signal_import",
+                },
+                trusted=True,
+            ))
+            second_id = asyncio.run(store.store(
+                "cli preview second openclaw quarantine memory",
+                MemoryType.SEMANTIC,
+                metadata={
+                    "source": "import:openclaw",
+                    "governance_state": "quarantined",
+                    "quarantine_reason": "source_policy_low_signal_import",
+                },
+                trusted=True,
+            ))
+        finally:
+            _close_manager(mgr)
+
+        runner = CliRunner()
+        preview = runner.invoke(app, [
+            "memory-quarantine", "preview-restore",
+            "--db", f"{td}/caveman.db",
+            "--source", "import:openclaw",
+            "--reason", "source_policy_low_signal_import",
+        ])
+
+        assert preview.exit_code == 0, preview.output
+        assert "would_restore=2" in preview.output
+        assert "import:openclaw=2" in preview.output
+        assert "source_policy_low_signal_import=2" in preview.output
+        assert first_id in preview.output
+        assert second_id in preview.output
+
+        mgr = MemoryManager.with_sqlite(base_dir=td)
+        try:
+            for memory_id in [first_id, second_id]:
+                entry = asyncio.run(mgr.backend.get_by_id(memory_id))
+                assert entry is not None
+                assert entry.metadata["governance_state"] == "quarantined"
         finally:
             _close_manager(mgr)
 
