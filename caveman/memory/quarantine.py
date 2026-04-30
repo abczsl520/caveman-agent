@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections import Counter
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
@@ -20,24 +22,74 @@ SELECT_MEMORY_ROW = (
 )
 
 
+@dataclass(frozen=True)
+class QuarantineRestorePreview:
+    """Dry-run impact report for restoring quarantined memories."""
+
+    entries: list[MemoryEntry]
+    by_source: dict[str, int]
+    by_reason: dict[str, int]
+
+    @property
+    def total_matches(self) -> int:
+        return len(self.entries)
+
+
+def _quarantine_where(
+    *, source: str | None = None, reason: str | None = None
+) -> tuple[str, list[object]]:
+    where = quarantine_memory_sql()
+    params: list[object] = []
+    if source:
+        where += " AND CASE WHEN json_valid(metadata_json) THEN json_extract(metadata_json, '$.source') = ? ELSE 0 END"
+        params.append(source)
+    if reason:
+        where += " AND CASE WHEN json_valid(metadata_json) THEN json_extract(metadata_json, '$.quarantine_reason') = ? ELSE 0 END"
+        params.append(reason)
+    return where, params
+
+
+def _row_to_memory_entry(row: sqlite3.Row | tuple) -> MemoryEntry:
+    return row_to_entry(row, trust=row[5], retrieval_count=row[6], last_accessed=row[7])
+
+
 def list_quarantined(
     store: "SQLiteMemoryStore", source: str | None = None, limit: int = 50
 ) -> list[MemoryEntry]:
     """List quarantined memories for operator review."""
-    where = quarantine_memory_sql()
-    params: list = []
-    if source:
-        where += " AND CASE WHEN json_valid(metadata_json) THEN json_extract(metadata_json, '$.source') = ? ELSE 0 END"
-        params.append(source)
+    where, params = _quarantine_where(source=source)
     params.append(limit)
     rows = store._get_conn().execute(
         SELECT_MEMORY_ROW + f"WHERE {where} ORDER BY created_at DESC LIMIT ?",
         params,
     ).fetchall()
-    return [
-        row_to_entry(row, trust=row[5], retrieval_count=row[6], last_accessed=row[7])
-        for row in rows
-    ]
+    return [_row_to_memory_entry(row) for row in rows]
+
+
+def preview_restore_quarantined(
+    store: "SQLiteMemoryStore",
+    *,
+    source: str | None = None,
+    reason: str | None = None,
+    limit: int = 500,
+) -> QuarantineRestorePreview:
+    """Return a dry-run impact report for scoped quarantine restore."""
+    where, params = _quarantine_where(source=source, reason=reason)
+    params.append(limit)
+    rows = store._get_conn().execute(
+        SELECT_MEMORY_ROW + f"WHERE {where} ORDER BY created_at DESC LIMIT ?",
+        params,
+    ).fetchall()
+    entries = [_row_to_memory_entry(row) for row in rows]
+    by_source = Counter(str(entry.metadata.get("source", "unknown")) for entry in entries)
+    by_reason = Counter(
+        str(entry.metadata.get("quarantine_reason", "unknown")) for entry in entries
+    )
+    return QuarantineRestorePreview(
+        entries=entries,
+        by_source=dict(by_source),
+        by_reason=dict(by_reason),
+    )
 
 
 async def restore_quarantined(
