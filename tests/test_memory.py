@@ -228,8 +228,8 @@ def test_quarantine_cli_preview_is_dry_run_and_reports_impact(monkeypatch):
 
         assert preview.exit_code == 0, preview.output
         assert "would_restore=2" in preview.output
-        assert "import:openclaw=2" in preview.output
-        assert "source_policy_low_signal_import=2" in preview.output
+        assert "'import:openclaw'=2" in preview.output
+        assert "'source_policy_low_signal_import'=2" in preview.output
         assert first_id in preview.output
         assert second_id in preview.output
 
@@ -241,6 +241,92 @@ def test_quarantine_cli_preview_is_dry_run_and_reports_impact(monkeypatch):
                 assert entry.metadata["governance_state"] == "quarantined"
         finally:
             _close_manager(mgr)
+
+
+def test_quarantine_cli_list_escapes_control_characters_in_operator_output(monkeypatch):
+    """Quarantine list output should share preview's terminal-spoofing defenses."""
+    from typer.testing import CliRunner
+
+    from caveman.cli.main import app
+
+    unsafe_source = "import:openclaw\n\x1b[31mspoof"
+    unsafe_reason = "source_policy\n\x1b[32mreason"
+    unsafe_content = "cli list unsafe\n\x1b[33mcontent memory"
+    with tempfile.TemporaryDirectory() as td:
+        monkeypatch.setenv("CAVEMAN_HOME", td)
+        mgr = MemoryManager.with_sqlite(base_dir=td)
+        try:
+            store = mgr.backend
+            import asyncio
+            memory_id = asyncio.run(store.store(
+                unsafe_content,
+                MemoryType.SEMANTIC,
+                metadata={
+                    "source": unsafe_source,
+                    "governance_state": "quarantined",
+                    "quarantine_reason": unsafe_reason,
+                },
+                trusted=True,
+            ))
+        finally:
+            _close_manager(mgr)
+
+        listed = CliRunner().invoke(app, [
+            "memory-quarantine", "list",
+            "--db", f"{td}/caveman.db",
+        ])
+
+        assert listed.exit_code == 0, listed.output
+        assert memory_id in listed.output
+        for line in listed.output.splitlines():
+            assert "\x1b[" not in line
+            assert line.strip() not in {"spoof", "reason", "content memory"}
+        assert "'import:openclaw\\n\\x1b[31mspoof'" in listed.output
+        assert "'source_policy\\n\\x1b[32mreason'" in listed.output
+        assert "'cli list unsafe\\n\\x1b[33mcontent memory'" in listed.output
+
+
+def test_quarantine_cli_preview_escapes_control_characters_in_operator_output(monkeypatch):
+    """Quarantine preview output should not let DB-derived fields spoof terminal rows."""
+    from typer.testing import CliRunner
+
+    from caveman.cli.main import app
+
+    unsafe_source = "import:openclaw\n\x1b[31mspoof"
+    unsafe_reason = "source_policy\n\x1b[32mreason"
+    unsafe_content = "cli preview unsafe\n\x1b[33mcontent memory"
+    with tempfile.TemporaryDirectory() as td:
+        monkeypatch.setenv("CAVEMAN_HOME", td)
+        mgr = MemoryManager.with_sqlite(base_dir=td)
+        try:
+            store = mgr.backend
+            import asyncio
+            memory_id = asyncio.run(store.store(
+                unsafe_content,
+                MemoryType.SEMANTIC,
+                metadata={
+                    "source": unsafe_source,
+                    "governance_state": "quarantined",
+                    "quarantine_reason": unsafe_reason,
+                },
+                trusted=True,
+            ))
+        finally:
+            _close_manager(mgr)
+
+        preview = CliRunner().invoke(app, [
+            "memory-quarantine", "preview-restore",
+            "--db", f"{td}/caveman.db",
+        ])
+
+        assert preview.exit_code == 0, preview.output
+        assert memory_id in preview.output
+        for line in preview.output.splitlines():
+            assert "\x1b[" not in line
+            assert line.strip() not in {"spoof", "reason", "content memory"}
+        assert "'import:openclaw\\n\\x1b[31mspoof'=1" in preview.output
+        assert "'source_policy\\n\\x1b[32mreason'=1" in preview.output
+        assert "'cli preview unsafe\\n\\x1b[33mcontent memory'" in preview.output
 
 
 def test_source_governance_cli_previews_policy_drift_without_mutating_rows(monkeypatch):
