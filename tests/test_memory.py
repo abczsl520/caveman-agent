@@ -732,6 +732,43 @@ def test_operator_literal_helper_is_shared_across_cli_and_dashboard():
     assert dashboard_formatters._operator_literal("import:x\n\x1b[31m") == operator_literal("import:x\n\x1b[31m", max_length=160)
     assert dashboard_formatters._operator_literal("x" * 200) == operator_literal("x" * 200, max_length=160)
 
+
+def test_wiki_search_cli_escapes_entry_title_and_preview(monkeypatch, capsys):
+    """Wiki search output should escape compiled DB/file-derived content before terminal display."""
+    import typer
+
+    from caveman.cli import wiki_mcp
+    from caveman.wiki import WikiEntry
+
+    class FakeStore:
+        def search(self, query):
+            return [WikiEntry(
+                id="unsafe",
+                tier="semantic",
+                title="Safe title\nSPOOF_TITLE",
+                content="Safe content\nSPOOF_CONTENT",
+                confidence=0.75,
+            )]
+
+    class FakeCompiler:
+        def __init__(self, store):
+            self.store = FakeStore()
+
+    monkeypatch.setattr("caveman.wiki.WikiStore", lambda: FakeStore())
+    monkeypatch.setattr("caveman.wiki.compiler.WikiCompiler", FakeCompiler)
+
+    app = typer.Typer()
+    wiki_mcp.register_wiki_commands(app)
+
+    from typer.testing import CliRunner
+    result = CliRunner().invoke(app, ["search", "safe"])
+
+    assert result.exit_code == 0, result.output
+    assert "Safe title\\nSPOOF_TITLE" in result.output
+    assert "Safe content\\nSPOOF_CONTENT" in result.output
+    assert "Safe title\nSPOOF_TITLE" not in result.output
+    assert "Safe content\nSPOOF_CONTENT" not in result.output
+
 def test_memory_types():
     assert MemoryType.EPISODIC.value == "episodic"
     assert MemoryType.WORKING.value == "working"
