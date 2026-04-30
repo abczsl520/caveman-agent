@@ -1,8 +1,9 @@
 # Caveman 优化 HANDOFF
 
-更新时间: 2026-05-01 07:02 CST
+更新时间: 2026-05-01 07:12 CST
 
 ## 当前最终状态
+- Round 33 已完成、提交并推送到 `main`；code commit `e6d88548a3fcd6aa0d8773fe81ea6b8a132bda41` (`[verified] escape status memory detail labels`)；GitHub Actions run `25194162832`，`https://github.com/abczsl520/caveman-agent/actions/runs/25194162832`，completed success。
 - Round 32 已完成、提交并推送到 `main`；code commit `8c09262` (`[verified] escape status model output`)；GitHub Actions run `25193311855`，`https://github.com/abczsl520/caveman-agent/actions/runs/25193311855`，completed success。
 - Round 31 已完成、提交并推送到 `main`；code commit `60a42f2e92bb00989c46a6bf3b4ea658bc421fbb` (`[verified] document ansi operator literals`)；GitHub Actions run `25192393917`，`https://github.com/abczsl520/caveman-agent/actions/runs/25192393917`，completed success。
 - Round 30 已完成、提交并推送到 `main`；code commit `596c7d8ff2a3ac01ce583a0c161d14ab7ae4b95d` (`[verified] escape wiki search operator output`)；GitHub Actions run `25191456061`，`https://github.com/abczsl520/caveman-agent/actions/runs/25191456061`，completed success。
@@ -22,10 +23,44 @@
 - Gateway 最后已知未运行；本轮未重启 gateway，优化任务不依赖 gateway。
 
 ## 下次启动时做
-1. 先确认本 handoff docs commit 的 GitHub Actions 结论；如果 code commit `8c09262` 的 run `25193311855` 已记录 success，不要重复等待。
-2. 继续 Round 33/50：沿 operator-facing output 安全边界继续深挖，优先扫描 `caveman.cli.status` 以外的 config/file/DB-derived CLI 输出（例如 status stats/memory detail、changelog/audit/migrate/self-test 输出）是否还会直接输出可控字符串；每次只做一个 TDD 小切片。
+1. 先确认 Round 33 handoff/docs commit 的 GitHub Actions 结论；如果 code commit `e6d8854` 的 run `25194162832` 已记录 success，不要重复等待。
+2. 继续 Round 34/50：沿 operator-facing output 安全边界继续扫描 `caveman.cli.status` 的剩余可控输出（如 `Home` 路径、gateway log pattern/boundary 字段）或其他 config/file/DB-derived CLI 输出；每次只做一个 TDD 小切片。
 3. Dashboard 主文件仍有 450 行 hard limit；继续 dashboard 方向必须优先抽 helper，不要在 `flywheel_dashboard.py` 主文件堆逻辑。
-4. Rounds 33-50：按“证据→TDD→实现→门禁→review→commit/push→监控”小步推进；不要虚构完成 50 轮，每轮必须有验证与提交或明确 no-op 证据。
+4. Rounds 34-50：按“证据→TDD→实现→门禁→review→commit/push→监控”小步推进；不要虚构完成 50 轮，每轮必须有验证与提交或明确 no-op 证据。
+
+## Round 33 做了什么
+- 先确认真实状态：`main` 最新为 Round 32 handoff/docs commit `35b9a14`，工作树起始干净；gateway health 不可达但本轮不依赖 gateway。项目文件实际为 `memory/projects/caveman.md`（`caveman优化.md` 不存在）。
+- 执行 baseline：full suite（排除已知 NFR）起始为 `3321 passed, 8 skipped`。
+- 继续 operator-facing output 安全边界扫描，发现 `caveman/cli/status.py` 的 `mem_detail` 直接输出 memory JSON 文件 stem：带换行和 ANSI 控制字节的 stem 会在 status 输出里伪造额外行/注入终端控制字节。
+- RED 新增 regression：`test_status_text_escapes_memory_type_names` monkeypatch `_count_memories()` 返回带换行与 ANSI 的 key，要求 status 输出使用 repr-style escaped literal，且没有真实 spoof 行或 raw ANSI 字节。
+- GREEN：`status_text()` 的 memory detail key 复用共享 `operator_literal(k)`；保留 count 数值原样输出。
+
+## Round 33 验证结果
+- RED：`tests/test_cli_status.py::test_status_text_escapes_memory_type_names` 按预期失败，原输出包含真实换行和 raw ANSI。
+- GREEN focused：`tests/test_cli_status.py` → `10 passed`。
+- Py compile：`caveman/cli/status.py tests/test_cli_status.py` pass。
+- Ruff changed files：`.venv/bin/ruff check caveman/cli/status.py tests/test_cli_status.py` → pass。
+- Full suite（排除已知 NFR）：`.venv/bin/python -m pytest tests/ -q --ignore=tests/test_nfr_compliance.py --tb=short` → `3322 passed, 8 skipped in 110.52s`。
+- Docs/API：`.venv/bin/python scripts/generate_api_reference.py --check` pass；无 API docs diff。
+- Security scan：added-line/final scan hardcoded secret/token/password、shell injection、eval/exec、pickle、SQL string-format patterns 0 matches；push hook safety checks passed。
+- Independent review：passed，无 `security_concerns`、无 `logic_errors`。
+- Remote CI：code commit `e6d88548a3fcd6aa0d8773fe81ea6b8a132bda41` GitHub Actions run `25194162832` completed success。
+
+## Round 33 什么 work 了
+- 继续复用共享 `operator_literal`，没有新增 escaping 语义；TDD regression 直接证明 status memory detail 不能通过文件名/stem 伪造额外行或注入 ANSI 控制字节。
+- 保留 Round 32 的 model escaping regression，并新增 memory label regression，status operator-output 安全边界覆盖更完整。
+- GitHub Actions 公共 API 可无 token 查询当前 head_sha 的 run；本轮 code CI 成功记录为 run `25194162832`。
+
+## Round 33 什么没做/没work
+- 本 handoff 更新将单独 docs commit；提交后需 push 并监控 CI。
+- 尚未系统检查 `status_text()` 的 `Home` 路径与 gateway diagnostic 字段；Round 34 继续。
+- 未重启 gateway（当前自动续跑不依赖 gateway，且 SOP 要避免不必要启动）。
+
+## Round 33 已知坑
+- 本轮一开始 `memory/projects/caveman优化.md` 未找到，实际项目文件是 `memory/projects/caveman.md`；后续按真实文件名读取/更新。
+- `gh` CLI 不存在；CI 监控使用 GitHub public REST API + `head_sha` 查询。
+- 长轮询放进 `execute_code` 可能受 300s wrapper timeout 影响；优先用短 `terminal` 查询或分段轮询。
+- `mem_detail` 的 key 来自文件名/stem，也属于 file-derived operator output；任何 CLI/dashboard 输出此类 label 时统一走 `operator_literal`。
 
 ## Round 32 做了什么
 - 先确认真实状态：`main` 最新为 Round 31 handoff/docs commit `e4c8182`，工作树起始干净；gateway health 不可达但本轮不依赖 gateway。项目文件存在但仍停在 Round 30 摘要，已在本轮同步更新。
