@@ -1,11 +1,12 @@
 # Caveman 优化 HANDOFF
 
-更新时间: 2026-05-01 00:18 CST
+更新时间: 2026-05-01 00:44 CST
 
 ## 当前最终状态
-- Round 15 已完成本地实现与验证，待提交/推送/远端 CI 监控。
+- Round 16 已完成、提交并推送到 `main`。
+- Round 15 已完成、提交并推送到 `main`。
 - Round 14 已完成、提交并推送到 `main`。
-- 最新 code commit: `8575c9e191ba3a4c392d9ac319c4ef1a9f571dbe` (`[verified] decouple restorable quarantine reporting`)。
+- 最新 code commit: `f51d66939b96ea5a2f8504f76b599c72d7070a4b` (`[verified] surface source drift policy candidates`)。
 - Round 14 handoff/docs content commit: `da1059ba3a61aba476a576547c2a4898627b082a` (`docs: update caveman handoff after round 14`)；本文件可能随后有 metadata-only 校正提交。
 - `origin/main` 已同步到最新 SHA。
 - GitHub Actions 对 Round 14 code SHA 全绿：run `25174683621`，`https://github.com/abczsl520/caveman-agent/actions/runs/25174683621`。
@@ -19,9 +20,26 @@
 - Gateway 最后已知未运行：需要交互验证时按 gateway SOP 安全启动，避免 `nohup caveman serve &` 触发 Hermes terminal exit-130 loop。
 
 ## 下次启动时做
-1. Round 16/50：继续 source governance / quarantine observability；优先把 `source_policy_drift` 从“operator 可见”推进到“可执行建议/allowlist candidate 审批语义”，或审计 unknown/casing source policy。先用数据/测试证明缺口，再 TDD 小步修。
+1. Round 17/50：继续 source governance / quarantine observability；优先把 `source_policy_drift` candidate 从“报告建议”推进到只读 CLI/API preview（例如列出 candidate allowlist entries + impact），或审计 source casing/alias normalization 的漏网数据。先用数据/测试证明缺口，再 TDD 小步修。
 2. Dashboard 主文件已在 450 行 hard limit；继续 dashboard 方向必须优先抽 helper，不要在 `flywheel_dashboard.py` 主文件堆逻辑。
-3. Rounds 16-50：按“证据→TDD→实现→门禁→review→commit/push→监控”小步推进；不要虚构完成 50 轮，每轮必须有验证与提交或明确 no-op 证据。
+3. Rounds 17-50：按“证据→TDD→实现→门禁→review→commit/push→监控”小步推进；不要虚构完成 50 轮，每轮必须有验证与提交或明确 no-op 证据。
+
+## Round 16 做了什么
+- 聚焦 Round 15 的下一步：`source_policy_drift` 已能发现 unmanaged low-signal import source，但 operator report 仍只显示“有漂移”，缺少可复制/审批的 policy candidate identity，尤其长 source label 被截断时无法安全加入 allowlist。
+- TDD 新增期望：drift rows 必须携带 `recommended_action=review_for_low_signal_allowlist` 与 canonical `candidate_policy_entry`，report 必须展示 candidate identity。
+- 实现：`_collect_memory_source_policy_drift()` 输出 canonical full identity 作为 `candidate_policy_entry`，并保留 display `label` 只用于人类可读展示；`_format_source_policy_drift()` 展示 candidate，同时用 `.get()` 做 defensive formatting。
+- 保持 dashboard 主文件不增长：只改 helper modules，`flywheel_dashboard.py` 仍为 450 行。
+
+## Round 16 验证结果
+- RED：新增 source drift candidate tests 初始失败，旧 rows 缺少 `recommended_action` / `candidate_policy_entry`，证明缺口存在。
+- Focused tests：`tests/test_flywheel_dashboard.py tests/test_flywheel_dashboard_boundaries.py tests/test_memory_decay.py tests/test_round11.py::TestLoopRefactor::test_no_file_over_400_lines` → `44 passed`。
+- Full suite（排除已知 NFR）：`.venv/bin/python -m pytest tests/ -q --ignore=tests/test_nfr_compliance.py --tb=short` → `3301 passed, 8 skipped`。
+- Py compile：`_flywheel_memory_diagnostics.py`、`_flywheel_dashboard_formatters.py`、`tests/test_flywheel_dashboard_boundaries.py` pass。
+- Ruff changed files：pass。
+- Docs/API：`scripts/generate_api_reference.py --check` 无 diff。
+- Security scan：added-line hardcoded secret/shell/eval/pickle/SQL-string-format patterns 0 matches；push hook safety checks passed。
+- Independent review：passed，无 security/logic blocker；建议 HTML/terminal escaping 与 malformed percentage 防御，当前 output 为 plaintext dashboard 且 formatter 已补 `.get()`，非阻塞。
+- Remote CI：Round 16 code commit `f51d66939b96ea5a2f8504f76b599c72d7070a4b` GitHub Actions run `25177036454` completed success。
 
 ## Round 15 做了什么
 - 聚焦 Round 11 reviewer 留下的 source taxonomy/unknown policy 明文化后续：dashboard 能治理已知 allowlist source，但无法提示“看起来低信号、但还没进入 allowlist 的 import source”，operator 不知道 allowlist 是否漂移。
