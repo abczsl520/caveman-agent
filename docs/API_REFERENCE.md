@@ -468,7 +468,7 @@ Caveman CLI entry point.
 
 Operator CLI for reversible memory quarantine lifecycle.
 
-**Functions:** `list_quarantined()`, `restore()`
+**Functions:** `list_quarantined()`, `preview_restore()`, `restore()`
 
 ## `caveman.cli.migrate`
 
@@ -1660,7 +1660,9 @@ Memory quality gate — prevents garbage from entering the flywheel. This is the
 
 Reversible quarantine lifecycle helpers for SQLite memory stores.
 
-**Functions:** `list_quarantined()`, `restore_quarantined()`
+**Classes:** `QuarantineRestorePreview`
+
+**Functions:** `list_quarantined()`, `preview_restore_quarantined()`, `restore_quarantined()`
 
 ## `caveman.memory.recall_cache`
 
