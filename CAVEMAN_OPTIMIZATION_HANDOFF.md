@@ -8,7 +8,7 @@
 - Round 14 handoff/docs content commit: `da1059ba3a61aba476a576547c2a4898627b082a` (`docs: update caveman handoff after round 14`)；本文件可能随后有 metadata-only 校正提交。
 - `origin/main` 已同步到最新 SHA。
 - GitHub Actions 对 Round 14 code SHA 全绿：run `25174683621`，`https://github.com/abczsl520/caveman-agent/actions/runs/25174683621`。
-- 自动续跑已配置：cron job `36500447cc33` (`Caveman 50轮自动续跑`)，每 30 分钟触发，最多 48 次，目标回发当前 Discord thread；preflight 脚本 `/Users/yeren64g/.hermes/scripts/caveman_50round_preflight.py`，互斥锁 `/tmp/caveman-50round.lock`。
+- 自动续跑已配置：cron job `36500447cc33` (`Caveman 50轮自动续跑`)，每 5 分钟触发，最多 240 次，目标回发当前 Discord thread；preflight 脚本 `/Users/yeren64g/.hermes/scripts/caveman_50round_preflight.py`，互斥锁 `/tmp/caveman-50round.lock`。preflight 已具备 stale lock 自愈：lock pid 不存在或 lock 超过 90 分钟会自动清理，避免死锁后永久跳过。
 - Round 13 code commit: `edae36bf747baa7cb55e5addce47a9ba1044ba7e` (`[verified] report restorable quarantine impact`)；Round 13 docs/handoff commit: `b8e3794693a47f62bb33dc032e51957b7446c603`。
 - Round 9 code commit: `23df73debb9c113251eb0390515c47dbca9d5aa5` (`Protect decay with canonical access timestamps`)；Round 9 handoff commit: `ba76a2d93f5db3f08d60e6e34d17798555ea619d`。
 - Round 8 handoff commit: `f4a07bcde9f67e3d283dc43fda4dbe559a174a36`；Round 8 code commit: `9624ce069d74efa063e2c8c2aa4fef0feef80604` (`Normalize imported memory source metadata`)。
