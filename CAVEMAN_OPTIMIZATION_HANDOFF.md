@@ -1,21 +1,46 @@
 # Caveman 优化 HANDOFF
 
-更新时间: 2026-04-30 11:19 CST
+更新时间: 2026-04-30 11:55 CST
 
 ## 当前最终状态
-- Round 6 已完成、提交并推送到 `main`。
-- 最新 commit: `5e98357f06f34a4e6b28716ab5414c436378dea4` (`[verified] surface source governance in flywheel dashboard`)。
-- `origin/main` 已同步到该 SHA。
-- GitHub Actions 对该 SHA 全绿：`docs` success、`test (3.12)` success、install smoke macOS/Ubuntu/Windows success。
+- Round 7 已完成、提交并推送到 `main`。
+- 最新 commit: `92d68192e404060a6b1261f43aee27e93074780b` (`[verified] fix quarantine lifecycle CI gates`)。
+- Round 7 feature commit: `b2c0169` (`[verified] add reversible memory quarantine lifecycle`)。
+- `origin/main` 已同步到最新 SHA。
+- GitHub Actions 对最新 SHA 全绿：`docs` success、`test (3.12)` success、install smoke macOS/Ubuntu/Windows success。
+- Round 6 code commit: `5e98357f06f34a4e6b28716ab5414c436378dea4` (`[verified] surface source governance in flywheel dashboard`)；Round 6 handoff commit: `1ceef53`。
 - Round 5 commit: `7de8ff65a156c924fc9af2d74452bd24e8e39f77` (`[verified] add source-aware memory quarantine policy`)。
 - Round 4 code commit: `90ee17f75cbe5ca78a8c7335c6051ccf19962829`；Round 4 handoff commit: `a70d3f5552d6aed51e3f07549915283f001b727a`。
 - Gateway 最后已知未运行：`curl http://localhost:4201/health` 失败；日志显示 09:37 用户停止并移除 PID。这不是代码失败，但下轮若需要交互验证要按 gateway SOP 安全启动。
 
 ## 下次启动时做
-1. Round 7/50：补齐 quarantine lifecycle 的可逆操作面板/CLI：按 source/reason 查看、恢复单条或批量恢复、输出审计日志。优先使用 Round 6 dashboard 的 `source_governance` 证据选目标。
-2. Round 8：import metadata 规范化：回填 `<missing>` source、规范 imported source 命名、保留 provenance；避免未来治理策略因为 source 缺失/拼写漂移失效。
-3. Round 9-10：helpfulness/retrieval 反馈质量与 decay scheduling/observability 闭环：确认 quarantine 后 recall 候选减少和 helpful memory 不被误伤。
+1. Round 8/50：import metadata 规范化：回填 `<missing>` source、规范 imported source 命名、保留 provenance；避免未来治理策略因为 source 缺失/拼写漂移失效。优先用 dashboard/source-governance + quarantine lifecycle CLI 观察治理前后状态。
+2. Round 9：helpfulness/retrieval 反馈质量与 decay scheduling/observability 闭环：确认 quarantine 后 recall 候选减少和 helpful memory 不被误伤。
+3. Round 10：quarantine restore 的 operator guardrails：dry-run bulk restore、source/reason scoped restore preview、恢复后 dashboard impact report。
 4. Rounds 11-50：按“证据→TDD→实现→门禁→review→commit/push→监控”小步推进；不要虚构完成 50 轮，每轮必须有验证与提交或明确 no-op 证据。
+
+## Round 7 做了什么
+- 补齐 reversible quarantine lifecycle operator path，避免 Round 4-6 只会自动隔离、缺少安全查看/恢复/审计路径。
+- 新增 `caveman.memory.quarantine`，把 quarantine list/restore lifecycle 从 `sqlite_store.py` 拆出，保持 no-god-file 上限；`sqlite_store.py` 仍为 450 行。
+- `SQLiteMemoryStore` 现在挂载 `list_quarantined()` / `restore_quarantined()`：
+  - list 支持按 `source`、`reason`、`limit` 查询 quarantined memory；
+  - source 过滤使用 `CASE WHEN json_valid(metadata_json) THEN json_extract(...) ELSE 0 END`，避免 malformed metadata crash；
+  - restore 保留并追加 `quarantine_audit`，写入 `restored_at`、`restored_by`、`restore_reason`、`previous_governance_state`、`previous_quarantine_reason`。
+- 新增 `caveman memory-quarantine list/restore` CLI，支持 `--db-path`、`--source`、`--reason`、`--limit`、`--restored-by`、`--restore-reason`，给 operator 可观测/可审计的恢复入口。
+- CLI 主入口接入 `memory-quarantine` 子命令，并更新 API reference。
+- 新增 TDD 回归覆盖 store lifecycle 和 CLI lifecycle：list、source/reason filter、restore 后不再 active quarantine、audit metadata 保留。
+
+## Round 7 验证结果
+- Focused lifecycle tests：`2 passed in 0.10s`。
+- Regression subset：`tests/test_memory.py tests/test_memory_decay.py tests/test_flywheel_dashboard_boundaries.py` 共 `37 passed in 0.46s`。
+- Coverage gate：`scripts/ci_coverage_gate.py --maxfail=1 --tb=short -q` 通过（此前 ruff+coverage gate exit 0）。
+- Ruff focused：`caveman/cli/main.py caveman/cli/memory_quarantine.py caveman/memory/quarantine.py caveman/memory/sqlite_store.py caveman/memory/store_helpers.py tests/test_memory.py` pass。
+- CI lint parity：`ruff check --select E9,F63,F7,F82 caveman tests` pass。
+- Docs generation：`scripts/generate_api_reference.py` 更新并提交 `docs/API_REFERENCE.md`，CI docs gate pass。
+- Mypy baseline-aware gate：full-project historical baseline 仍可见；Round 7 touched Python files 无 blocking mypy errors。发现 `caveman/cli/main.py` 既有 `yaml` import-untyped 会因本轮触碰而阻塞，已加 `# type: ignore[import-untyped]`，没有绕过新增错误。
+- Security scan：changed/untracked files pattern scan clean；push hook safety checks passed。
+- Independent review：发现 source filter 直接 `json_extract` 会对 malformed `metadata_json` 崩溃；已改为 `CASE WHEN json_valid(...)` 并重新验证。
+- Remote CI：最新 SHA `92d68192e404060a6b1261f43aee27e93074780b` GitHub Actions 全绿（docs、test 3.12、install smoke macOS/Ubuntu/Windows）。
 
 ## Round 6 做了什么
 - 把 flywheel dashboard 从 source/type skew 展示升级为 source-governance 行动面板。
@@ -88,3 +113,5 @@
 - Round 5 source-policy 边界：30-89 天走 `source_policy_low_signal_import`；>=90 天保留旧的 `stale_low_signal_import` 语义。后续补 boundary/idempotence 测试时不要误改原因语义。
 - Round 6 dashboard source-governance 不能基于 top-N displayed breakdown 生成；必须扫描所有 sources，否则小但 actionable 的 source 会被隐藏。
 - Dashboard source policy 口径要和 `MemoryDecay` 对齐：使用 decay 后 `new_trust`、30-89 天 age window、retrieval/helpful 保护，而不是只看当前 trust。
+- Round 7 CLI touched `caveman/cli/main.py`，触发 mypy baseline-aware gate 对该文件的既有 `yaml` import-untyped 债务；已加 targeted ignore。后续触碰 baseline-heavy 文件时要先跑 `scripts/ci_mypy_gate.py`，不要只跑局部 mypy。
+- Quarantine list/restore 的任何 metadata JSON 查询都必须使用 malformed-safe `CASE WHEN json_valid(...)`；review 已抓到一次 source filter 直接 `json_extract` 的 regression。
