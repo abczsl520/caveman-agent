@@ -19,6 +19,11 @@ import logging
 import sqlite3
 
 from caveman.db import connect as db_connect
+from caveman.memory.sources import (
+    IMPORT_SOURCE_PREFIX,
+    SOURCE_POLICY_LOW_SIGNAL_IMPORTS,
+    canonicalize_memory_source,
+)
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -39,13 +44,6 @@ _PRUNE_AGE_DAYS = 90         # Must be this old to be pruned
 _MAX_DECAY_PER_RUN = 2000    # Process enough rows to govern bulk-import noise in one pass
 _QUARANTINE_TRUST_THRESHOLD = 0.07
 _QUARANTINE_DOWNRANK_TRUST = 0.01
-_IMPORT_SOURCE_PREFIX = "import:"
-_SOURCE_POLICY_LOW_SIGNAL_IMPORTS = frozenset({
-    "import:openclaw",
-    "import:openclaw-session",
-    "import:hermes",
-    "import:hermes-skill-ref",
-})
 _SOURCE_POLICY_MIN_AGE_DAYS = 30
 _SOURCE_POLICY_TRUST_THRESHOLD = 0.08
 
@@ -114,6 +112,7 @@ class MemoryDecay:
             to_decay: list[tuple[str, float]] = []  # (id, new_trust)
             to_prune: list[dict] = []  # full row data for archive
             to_quarantine: list[tuple[str, float, dict[str, Any]]] = []
+            metadata_updates: list[tuple[str, dict[str, Any]]] = []
 
             for row in rows:
                 result.memories_scanned += 1
@@ -123,7 +122,14 @@ class MemoryDecay:
                 helpful_count = row["helpful_count"]
                 created_at = row["created_at"]
                 metadata = json.loads(row["metadata_json"] or "{}")
-                source = str(metadata.get("source", ""))
+                raw_source = metadata.get("source", "")
+                source = canonicalize_memory_source(raw_source)
+                if source and source != raw_source:
+                    metadata["source"] = source
+                    metadata.setdefault("source_normalization_previous", raw_source)
+                    metadata.setdefault("source_normalization_reason", "decay-source-policy")
+                    metadata.setdefault("source_normalized_at", now.isoformat())
+                    metadata_updates.append((mid, metadata))
 
                 # Parse dates
                 try:
@@ -172,7 +178,7 @@ class MemoryDecay:
                     result.memories_decayed += 1
 
                 source_policy_eligible = (
-                    source in _SOURCE_POLICY_LOW_SIGNAL_IMPORTS
+                    source in SOURCE_POLICY_LOW_SIGNAL_IMPORTS
                     and (now - created).days >= _SOURCE_POLICY_MIN_AGE_DAYS
                     and (now - created).days < _PRUNE_AGE_DAYS
                     and new_trust <= _SOURCE_POLICY_TRUST_THRESHOLD
@@ -202,7 +208,7 @@ class MemoryDecay:
                 if (new_trust <= _PRUNE_THRESHOLD
                         and (now - created).days >= _PRUNE_AGE_DAYS
                         and retrieval_count == 0):
-                    if source.startswith(_IMPORT_SOURCE_PREFIX):
+                    if source.startswith(IMPORT_SOURCE_PREFIX):
                         if helpful_count > 0:
                             continue
                         metadata.setdefault("previous_trust_score", trust)
@@ -238,6 +244,17 @@ class MemoryDecay:
                     ],
                 )
                 conn.commit()
+
+            if metadata_updates:
+                skip_ids = {mid for mid, _, _ in to_quarantine}
+                updates = [
+                    (json.dumps(metadata, ensure_ascii=False), mid)
+                    for mid, metadata in metadata_updates
+                    if mid not in skip_ids
+                ]
+                if updates:
+                    conn.executemany("UPDATE memories SET metadata_json = ? WHERE id = ?", updates)
+                    conn.commit()
 
             # Archive and prune
             if to_prune:

@@ -11,10 +11,10 @@ from caveman.memory.decay import (
     _HIGH_TRUST_SLOWDOWN,
     _HIGH_TRUST_THRESHOLD,
     _PRUNE_AGE_DAYS,
-    _SOURCE_POLICY_LOW_SIGNAL_IMPORTS,
     _SOURCE_POLICY_MIN_AGE_DAYS,
     _SOURCE_POLICY_TRUST_THRESHOLD,
 )
+from caveman.memory.sources import SOURCE_POLICY_LOW_SIGNAL_IMPORTS, canonicalize_memory_source
 from caveman.training._flywheel_dashboard_values import _count_value, _number_value
 
 
@@ -80,19 +80,21 @@ def _collect_memory_type_breakdown(cur: Any) -> list[dict[str, Any]]:
     ]
 
 
-def _source_and_governance(metadata_json: object) -> tuple[str, str]:
+def _source_and_governance(metadata_json: object) -> tuple[str, str, str]:
     try:
         meta = json.loads(str(metadata_json or "{}"))
     except (TypeError, json.JSONDecodeError):
         meta = {}
     source = "<missing>"
+    source_identity = "<missing>"
     state = "active"
     if isinstance(meta, dict):
-        raw_source = meta.get("source")
+        raw_source = canonicalize_memory_source(meta.get("source"))
         if raw_source:
+            source_identity = raw_source
             source = _memory_breakdown_label(raw_source)
         state = str(meta.get("governance_state", "active")).lower()
-    return source, state
+    return source, source_identity, state
 
 
 def _memory_age_days(created_at: object, now: datetime) -> int:
@@ -126,7 +128,7 @@ def _source_policy_eligible(
     age_days: int,
 ) -> bool:
     return (
-        source in _SOURCE_POLICY_LOW_SIGNAL_IMPORTS
+        source in SOURCE_POLICY_LOW_SIGNAL_IMPORTS
         and governance_state != "quarantined"
         and age_days >= _SOURCE_POLICY_MIN_AGE_DAYS
         and age_days < _PRUNE_AGE_DAYS
@@ -144,7 +146,7 @@ def _collect_source_rows(cur: Any) -> list[dict[str, Any]]:
     grouped: dict[str, dict[str, Any]] = {}
     now = datetime.now(timezone.utc)
     for row in rows:
-        source, governance_state = _source_and_governance(row[0])
+        source, source_identity, governance_state = _source_and_governance(row[0])
         trust = _number_value(row[1], 0.0)
         retrieval_count = _count_value(row[2])
         helpful_count = _count_value(row[3])
@@ -161,7 +163,7 @@ def _collect_source_rows(cur: Any) -> list[dict[str, Any]]:
         bucket["quarantined"] += int(is_quarantined)
         bucket["active"] += int(not is_quarantined)
         bucket["eligible"] += int(
-            _source_policy_eligible(source, governance_state, trust, retrieval_count, helpful_count, age_days)
+            _source_policy_eligible(source_identity, governance_state, trust, retrieval_count, helpful_count, age_days)
         )
     return [
         _memory_breakdown_row(

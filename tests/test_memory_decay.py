@@ -329,6 +329,57 @@ class TestMemoryDecay:
         assert openclaw_meta["quarantine_policy"]["source"] == "import:openclaw"
         assert "governance_state" not in generic_meta
 
+    def test_source_normalization_persists_for_decayed_non_quarantined_rows(self, tmp_path):
+        """Decay should persist source normalization even when the row is not quarantined."""
+        db_path = _create_test_db(tmp_path)
+        _insert_memory(
+            db_path,
+            "retrieved-alias",
+            trust=0.5,
+            created_days_ago=60,
+            retrieval_count=3,
+            helpful_count=0,
+            metadata={"source": "import:openclaw_sessions"},
+        )
+        decay = MemoryDecay(db_path=db_path, archive_dir=tmp_path / "archive")
+
+        result = decay.run()
+
+        assert result.memories_quarantined == 0
+        conn = sqlite3.connect(str(db_path))
+        meta_json = conn.execute("SELECT metadata_json FROM memories WHERE id = ?", ("retrieved-alias",)).fetchone()[0]
+        conn.close()
+        meta = json.loads(meta_json)
+        assert meta["source"] == "import:openclaw"
+        assert meta["source_normalization_previous"] == "import:openclaw_sessions"
+
+    def test_source_policy_canonicalizes_legacy_import_source_spellings(self, tmp_path):
+        """Source policy should use one canonical taxonomy instead of drifting string literals."""
+        db_path = _create_test_db(tmp_path)
+        _insert_memory(
+            db_path,
+            "openclaw-session-alias",
+            trust=0.05,
+            created_days_ago=45,
+            retrieval_count=0,
+            helpful_count=0,
+            metadata={"source": "import:openclaw_sessions"},
+        )
+        decay = MemoryDecay(db_path=db_path, archive_dir=tmp_path / "archive")
+
+        result = decay.run()
+
+        assert result.memories_quarantined == 1
+        assert result.quarantined_by_source == {"import:openclaw": 1}
+        conn = sqlite3.connect(str(db_path))
+        meta_json = conn.execute("SELECT metadata_json FROM memories WHERE id = ?", ("openclaw-session-alias",)).fetchone()[0]
+        conn.close()
+        meta = json.loads(meta_json)
+        assert meta["source"] == "import:openclaw"
+        assert meta["source_normalization_previous"] == "import:openclaw_sessions"
+        assert meta["governance_state"] == "quarantined"
+        assert meta["quarantine_policy"]["source"] == "import:openclaw"
+
     def test_dry_run_reports_source_policy_quarantine_without_mutating_rows(self, tmp_path):
         """Source-aware dry-run should expose estimated impact while preserving DB state."""
         db_path = _create_test_db(tmp_path)
