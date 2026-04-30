@@ -1,11 +1,9 @@
 """Tests for memory system."""
 import pytest
-import asyncio
 import tempfile
-from pathlib import Path
 
 from caveman.memory.flywheel_metrics import FlywheelHealth
-from caveman.memory.types import MemoryType, MemoryEntry
+from caveman.memory.types import MemoryType
 from caveman.memory.manager import MemoryManager
 
 
@@ -67,5 +65,162 @@ async def test_flywheel_health_uses_real_feedback_and_recall_counters():
             assert health.top_recalled[0]["id"] == helpful
             assert stale not in {item["id"] for item in health.top_recalled}
             assert "recall rate=50%" in health.summary()
+        finally:
+            _close_manager(mgr)
+
+
+@pytest.mark.asyncio
+async def test_quarantined_import_memories_are_excluded_from_recall_candidates():
+    """Reversible quarantine must remove noisy imported memories from active recall."""
+    with tempfile.TemporaryDirectory() as td:
+        mgr = MemoryManager.with_sqlite(base_dir=td)
+        try:
+            quarantined = await mgr.store(
+                "docker compose restart troubleshooting",
+                MemoryType.PROCEDURAL,
+                metadata={"source": "import:openclaw", "governance_state": "quarantined"},
+                trusted=True,
+            )
+            active = await mgr.store(
+                "docker compose restart troubleshooting verified in current project",
+                MemoryType.PROCEDURAL,
+                metadata={"source": "nudge"},
+                trusted=True,
+            )
+
+            results = await mgr.recall("docker compose restart troubleshooting", top_k=5)
+
+            assert active in {entry.id for entry in results}
+            assert quarantined not in {entry.id for entry in results}
+        finally:
+            _close_manager(mgr)
+
+
+@pytest.mark.asyncio
+async def test_quarantined_memories_do_not_leak_through_recall_fallback():
+    """If all lexical matches are quarantined, high-trust fallback must not re-add them."""
+    with tempfile.TemporaryDirectory() as td:
+        mgr = MemoryManager.with_sqlite(base_dir=td)
+        try:
+            quarantined = await mgr.store(
+                "only quarantined docker compose restart memory",
+                MemoryType.PROCEDURAL,
+                metadata={"source": "import:openclaw", "governance_state": "quarantined"},
+                trusted=True,
+            )
+
+            results = await mgr.recall("docker compose restart", top_k=5)
+
+            assert quarantined not in {entry.id for entry in results}
+        finally:
+            _close_manager(mgr)
+
+
+@pytest.mark.asyncio
+async def test_quarantined_memories_do_not_leak_through_sync_search():
+    """search_sync is also an active recall path and must honor quarantine."""
+    with tempfile.TemporaryDirectory() as td:
+        mgr = MemoryManager.with_sqlite(base_dir=td)
+        try:
+            store = mgr.backend
+            quarantined_id = await store.store(
+                "sync docker compose restart memory",
+                MemoryType.PROCEDURAL,
+                metadata={"source": "import:openclaw", "governance_state": "quarantined"},
+                trusted=True,
+            )
+
+            results = store.search_sync("sync docker compose restart", limit=5)
+
+            assert quarantined_id not in {entry.id for entry in results}
+        finally:
+            _close_manager(mgr)
+
+
+@pytest.mark.asyncio
+async def test_quarantined_memories_do_not_leak_through_recent_or_all_entries():
+    """List-style active memory APIs must not expose quarantined imports."""
+    with tempfile.TemporaryDirectory() as td:
+        mgr = MemoryManager.with_sqlite(base_dir=td)
+        try:
+            store = mgr.backend
+            quarantined_id = await store.store(
+                "recent quarantined import memory",
+                MemoryType.SEMANTIC,
+                metadata={"source": "import:openclaw", "governance_state": "quarantined"},
+                trusted=True,
+            )
+            active_id = await store.store(
+                "recent active nudge memory",
+                MemoryType.SEMANTIC,
+                metadata={"source": "nudge"},
+                trusted=True,
+            )
+
+            recent_ids = {entry.id for entry in store.recent(limit=10)}
+            all_ids = {entry.id for entry in store.all_entries()}
+
+            assert active_id in recent_ids
+            assert active_id in all_ids
+            assert quarantined_id not in recent_ids
+            assert quarantined_id not in all_ids
+        finally:
+            _close_manager(mgr)
+
+
+@pytest.mark.asyncio
+async def test_quarantine_sql_filter_prevents_limited_fts_page_from_hiding_active_match():
+    """SQL-side filtering must avoid quarantined first-page rows crowding out active matches."""
+    with tempfile.TemporaryDirectory() as td:
+        mgr = MemoryManager.with_sqlite(base_dir=td)
+        try:
+            store = mgr.backend
+            for i in range(8):
+                await store.store(
+                    f"needle dominant quarantined import memory {i}",
+                    MemoryType.SEMANTIC,
+                    metadata={"source": "import:openclaw", "governance_state": "quarantined"},
+                    trusted=True,
+                )
+            active_id = await store.store(
+                "needle active memory should survive quarantine crowding",
+                MemoryType.SEMANTIC,
+                metadata={"source": "nudge"},
+                trusted=True,
+            )
+
+            results = await store.recall("needle", top_k=1)
+
+            assert [entry.id for entry in results] == [active_id]
+        finally:
+            _close_manager(mgr)
+
+
+@pytest.mark.asyncio
+async def test_malformed_metadata_does_not_break_active_memory_queries():
+    """Legacy/corrupt metadata rows must not crash SQL-side quarantine filtering."""
+    with tempfile.TemporaryDirectory() as td:
+        mgr = MemoryManager.with_sqlite(base_dir=td)
+        try:
+            store = mgr.backend
+            memory_id = await store.store(
+                "legacy malformed metadata needle",
+                MemoryType.SEMANTIC,
+                metadata={"source": "legacy"},
+                trusted=True,
+            )
+            store._get_conn().execute(
+                "UPDATE memories SET metadata_json = ? WHERE id = ?",
+                ("not json", memory_id),
+            )
+            store._get_conn().commit()
+
+            recall_ids = {entry.id for entry in await store.recall("needle", top_k=5)}
+            recent_ids = {entry.id for entry in store.recent(limit=5)}
+            all_ids = {entry.id for entry in store.all_entries()}
+
+            assert memory_id in recall_ids
+            assert memory_id in recent_ids
+            assert memory_id in all_ids
         finally:
             _close_manager(mgr)

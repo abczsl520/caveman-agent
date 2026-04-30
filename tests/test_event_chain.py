@@ -1,5 +1,4 @@
 """Tests for engines/event_chain.py — inner flywheel wiring."""
-import asyncio
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from caveman.events import EventBus, EventType
@@ -85,7 +84,8 @@ class TestWireInnerFlywheel:
 
 
 class TestUnwire:
-    def test_unwire_removes_handlers(self):
+    @pytest.mark.asyncio
+    async def test_unwire_removes_handlers(self):
         bus = EventBus()
         nudge = MagicMock()
         nudge.run = AsyncMock(return_value=[])
@@ -94,3 +94,33 @@ class TestUnwire:
         assert len(handlers) > 0
         unwire_inner_flywheel(bus, handlers)
         # After unwire, emitting should not trigger nudge
+        await bus.emit(EventType.SHIELD_UPDATE, {"turn_count": 5}, source="shield")
+        nudge.run.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_loop_end_decay_logs_quarantine_counts(self):
+        """Decay integration should surface quarantines, not only decays/prunes."""
+        bus = EventBus()
+        engines = MockEngineSet()
+        decay_result = MagicMock(
+            memories_decayed=0,
+            memories_pruned=0,
+            memories_quarantined=3,
+        )
+
+        with patch("caveman.memory.decay.MemoryDecay") as decay_cls, patch(
+            "caveman.engines.event_chain.logger"
+        ) as logger:
+            decay_cls.return_value.run.return_value = decay_result
+            wire_inner_flywheel(bus, engines)
+
+            for _ in range(10):
+                await bus.emit(EventType.LOOP_END, {"task": "t", "result": "ok"}, source="test")
+
+        decay_cls.return_value.run.assert_called_once()
+        logger.info.assert_any_call(
+            "Memory decay: %d decayed, %d pruned, %d quarantined",
+            0,
+            0,
+            3,
+        )
