@@ -91,3 +91,20 @@ def test_status_text_escapes_configured_model_control_characters(monkeypatch):
     assert "'safe-model\\nSPOOF_MODEL\\x1b[31m'" in text
     assert "\nSPOOF_MODEL" not in text
     assert "\x1b[31m" not in text
+
+
+def test_status_text_escapes_memory_type_names(monkeypatch):
+    """Memory filenames are operator-facing and must not spoof status lines."""
+    from caveman.cli import status
+
+    monkeypatch.setattr(
+        status,
+        "_count_memories",
+        lambda: {"safe\nSPOOF_MEMORY\x1b[31m": 2},
+    )
+
+    text = status_text()
+
+    assert "'safe\\nSPOOF_MEMORY\\x1b[31m': 2" in text
+    assert "\nSPOOF_MEMORY" not in text
+    assert "\x1b[31m" not in text
