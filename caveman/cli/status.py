@@ -126,7 +126,7 @@ def status_text(include_gateway: bool = False) -> str:
         f"{name.capitalize()} {'✅' if on else '❌'}" for name, on in engines.items()
     )
 
-    mem_detail = ", ".join(f"{k}: {v}" for k, v in sorted(mem_counts.items()) if v > 0)
+    mem_detail = ", ".join(f"{operator_literal(k)}: {v}" for k, v in sorted(mem_counts.items()) if v > 0)
 
     lines = [
         "🦴 Caveman v0.3.0-dev",
