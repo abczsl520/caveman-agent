@@ -488,6 +488,12 @@ Caveman Self-Test — full lifecycle verification. Runs: store → recall → sh
 
 **Functions:** `run_self_test()`
 
+## `caveman.cli.source_governance`
+
+Operator-facing memory source governance CLI.
+
+**Functions:** `preview_drift()`
+
 ## `caveman.cli.stats`
 
 Caveman Stats — project statistics at a glance.
