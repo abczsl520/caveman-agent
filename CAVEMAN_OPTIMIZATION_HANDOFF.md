@@ -1,8 +1,10 @@
 # Caveman 优化 HANDOFF
 
-更新时间: 2026-05-01 07:12 CST
+更新时间: 2026-05-01 07:56 CST
 
 ## 当前最终状态
+
+- Round 34 已完成、提交并推送到 `main`；code commit `484a0d2b4ec8c765154cb7614a3a5bbc8726a8d6` (`[verified] escape status home path`)；GitHub Actions run `25194895813`，`https://github.com/abczsl520/caveman-agent/actions/runs/25194895813`，completed success。
 - Round 33 已完成、提交并推送到 `main`；code commit `e6d88548a3fcd6aa0d8773fe81ea6b8a132bda41` (`[verified] escape status memory detail labels`)；GitHub Actions run `25194162832`，`https://github.com/abczsl520/caveman-agent/actions/runs/25194162832`，completed success。
 - Round 32 已完成、提交并推送到 `main`；code commit `8c09262` (`[verified] escape status model output`)；GitHub Actions run `25193311855`，`https://github.com/abczsl520/caveman-agent/actions/runs/25193311855`，completed success。
 - Round 31 已完成、提交并推送到 `main`；code commit `60a42f2e92bb00989c46a6bf3b4ea658bc421fbb` (`[verified] document ansi operator literals`)；GitHub Actions run `25192393917`，`https://github.com/abczsl520/caveman-agent/actions/runs/25192393917`，completed success。
@@ -23,10 +25,44 @@
 - Gateway 最后已知未运行；本轮未重启 gateway，优化任务不依赖 gateway。
 
 ## 下次启动时做
-1. 先确认 Round 33 handoff/docs commit 的 GitHub Actions 结论；如果 code commit `e6d8854` 的 run `25194162832` 已记录 success，不要重复等待。
-2. 继续 Round 34/50：沿 operator-facing output 安全边界继续扫描 `caveman.cli.status` 的剩余可控输出（如 `Home` 路径、gateway log pattern/boundary 字段）或其他 config/file/DB-derived CLI 输出；每次只做一个 TDD 小切片。
+1. 先确认 Round 34 code commit `484a0d2` 的 GitHub Actions run `25194895813` 已 success（本轮已查到 completed success，避免重复长等），再继续 Round 35/50。
+2. 继续 operator-facing output 安全边界：优先检查 `caveman.cli.status._format_gateway_status()` 的 gateway log `boundary`/`pattern` 等 log-derived label，或其他 config/file/DB-derived CLI 输出；每次只做一个 TDD 小切片。
 3. Dashboard 主文件仍有 450 行 hard limit；继续 dashboard 方向必须优先抽 helper，不要在 `flywheel_dashboard.py` 主文件堆逻辑。
-4. Rounds 34-50：按“证据→TDD→实现→门禁→review→commit/push→监控”小步推进；不要虚构完成 50 轮，每轮必须有验证与提交或明确 no-op 证据。
+4. Rounds 35-50：按“证据→TDD→实现→门禁→review→commit/push→监控”小步推进；不要虚构完成 50 轮，每轮必须有验证与提交或明确 no-op 证据。
+
+## Round 34 做了什么
+- 先确认真实状态：`main` 最新为 Round 33 handoff/docs commit `d8c3f1f`，仅 `memory/projects/caveman.md` 有上轮未纳入 git 的项目记忆 diff；gateway health 不可达但本轮不依赖 gateway。
+- 确认 Round 33 handoff/docs commit CI：GitHub Actions run `25194358146` completed success。
+- 执行 baseline：full suite（排除已知 NFR）起始为 `3322 passed, 8 skipped`。
+- 继续 operator-facing output 安全边界扫描，发现 `caveman/cli/status.py` 的 `Home: {CAVEMAN_HOME}` 直接输出配置/环境派生路径；若 home path 被配置为含换行或 ANSI 控制字节，会伪造 status 行或注入终端控制字节。
+- RED 新增 regression：`test_status_text_escapes_home_path_control_characters` monkeypatch `CAVEMAN_HOME` 为带换行与 ANSI 的字符串，要求 status 输出使用 repr-style escaped literal，且没有真实 spoof 行或 raw ANSI 字节。
+- GREEN：`status_text()` 的 Home 字段复用共享 `operator_literal(CAVEMAN_HOME)`；不新增第二套 escaping 语义。
+
+## Round 34 验证结果
+- RED：`tests/test_cli_status.py::test_status_text_escapes_home_path_control_characters` 按预期失败，原输出包含真实换行和 raw ANSI。
+- GREEN focused：`tests/test_cli_status.py::test_status_text_escapes_home_path_control_characters` → `1 passed`；`tests/test_cli_status.py` → `11 passed`。
+- Py compile：`caveman/cli/status.py tests/test_cli_status.py` pass。
+- Ruff changed files：`.venv/bin/ruff check caveman/cli/status.py tests/test_cli_status.py` → pass。
+- Full suite（排除已知 NFR）：`.venv/bin/python -m pytest tests/ -q --ignore=tests/test_nfr_compliance.py --tb=short` → `3323 passed, 8 skipped in 113.94s`。
+- Docs/API：`.venv/bin/python scripts/generate_api_reference.py --check` pass；无 API docs diff。
+- Security scan：added-line/final scan hardcoded secret/token/password、shell injection、eval/exec、pickle、SQL string-format patterns 0 matches；push hook safety checks passed。
+- Independent review：passed，无 `security_concerns`、无 `logic_errors`；non-blocking suggestion 是未来可对极长 path 加 `max_length` 保持终端可读性。
+- Remote CI：code commit `484a0d2b4ec8c765154cb7614a3a5bbc8726a8d6` GitHub Actions run `25194895813` completed success。
+
+## Round 34 什么 work 了
+- 继续复用共享 `operator_literal`，让 status 的 Home 字段与 model/memory labels 采用同一 operator-output 安全边界。
+- TDD regression 直接证明 status Home 输出不能通过路径字符串伪造额外行或注入 ANSI 控制字节。
+- Round 33 docs CI 与 Round 34 code CI 均通过；公共 GitHub Actions API 仍可无 token 查询当前 head_sha 的 run。
+
+## Round 34 什么没做/没work
+- 本 handoff 更新将单独 docs commit；提交后需 push 并监控 CI。
+- 尚未检查 gateway status 的 `boundary`/`patterns` 等 log-derived labels；Round 35 可继续。
+- 未重启 gateway（当前自动续跑不依赖 gateway，且 SOP 要避免不必要启动）。
+
+## Round 34 已知坑
+- 本轮项目记忆 `memory/projects/caveman.md` 在开工前已有未提交 diff；只纳入 handoff/docs commit，不混入 code commit。
+- `gh` CLI 不存在；CI 监控继续使用 GitHub public REST API + `head_sha` 查询。
+- Home path 这类环境/config-derived operator output 也要走 `operator_literal`，不是只有 DB/file label 才需要 escaping。
 
 ## Round 33 做了什么
 - 先确认真实状态：`main` 最新为 Round 32 handoff/docs commit `35b9a14`，工作树起始干净；gateway health 不可达但本轮不依赖 gateway。项目文件实际为 `memory/projects/caveman.md`（`caveman优化.md` 不存在）。
