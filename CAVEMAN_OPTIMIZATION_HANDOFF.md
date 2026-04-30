@@ -1,31 +1,47 @@
 # Caveman 优化 HANDOFF
 
-更新时间: 2026-05-01 01:13 CST
+更新时间: 2026-05-01 02:03 CST
 
 ## 当前最终状态
+- Round 20 已完成、提交并推送到 `main`。
 - Round 19 已完成、提交并推送到 `main`。
 - Round 18 已完成、提交并推送到 `main`。
 - Round 17 已完成、提交并推送到 `main`。
 - Round 16 已完成、提交并推送到 `main`。
-- Round 15 已完成、提交并推送到 `main`。
-- Round 14 已完成、提交并推送到 `main`。
-- 最新 code commit: `7062e3414fc52d4e5e11773570fa0e3020aab4de` (`[verified] add source drift policy workflow`)。
+- 最新 code commit: `fd234095a4f0d6ab20ca9bf33a0c099418b31382` (`[verified] preserve source drift rerun scope`)。
+- Round 20 GitHub Actions run: `25180742729`，`https://github.com/abczsl520/caveman-agent/actions/runs/25180742729`；本 cron run 监控约 5 分钟时仍 `in_progress`，随后 unauthenticated GitHub API rate limit 用尽，无法继续读取最终结论。下一轮先检查该 run/commit 的 Actions 状态。
+- Round 19 code commit: `7062e3414fc52d4e5e11773570fa0e3020aab4de` (`[verified] add source drift policy workflow`)；GitHub Actions run `25179439795` completed success。
 - Round 14 handoff/docs content commit: `da1059ba3a61aba476a576547c2a4898627b082a` (`docs: update caveman handoff after round 14`)；本文件可能随后有 metadata-only 校正提交。
-- `origin/main` 已同步到最新 SHA。
-- GitHub Actions 对 Round 19 code SHA 全绿：run `25179439795`，`https://github.com/abczsl520/caveman-agent/actions/runs/25179439795`。
+- `origin/main` 已同步到最新 SHA（除非下一轮发现 CI/handoff commit 待补）。
 - 自动续跑已配置：cron job `36500447cc33` (`Caveman 50轮自动续跑`)，每 5 分钟触发，最多 240 次，目标回发当前 Discord thread；preflight 脚本 `/Users/yeren64g/.hermes/scripts/caveman_50round_preflight.py`，互斥锁 `/tmp/caveman-50round.lock`。preflight 已具备 stale lock 自愈：lock pid 不存在或 lock 超过 90 分钟会自动清理，避免死锁后永久跳过。
-- Round 13 code commit: `edae36bf747baa7cb55e5addce47a9ba1044ba7e` (`[verified] report restorable quarantine impact`)；Round 13 docs/handoff commit: `b8e3794693a47f62bb33dc032e51957b7446c603`。
-- Round 9 code commit: `23df73debb9c113251eb0390515c47dbca9d5aa5` (`Protect decay with canonical access timestamps`)；Round 9 handoff commit: `ba76a2d93f5db3f08d60e6e34d17798555ea619d`。
-- Round 8 handoff commit: `f4a07bcde9f67e3d283dc43fda4dbe559a174a36`；Round 8 code commit: `9624ce069d74efa063e2c8c2aa4fef0feef80604` (`Normalize imported memory source metadata`)。
-- Round 7 handoff commit: `be73746`；Round 7 code commits: `92d6819` (`[verified] fix quarantine lifecycle CI gates`)、`b2c0169` (`[verified] add reversible memory quarantine lifecycle`)。
-- Round 6 code commit: `5e98357f06f34a4e6b28716ab5414c436378dea4` (`[verified] surface source governance in flywheel dashboard`)；Round 6 handoff commit: `1ceef53`。
-- Round 5 commit: `7de8ff65a156c924fc9af2d74452bd24e8e39f77` (`[verified] add source-aware memory quarantine policy`)。
-- Gateway 最后已知未运行：需要交互验证时按 gateway SOP 安全启动，避免 `nohup caveman serve &` 触发 Hermes terminal exit-130 loop。
+- Gateway 最后已知未运行：需要交互验证时按 gateway SOP 安全启动，避免 shell background 启动触发 Hermes terminal exit-130 loop。
 
 ## 下次启动时做
-1. Round 20/50：继续 source governance/operator tooling；优先把 `source-governance preview-drift` 的 copy/paste workflow 进一步做成更精确的复现/审查入口（例如 re-run command 保留 `--db`，或输出 grouped candidates / reviewed checklist），仍保持只读，不自动 mutate allowlist。先用数据/测试证明缺口，再 TDD 小步修。
-2. Dashboard 主文件已在 450 行 hard limit；继续 dashboard 方向必须优先抽 helper，不要在 `flywheel_dashboard.py` 主文件堆逻辑。
-3. Rounds 20-50：按“证据→TDD→实现→门禁→review→commit/push→监控”小步推进；不要虚构完成 50 轮，每轮必须有验证与提交或明确 no-op 证据。
+1. 先检查 Round 20 code SHA `fd234095a4f0d6ab20ca9bf33a0c099418b31382` 的 GitHub Actions run `25180742729` 是否 completed success；本轮因 unauthenticated API rate limit 未拿到最终结论。若失败，按 CI logs 修；若成功，继续 Round 21/50。
+2. Round 21/50：继续 source governance/operator tooling；优先增强 preview-drift 的复现/审查入口，例如把 candidate 输出分组/加 reviewed checklist，或把 copy/paste workflow 抽成可测试 helper，保持只读，不自动 mutate allowlist。
+3. Dashboard 主文件已在 450 行 hard limit；继续 dashboard 方向必须优先抽 helper，不要在 `flywheel_dashboard.py` 主文件堆逻辑。
+4. Rounds 21-50：按“证据→TDD→实现→门禁→review→commit/push→监控”小步推进；不要虚构完成 50 轮，每轮必须有验证与提交或明确 no-op 证据。
+
+## Round 20 做了什么
+- 聚焦 Round 19 handoff 指定的 `source-governance preview-drift` operator workflow：旧 copy/paste re-run command 没保留显式 `--db`，也没保留 `--limit`，operator 审查临时/非默认 DB 时复制命令会悄悄切回默认 memory DB。
+- RED 新增 CLI regression：传入 custom `--db`、`--min-rows 3`、`--limit 1` 时，preview output 必须打印可复制的 re-run command，保留同一个 DB scope 与 limit。初始失败显示旧输出只有 `--min-rows 3`。
+- 实现：`preview_drift(ctx, ...)` 使用 Click `ParameterSource` 只在 operator 显式提供 `--db` 时把 DB path 写入 re-run command；同时保留 `--min-rows` 与 `--limit`。
+- Independent review 首轮建议 re-run command 用 shell quoting 而不是 Python `repr`；按建议改为 `shlex.quote(str(db))`，并把 regression 加强为包含单引号路径的 shell-quote case。
+- 保持 CLI 只读：不写 memory rows、不修改 source allowlist、不触碰 quarantine state。
+
+## Round 20 验证结果
+- Baseline focused before change：`tests/test_memory.py` → `18 passed`。
+- RED：`tests/test_memory.py::test_source_governance_cli_rerun_command_preserves_custom_db_path` 初始失败，旧输出缺少 `--db` / `--limit`。
+- Review-driven RED：改为 `test_source_governance_cli_rerun_command_shell_quotes_custom_db_path`，包含单引号路径；先确认 repr 方案不满足 shell-quote 期望，再改 `shlex.quote`。
+- GREEN source-governance focused tests：5 passed。
+- Expanded focused suite：`tests/test_memory.py tests/test_flywheel_dashboard.py tests/test_flywheel_dashboard_boundaries.py tests/test_memory_decay.py` → `62 passed`。
+- Full suite（排除已知 NFR）：`.venv/bin/python -m pytest tests/ -q --ignore=tests/test_nfr_compliance.py --tb=short` → `3306 passed, 8 skipped`。
+- Py compile：`caveman/cli/source_governance.py tests/test_memory.py` pass。
+- Ruff changed files：pass。
+- Docs/API：`scripts/generate_api_reference.py --check` 无 diff。
+- Security scan：added-line hardcoded secret/shell/eval/pickle/SQL-string-format patterns 0 matches；push hook safety checks passed。
+- Independent review：首轮 passed 但建议 shell quoting；已按建议修正并二轮 review passed，无 security/logic blocker。
+- Remote CI：code commit `fd234095a4f0d6ab20ca9bf33a0c099418b31382` 已 push；run `25180742729` 监控到 in_progress，随后 GitHub unauthenticated API rate limit exceeded，最终结论待下一轮先查。
 
 ## Round 19 做了什么
 - 聚焦 Round 18 handoff 指定的 `source-governance preview-drift` operator workflow：旧 CLI 已有 candidate identity，但 operator 仍需要自己判断如何安全复制到 `SOURCE_POLICY_LOW_SIGNAL_IMPORTS`，容易误贴或遗漏只读边界。
