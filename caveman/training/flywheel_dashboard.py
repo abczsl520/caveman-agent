@@ -20,10 +20,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from caveman.memory.decay import MemoryDecay
-from caveman.paths import (
-    MEMORY_DIR, MEMORY_DB_PATH, TRAJECTORIES_DIR,
-    SKILLS_DIR, WIKI_DIR,
-)
+from caveman.paths import MEMORY_DIR, MEMORY_DB_PATH, TRAJECTORIES_DIR, SKILLS_DIR, WIKI_DIR
 from caveman.training._flywheel_dashboard_values import (
     _count_value as count_value,
     _number_value as number_value,
@@ -155,7 +152,10 @@ class FlywheelDashboard:
                         "would_quarantine_by_source": decay_preview.quarantined_by_source,
                         "eligible_by_source": decay_preview.eligible_by_source,
                     }
-                    stats["decay_dry_run"].update(collect_restorable_quarantine_preview(cur))
+                restorable_quarantine = collect_restorable_quarantine_preview(cur)
+                if decay_preview is not None:
+                    stats["decay_dry_run"].update(restorable_quarantine)
+                stats.update(restorable_quarantine)
                 cur.execute(
                     "SELECT COUNT(*) FROM memories "
                     "WHERE json_valid(metadata_json) "
@@ -369,11 +369,12 @@ class FlywheelDashboard:
                 f"would_prune={decay_dry_run.get('would_prune', 0)}, "
                 f"would_quarantine={decay_dry_run.get('would_quarantine', 0)}"
             )
-            if restorable_by_source := decay_dry_run.get("restorable_quarantine_by_source", {}):
-                impact = ", ".join(f"{source}={count}" for source, count in restorable_by_source.items())
-                lines.append(f"   Restorable quarantine: {impact}")
-        source_breakdown = mem.get("source_breakdown", [])
-        if source_breakdown:
+        restorable_by_source = mem.get("restorable_quarantine_by_source", {})
+        if not restorable_by_source and decay_dry_run:
+            restorable_by_source = decay_dry_run.get("restorable_quarantine_by_source", {})
+        if restorable_by_source:
+            lines.append("   Restorable quarantine: " + ", ".join(f"{s}={c}" for s, c in restorable_by_source.items()))
+        if source_breakdown := mem.get("source_breakdown", []):
             lines.append("   By source (top):")
             for row in source_breakdown[:6]:
                 if "active" in row:
