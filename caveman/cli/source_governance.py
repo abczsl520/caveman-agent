@@ -47,3 +47,11 @@ def preview_drift(
         )
         typer.echo(f"   reason={row['reason']} recommended_action={row['recommended_action']}")
         typer.echo(f"   candidate_policy_entry={row['candidate_policy_entry']}")
+
+    typer.echo("Policy workflow (copy/paste):")
+    typer.echo("1. Review source quality outside the CLI; this command is read-only.")
+    typer.echo("2. If approved, add to caveman.memory.sources.SOURCE_POLICY_LOW_SIGNAL_IMPORTS:")
+    for row in candidates:
+        typer.echo(f"   {row['candidate_policy_entry']!r},")
+    typer.echo(f"3. Re-run: caveman source-governance preview-drift --min-rows {min_rows}")
+    typer.echo("auto_mutation=disabled")

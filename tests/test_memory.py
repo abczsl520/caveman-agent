@@ -327,6 +327,79 @@ def test_source_governance_cli_reports_total_candidates_separately_from_limit(mo
         assert "import:smallest" not in preview.output
 
 
+def test_source_governance_cli_prints_copy_paste_policy_workflow(monkeypatch):
+    """Preview output should give operators an exact no-mutation allowlist patch workflow."""
+    import asyncio
+
+    from typer.testing import CliRunner
+
+    from caveman.cli.main import app
+
+    with tempfile.TemporaryDirectory() as td:
+        monkeypatch.setenv("CAVEMAN_HOME", td)
+        mgr = MemoryManager.with_sqlite(base_dir=td)
+        try:
+            store = mgr.backend
+            for idx in range(3):
+                asyncio.run(store.store(
+                    f"copyable low-signal source {idx}",
+                    MemoryType.SEMANTIC,
+                    metadata={"source": "import:operator-feed", "trust_score": 0.05},
+                    trusted=True,
+                ))
+        finally:
+            _close_manager(mgr)
+
+        preview = CliRunner().invoke(app, [
+            "source-governance", "preview-drift",
+            "--db", f"{td}/caveman.db",
+            "--min-rows", "3",
+        ])
+
+        assert preview.exit_code == 0, preview.output
+        assert "Policy workflow (copy/paste):" in preview.output
+        assert "1. Review source quality outside the CLI; this command is read-only." in preview.output
+        assert "2. If approved, add to caveman.memory.sources.SOURCE_POLICY_LOW_SIGNAL_IMPORTS:" in preview.output
+        assert "   'import:operator-feed'," in preview.output
+        assert "3. Re-run: caveman source-governance preview-drift --min-rows 3" in preview.output
+        assert "auto_mutation=disabled" in preview.output
+
+
+def test_source_governance_cli_escapes_copy_paste_policy_entries(monkeypatch):
+    """Database-derived source labels must be emitted as safe Python literals."""
+    import asyncio
+
+    from typer.testing import CliRunner
+
+    from caveman.cli.main import app
+
+    unsafe_source = 'import:operator"feed\\new'
+    with tempfile.TemporaryDirectory() as td:
+        monkeypatch.setenv("CAVEMAN_HOME", td)
+        mgr = MemoryManager.with_sqlite(base_dir=td)
+        try:
+            store = mgr.backend
+            for idx in range(3):
+                asyncio.run(store.store(
+                    f"unsafe copyable low-signal source {idx}",
+                    MemoryType.SEMANTIC,
+                    metadata={"source": unsafe_source, "trust_score": 0.05},
+                    trusted=True,
+                ))
+        finally:
+            _close_manager(mgr)
+
+        preview = CliRunner().invoke(app, [
+            "source-governance", "preview-drift",
+            "--db", f"{td}/caveman.db",
+            "--min-rows", "3",
+        ])
+
+        assert preview.exit_code == 0, preview.output
+        assert f"   {unsafe_source!r}," in preview.output
+        assert f'   "{unsafe_source}",' not in preview.output
+
+
 def test_memory_types():
     assert MemoryType.EPISODIC.value == "episodic"
     assert MemoryType.WORKING.value == "working"
