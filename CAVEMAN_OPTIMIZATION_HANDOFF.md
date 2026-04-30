@@ -1,35 +1,40 @@
 # Caveman 优化 HANDOFF
 
-更新时间: 2026-04-28 23:18 CST
+更新时间: 2026-04-30 09:30 CST
 
 ## 下次启动时做
-1. 先确认 `origin/main` 最新 commit 的 GitHub Actions/check-runs 是否 green；如果 API/gh 不可用，再用 `git status --short --branch` + `git log -1 --oneline` 恢复本地状态。
-2. 如果本轮 hard-negative 提交尚未完成/CI 未过，继续从 security scan → diff review → commit/push → monitor CI 收尾。
-3. 后续高复利方向：继续审计 memory/retrieval/training 数据流，优先看 feedback 事件是否能稳定、可解释地进入训练样本与评估，而不是做 cosmetic cleanup。
+1. Round 5/50：在 `MemoryDecay` 上加 source-aware lifecycle 策略，把 dashboard 的高噪声来源（`import:openclaw`、`import:openclaw-session`、`import:hermes`、`import:hermes-skill-ref`）做成可解释的分级治理：年龄/recall/helpful/trust/source 权重、dry-run 统计、可逆 quarantine、审计日志。
+2. Round 6：把 dashboard 从“展示 source/type skew”升级为“行动面板”：显示 active/quarantined/eligible_by_source、预计治理影响、quarantine 后 recall 候选减少量。
+3. Round 7-10：继续沿 memory flywheel 数据流做闭环质量：import metadata 规范化、missing source 回填、helpfulness/retrieval 反馈质量、decay scheduling 与 observability。
+4. Rounds 11-50：按“证据→TDD→实现→门禁→review→commit/push→监控”小步推进；不要虚构完成 50 轮，每轮必须有验证与提交或明确 no-op 证据。
 
 ## 本轮做了什么
-- 延续 retrieval telemetry flywheel，审计 `retrieval_log -> embedding pair export -> embedding trainer` 数据流，发现 adoption 反馈只把 adopted memory 当 positive，检索返回的未采用相邻结果没有作为 hard negative 进入训练，导致元飞轮缺少“选它而不是它”的对比信号。
-- 修复 `RetrievalLog.generate_training_pairs()`：有 adoption 事件时，为每个 adopted positive 配对每个有效的非 adopted retrieval result 作为显式 `negative`；多 adoption 时排除所有 adopted ids，避免一个正确 adopted answer 被训练成另一个正确 answer 的负样本。
-- 修复 `PairExtractor.extract_from_retrieval_log()` / dataset 导出链路：保留 retrieval log 生成的 optional `negative` 字段到 `QueryMemoryPair`，`build_dataset()` 输出 JSONL 时写入 `negative`，保持旧 `query`/`positive` schema 向后兼容。
-- 修复 `EmbeddingTrainer.train()`：读取 JSONL 时拆出 pair examples 与 triplet examples；若存在显式 hard negatives，则只把 3-text triplets 喂给 `TripletLoss`，避免 sentence-transformers 在混合 2/3 text `InputExample` dataloader 中丢列或运行时报错；无 triplet 时保持原 `MultipleNegativesRankingLoss` 行为。
-- `embedding-train` 与 `all` optional extras 增加 `datasets>=2.19`，覆盖 sentence-transformers 3+/5.x 实际训练路径依赖。
-- 为 base model 加载失败返回 `skip`，避免 optional embedding training 在离线/模型不可达环境下把验证变成网络脆弱失败；CLI 仍按 non-success 处理。
+- Round 4/50 聚焦 dashboard 证据中最高噪声源：imported memories（`import:openclaw` n=950 never=94% helpful=0%，`import:openclaw-session` n=145 never=95% helpful=1%，`import:hermes*` never=100%）。
+- 将 `governance_state=quarantined` 从“metadata 标记”接入真实 SQLite active recall/exposure 路径：FTS、LIKE、vector candidate query、fallback recall、`search_sync()`、`search_by_entity()`、`recent()`、`all_entries()` 均应用 active-memory SQL predicate，并保留 Python `is_quarantined()` 防线。
+- active-memory SQL predicate 使用 `json_valid(metadata_json)` 防护；legacy/corrupt metadata 不会因 `json_extract()` 抛 `malformed JSON` 而击穿 recall/recent/all_entries。
+- 修复 recall 更新 `last_accessed` 时对坏 `metadata_json` 的 JSONDecodeError 容错，保持 row_to_entry 既有 legacy tolerance。
+- 将 decay 单次扫描上限从 500 提升到 2000，避免 bulk import 噪声只能 500-row trickle 治理；新增 bulk import quarantine 测试。
+- LOOP_END decay integration 日志增加 `memories_quarantined`，否则 import governance 发生时 observability 仍显示“0 decayed/0 pruned”而沉默。
+- 补齐 TDD/回归测试：quarantined recall candidate 排除、fallback leak、sync search leak、recent/all_entries leak、FTS LIMIT crowding、malformed metadata tolerance、decay bulk scan、decay quarantine logging。
 
 ## 验证结果
-- 聚焦测试：`47 passed, 1 xfailed`（training pivot + training pivot fixes；覆盖 hard-negative 生成、多 adoption 排除、PairExtractor negative 保留、TripletLoss 选择、混合 pair/triplet 过滤）。
-- 全量测试：`3214 passed, 8 skipped, 7 xfailed, 2 warnings in 233.30s`。
-- Coverage gate：observed `68.68%` >= baseline `68.25%`；长期 target `80%` 仍保持可见债务。
+- 聚焦测试：`38 passed in 0.43s`（`tests/test_memory_decay.py tests/test_memory.py tests/test_event_chain.py tests/test_flywheel_dashboard_boundaries.py`）。
+- Selected memory regression：`126 passed in 11.33s`（training pivot/fixes、memory self-audit/provider/bridge/metadata/migrations/decay/memory/event_chain）。
 - Ruff：changed files pass。
-- Mypy gate：full-project 仍有历史 baseline `415 errors in 153 files`，baseline-aware gate exit 0，changed Python files `caveman/training/embedding.py` / `caveman/training/retrieval_log.py` 无 mypy errors。
-- Security scan：changed files 仅 entropy false positives；diff grep common secret patterns `0`。
+- Security scan：added-line grep for common secrets/shell/eval/pickle/SQL-format patterns clean；internal `SECRET_PATTERNS` scan `pattern_matches []`。
+- Dashboard smoke：runs successfully; current data still shows import-source skew because dry-run does not mutate production memory DB.
+- Decay dry-run：`Decay: scanned=2000, decayed=0, pruned=0, quarantined=0, trust_reduced=0.000`（current import memories only 6-12 days old; existing age threshold prevents immediate quarantine）。
+- Gateway health：running PID 33057, Discord connected ✅, slash commands synced ✅, no gateway log alerts。
 
 ## 独立 review 结论
-- 第一轮独立 review 判定 no-ship：仅在 JSONL/schema 层保留 negative 还不够，trainer 如果把混合 2-text/3-text examples 一起交给 `TripletLoss`，真实 sentence-transformers 训练可能丢 negative 列或报错；还指出 multi-adoption 会互相作为 negative、`datasets` packaging 缺口。
-- 已修复上述 blockers：TripletLoss 只训练 triplet examples；multi-adoption 排除所有 adopted ids；`embedding-train` 与 `all` 均加入 `datasets>=2.19`；清理 unreachable adoption branch。
-- 最终独立 review：逻辑可 ship；仅剩低风险说明：base model load 的 broad exception 会把本地模型配置问题归类为 `skip`，这是 optional/离线训练场景的可接受取舍，后续可改成更细的异常与日志。
+- Review 1 blocked ship：recall fallback and `search_sync()` could still return quarantined memories. Fixed with regression tests.
+- Review 2 blocked ship：`recent()` / `all_entries()` still exposed quarantined entries, and filtering after SQL `LIMIT` could let quarantined rows crowd out active matches. Fixed by pushing active-memory predicate into SQL and adding LIMIT-crowding regression.
+- Review 3 blocked ship：raw `json_extract()` on malformed legacy metadata could raise `OperationalError: malformed JSON`; recall `last_accessed` update also assumed valid JSON. Fixed with `json_valid()` SQL guard and JSONDecodeError fallback.
+- Review 4 passed: no real security concerns or logic errors; only maintainability suggestion to centralize SQL predicate construction later.
 
 ## 已知坑
 - 不要用裸 `python`，它可能指向 Hermes venv；Caveman 验证一律用项目 `.venv/bin/python`。
 - 不要用 `nohup caveman serve &` 从 Hermes terminal 启动 gateway；历史上会触发 exit-130 loop。需要启动 gateway 时用 `subprocess.Popen(..., start_new_session=True)` 或现有 gateway SOP。
 - `scripts/ci_mypy_gate.py | tail` 普通管道会隐藏前段 exit status；需要用脚本自身 exit code 或 `set -o pipefail`。
-- coverage gate 会生成 `coverage.json`，提交前删除。
+- `json_extract(metadata_json, ...)` 必须先 guard `json_valid(metadata_json)`；历史/损坏 memory metadata 不能让 recall/search/recent 崩溃。
+- 对 quarantine 这类治理状态，不能只在 Python 层 “LIMIT 后过滤”；必须尽量下推 SQL predicate，否则 bulk import 噪声会挤占 top-k candidate 页。

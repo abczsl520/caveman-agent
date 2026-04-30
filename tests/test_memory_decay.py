@@ -109,7 +109,7 @@ class TestMemoryDecay:
         _insert_memory(db_path, "high", trust=0.8, created_days_ago=60)
         _insert_memory(db_path, "normal", trust=0.5, created_days_ago=60)
         decay = MemoryDecay(db_path=db_path, archive_dir=tmp_path / "archive")
-        result = decay.run()
+        decay.run()
         high_trust = _get_trust(db_path, "high")
         normal_trust = _get_trust(db_path, "normal")
         # High trust should have lost less
@@ -226,3 +226,24 @@ class TestMemoryDecay:
         ).fetchone()[0]
         conn.close()
         assert "governance_state" not in json.loads(meta_json)
+
+
+    def test_import_quarantine_run_scans_enough_low_trust_rows_to_govern_bulk_imports(self, tmp_path):
+        """A single decay run should govern bulk-import noise instead of tiny 500-row trickles."""
+        db_path = _create_test_db(tmp_path)
+        for i in range(650):
+            _insert_memory(
+                db_path,
+                f"cold-import-{i}",
+                trust=0.06,
+                created_days_ago=120,
+                retrieval_count=0,
+                helpful_count=0,
+                metadata={"source": "import:openclaw"},
+            )
+        decay = MemoryDecay(db_path=db_path, archive_dir=tmp_path / "archive")
+
+        result = decay.run()
+
+        assert result.memories_scanned == 650
+        assert result.memories_quarantined == 650

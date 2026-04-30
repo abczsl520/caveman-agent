@@ -18,6 +18,7 @@ from .types import MemoryType, MemoryEntry
 __all__ = [
     "SCHEMA_VERSION",
     "row_to_entry",
+    "is_quarantined",
     "get_schema_version",
     "pending_migrations",
     "migrate_schema",
@@ -165,6 +166,11 @@ def row_to_entry(row, fts_rank: float | None = None, trust: float | None = None,
         created_at=created_at,
         metadata=meta,
     )
+
+
+def is_quarantined(entry: MemoryEntry) -> bool:
+    """Return True when a memory has been removed from active recall."""
+    return str(entry.metadata.get("governance_state", "")).lower() == "quarantined"
 
 
 def migrate_schema(conn: sqlite3.Connection, dry_run: bool = False) -> list[tuple[int, str]]:

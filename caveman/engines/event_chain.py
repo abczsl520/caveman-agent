@@ -257,10 +257,16 @@ def wire_inner_flywheel(
             if _decay_instance[0] is None:
                 _decay_instance[0] = MemoryDecay()
             result = _decay_instance[0].run()
-            if result.memories_decayed > 0 or result.memories_pruned > 0:
+            if (
+                result.memories_decayed > 0
+                or result.memories_pruned > 0
+                or result.memories_quarantined > 0
+            ):
                 logger.info(
-                    "Memory decay: %d decayed, %d pruned",
-                    result.memories_decayed, result.memories_pruned,
+                    "Memory decay: %d decayed, %d pruned, %d quarantined",
+                    result.memories_decayed,
+                    result.memories_pruned,
+                    result.memories_quarantined,
                 )
         except Exception as e:
             logger.warning("LOOP_END→Decay failed: %s", e)
