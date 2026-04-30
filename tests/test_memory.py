@@ -288,6 +288,45 @@ def test_source_governance_cli_previews_policy_drift_without_mutating_rows(monke
             _close_manager(mgr)
 
 
+def test_source_governance_cli_reports_total_candidates_separately_from_limit(monkeypatch):
+    """Limit must not make operators think hidden policy drift candidates do not exist."""
+    import asyncio
+
+    from typer.testing import CliRunner
+
+    from caveman.cli.main import app
+
+    with tempfile.TemporaryDirectory() as td:
+        monkeypatch.setenv("CAVEMAN_HOME", td)
+        mgr = MemoryManager.with_sqlite(base_dir=td)
+        try:
+            store = mgr.backend
+            for source, rows in [("import:largest", 5), ("import:middle", 4), ("import:smallest", 3)]:
+                for idx in range(rows):
+                    asyncio.run(store.store(
+                        f"{source} low-signal source {idx}",
+                        MemoryType.SEMANTIC,
+                        metadata={"source": source, "trust_score": 0.05},
+                        trusted=True,
+                    ))
+        finally:
+            _close_manager(mgr)
+
+        preview = CliRunner().invoke(app, [
+            "source-governance", "preview-drift",
+            "--db", f"{td}/caveman.db",
+            "--min-rows", "3",
+            "--limit", "1",
+        ])
+
+        assert preview.exit_code == 0, preview.output
+        assert "candidate_count=3" in preview.output
+        assert "showing_count=1" in preview.output
+        assert "1. source=import:largest total=5" in preview.output
+        assert "import:middle" not in preview.output
+        assert "import:smallest" not in preview.output
+
+
 def test_memory_types():
     assert MemoryType.EPISODIC.value == "episodic"
     assert MemoryType.WORKING.value == "working"
