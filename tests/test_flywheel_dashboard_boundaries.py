@@ -499,6 +499,110 @@ def test_collect_rl_router_stats_reports_invalid_state_file(tmp_path, monkeypatc
     assert stats["total_updates"] == 0
 
 
+
+def test_source_policy_drift_flags_unmanaged_low_signal_import_sources(tmp_path, monkeypatch):
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir()
+    db_path = memory_dir / "caveman.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "CREATE TABLE memories ("
+        "id TEXT PRIMARY KEY, content TEXT NOT NULL, type TEXT NOT NULL, created_at TEXT NOT NULL, "
+        "metadata_json TEXT DEFAULT '{}', trust_score REAL DEFAULT 0.5, "
+        "retrieval_count INTEGER DEFAULT 0, helpful_count INTEGER DEFAULT 0)"
+    )
+    rows = [
+        (
+            f"cc-{idx}", f"claude code import {idx}", "semantic", "2026-03-16T00:00:00+00:00",
+            '{"source":"import:claude-code"}', 0.05, 0, 0,
+        )
+        for idx in range(3)
+    ]
+    rows.append(("manual", "manual low", "semantic", "2026-03-16T00:00:00+00:00", '{"source":"manual"}', 0.01, 0, 0))
+    rows.append(("helpful", "helpful import", "semantic", "2026-03-16T00:00:00+00:00", '{"source":"import:rare"}', 0.05, 0, 1))
+    conn.executemany(
+        "INSERT INTO memories (id, content, type, created_at, metadata_json, trust_score, retrieval_count, helpful_count) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        rows,
+    )
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr("caveman.training.flywheel_dashboard.MEMORY_DIR", memory_dir)
+
+    stats = FlywheelDashboard().collect_memory_stats()
+
+    assert stats["source_policy_drift"] == [
+        {
+            "label": "import:claude-code",
+            "total": 3,
+            "active": 3,
+            "never_recalled_pct": 1.0,
+            "helpful_pct": 0.0,
+            "avg_trust": 0.05,
+            "reason": "unmanaged_low_signal_import",
+        }
+    ]
+    formatted = FlywheelDashboard()
+    formatted.metrics["memory"] = stats
+    formatted.metrics["trajectories"] = {}
+    formatted.metrics["rl_router"] = {}
+    formatted.metrics["wiki"] = {}
+    assert "Source policy drift:" in formatted.format_report()
+    assert "import:claude-code: unmanaged low-signal import source (n=3, never=100%, helpful=0%)" in formatted.format_report()
+
+def test_source_policy_drift_keeps_truncated_import_identities_separate(tmp_path, monkeypatch):
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir()
+    db_path = memory_dir / "caveman.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "CREATE TABLE memories ("
+        "id TEXT PRIMARY KEY, content TEXT NOT NULL, type TEXT NOT NULL, created_at TEXT NOT NULL, "
+        "metadata_json TEXT DEFAULT '{}', trust_score REAL DEFAULT 0.5, "
+        "retrieval_count INTEGER DEFAULT 0, helpful_count INTEGER DEFAULT 0)"
+    )
+    prefix = "import:" + ("same-prefix-" * 8)
+    noisy_source = prefix + "noisy"
+    helpful_source = prefix + "helpful"
+    rows = [
+        (
+            f"noisy-{idx}", f"noisy import {idx}", "semantic", "2026-03-16T00:00:00+00:00",
+            json.dumps({"source": noisy_source}), 0.05, 0, 0,
+        )
+        for idx in range(3)
+    ]
+    rows.extend(
+        (
+            f"helpful-{idx}", f"helpful import {idx}", "semantic", "2026-03-16T00:00:00+00:00",
+            json.dumps({"source": helpful_source}), 0.05, 0, 1,
+        )
+        for idx in range(3)
+    )
+    conn.executemany(
+        "INSERT INTO memories (id, content, type, created_at, metadata_json, trust_score, retrieval_count, helpful_count) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        rows,
+    )
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr("caveman.training.flywheel_dashboard.MEMORY_DIR", memory_dir)
+
+    stats = FlywheelDashboard().collect_memory_stats()
+
+    assert len({row["label"] for row in stats["source_breakdown"]}) == 1
+    assert stats["source_policy_drift"] == [
+        {
+            "label": noisy_source[:79] + "…",
+            "total": 3,
+            "active": 3,
+            "never_recalled_pct": 1.0,
+            "helpful_pct": 0.0,
+            "avg_trust": 0.05,
+            "reason": "unmanaged_low_signal_import",
+        }
+    ]
+
+
 def test_collect_wiki_stats_accepts_list_and_object_shapes(tmp_path, monkeypatch):
     wiki_dir = tmp_path / "wiki"
     wiki_dir.mkdir()

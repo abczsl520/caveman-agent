@@ -14,7 +14,7 @@ from caveman.memory.decay import (
     _SOURCE_POLICY_MIN_AGE_DAYS,
     _SOURCE_POLICY_TRUST_THRESHOLD,
 )
-from caveman.memory.sources import SOURCE_POLICY_LOW_SIGNAL_IMPORTS, canonicalize_memory_source
+from caveman.memory.sources import IMPORT_SOURCE_PREFIX, SOURCE_POLICY_LOW_SIGNAL_IMPORTS, canonicalize_memory_source
 from caveman.training._flywheel_dashboard_values import _count_value, _number_value
 
 
@@ -146,14 +146,24 @@ def _collect_source_rows(cur: Any) -> list[dict[str, Any]]:
     grouped: dict[str, dict[str, Any]] = {}
     now = datetime.now(timezone.utc)
     for row in rows:
-        source, source_identity, governance_state = _source_and_governance(row[0])
+        source_label, source_identity, governance_state = _source_and_governance(row[0])
         trust = _number_value(row[1], 0.0)
         retrieval_count = _count_value(row[2])
         helpful_count = _count_value(row[3])
         age_days = _memory_age_days(row[4], now)
         bucket = grouped.setdefault(
-            source,
-            {"total": 0, "trust_sum": 0.0, "never": 0, "helpful": 0, "active": 0, "quarantined": 0, "eligible": 0},
+            source_identity,
+            {
+                "label": source_label,
+                "identity": source_identity,
+                "total": 0,
+                "trust_sum": 0.0,
+                "never": 0,
+                "helpful": 0,
+                "active": 0,
+                "quarantined": 0,
+                "eligible": 0,
+            },
         )
         bucket["total"] += 1
         bucket["trust_sum"] += trust
@@ -167,7 +177,7 @@ def _collect_source_rows(cur: Any) -> list[dict[str, Any]]:
         )
     return [
         _memory_breakdown_row(
-            label,
+            str(bucket["label"]),
             int(bucket["total"]),
             float(bucket["trust_sum"]),
             int(bucket["never"]),
@@ -175,21 +185,20 @@ def _collect_source_rows(cur: Any) -> list[dict[str, Any]]:
             int(bucket["active"]),
             int(bucket["quarantined"]),
             int(bucket["eligible"]),
-        )
-        for label, bucket in grouped.items()
+        ) | {"identity": bucket["identity"]}
+        for bucket in grouped.values()
     ]
 
 
 def _collect_memory_source_breakdown(cur: Any, limit: int = 12) -> list[dict[str, Any]]:
     """Break memory health down by metadata.source, tolerating malformed metadata."""
-    return sorted(
-        _collect_source_rows(cur),
-        key=lambda row: (
-            -int(row["total"]),
-            -int(row["helpful"]),
-            row["label"],
-        ),
-    )[:limit]
+    return [
+        {k: v for k, v in row.items() if k != "identity"}
+        for row in sorted(
+            _collect_source_rows(cur),
+            key=lambda row: (-int(row["total"]), -int(row["helpful"]), row["label"]),
+        )[:limit]
+    ]
 
 
 def _collect_memory_source_governance(cur: Any, limit: int = 8) -> list[dict[str, Any]]:
@@ -223,3 +232,34 @@ def _collect_memory_source_governance(cur: Any, limit: int = 8) -> list[dict[str
             row["label"],
         ),
     )[:limit]
+
+
+def _collect_memory_source_policy_drift(cur: Any, min_rows: int = 3, limit: int = 8) -> list[dict[str, Any]]:
+    """Find unmanaged import sources that look like low-signal bulk imports."""
+    drift = []
+    for row in _collect_source_rows(cur):
+        identity = str(row.get("identity") or row.get("label") or "")
+        total = int(row.get("total", 0) or 0)
+        active = int(row.get("active", 0) or 0)
+        never_pct = float(row.get("never_recalled_pct", 0.0) or 0.0)
+        helpful_pct = float(row.get("helpful_pct", 0.0) or 0.0)
+        avg_trust = float(row.get("avg_trust", 0.0) or 0.0)
+        if (
+            identity.startswith(IMPORT_SOURCE_PREFIX)
+            and identity not in SOURCE_POLICY_LOW_SIGNAL_IMPORTS
+            and total >= min_rows
+            and active > 0
+            and never_pct >= 0.9
+            and helpful_pct == 0.0
+            and avg_trust <= 0.1
+        ):
+            drift.append({
+                "label": row["label"],
+                "total": total,
+                "active": active,
+                "never_recalled_pct": row["never_recalled_pct"],
+                "helpful_pct": row["helpful_pct"],
+                "avg_trust": row["avg_trust"],
+                "reason": "unmanaged_low_signal_import",
+            })
+    return sorted(drift, key=lambda row: (-int(row["total"]), row["label"]))[:limit]
