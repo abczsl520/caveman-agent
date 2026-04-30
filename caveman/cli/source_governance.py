@@ -4,7 +4,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
+import shlex
+
 import typer
+from click.core import ParameterSource
 
 from caveman.memory.sqlite_store import SQLiteMemoryStore
 from caveman.paths import MEMORY_DB_PATH
@@ -19,6 +22,7 @@ def _store(db: Optional[Path]) -> SQLiteMemoryStore:
 
 @app.command("preview-drift")
 def preview_drift(
+    ctx: typer.Context,
     db: Optional[Path] = typer.Option(None, "--db", help="SQLite memory DB path."),
     min_rows: int = typer.Option(3, "--min-rows", min=1, help="Minimum rows before flagging a source."),
     limit: int = typer.Option(8, "--limit", min=1, max=100, help="Maximum candidates to show."),
@@ -53,5 +57,9 @@ def preview_drift(
     typer.echo("2. If approved, add to caveman.memory.sources.SOURCE_POLICY_LOW_SIGNAL_IMPORTS:")
     for row in candidates:
         typer.echo(f"   {row['candidate_policy_entry']!r},")
-    typer.echo(f"3. Re-run: caveman source-governance preview-drift --min-rows {min_rows}")
+    rerun_parts = ["caveman source-governance preview-drift"]
+    if ctx.get_parameter_source("db") == ParameterSource.COMMANDLINE and db is not None:
+        rerun_parts.extend(["--db", shlex.quote(str(db))])
+    rerun_parts.extend(["--min-rows", str(min_rows), "--limit", str(limit)])
+    typer.echo(f"3. Re-run: {' '.join(rerun_parts)}")
     typer.echo("auto_mutation=disabled")
