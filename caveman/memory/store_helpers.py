@@ -1,7 +1,7 @@
 """SQLite memory store helpers — extracted to keep sqlite_store.py under 400 lines.
 
 Schema versioning (PRD §8.9.6 + §8.12):
-  Current: SCHEMA_VERSION = 2
+  Current: SCHEMA_VERSION = 3
   Migration: schema_version table + numbered, transactional migration functions.
   Dry-run: inspect pending migrations without mutating the database.
 """
@@ -25,13 +25,14 @@ __all__ = [
     "get_schema_version",
     "pending_migrations",
     "migrate_schema",
+    "normalize_import_metadata",
 ]
 
 
 logger = logging.getLogger(__name__)
 
 # PRD §8.9.6: Schema version. Increment when adding/changing columns.
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 def _ensure_schema_version_table(conn: sqlite3.Connection) -> None:
@@ -105,9 +106,86 @@ def _migration_002_last_accessed_column(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_last_accessed ON memories(last_accessed)")
 
 
+def _infer_import_source_from_metadata(metadata: dict) -> str | None:
+    raw_source = metadata.get("source")
+    if isinstance(raw_source, str) and raw_source.strip() and raw_source.strip() != "<missing>":
+        return raw_source.strip()
+
+    evidence = " ".join(
+        str(metadata.get(key, ""))
+        for key in ("source_file", "path", "source_path", "origin", "import_source")
+    ).lower()
+    if "openclaw-session" in evidence or "openclaw_sessions" in evidence:
+        return "import:openclaw-session"
+    if "openclaw" in evidence:
+        return "import:openclaw"
+    if "hermes" in evidence:
+        return "import:hermes"
+    if "claude" in evidence:
+        return "import:claude-code"
+    if "codex" in evidence:
+        return "import:codex"
+    return None
+
+
+def _infer_import_source_from_content(content: object) -> str | None:
+    if not isinstance(content, str):
+        return None
+    stripped = content.lstrip()
+    if stripped.startswith("Task: ") and ("\nResult:" in stripped[:500] or " Result:" in stripped[:500]):
+        return "legacy:task-result"
+    return None
+
+
+def normalize_import_metadata(
+    metadata: dict,
+    fallback_source: str | None = None,
+    reason: str = "normalize-import-source",
+) -> tuple[dict, bool]:
+    """Backfill/normalize import source metadata while preserving provenance."""
+    meta = dict(metadata or {})
+    previous = meta.get("source")
+    source = fallback_source or _infer_import_source_from_metadata(meta)
+    if not source:
+        return meta, False
+    if isinstance(previous, str) and previous.strip() == source:
+        return meta, False
+    if previous not in (None, "") and previous != "<missing>":
+        return meta, False
+
+    meta["source"] = source
+    meta.setdefault("source_normalization_previous", previous)
+    meta.setdefault("source_normalization_reason", reason)
+    meta.setdefault("source_normalized_at", datetime.now().isoformat())
+    return meta, True
+
+
+def _migration_003_normalize_import_sources(conn: sqlite3.Connection) -> None:
+    """Backfill missing import source metadata using preserved source-file provenance."""
+    rows = conn.execute("SELECT id, content, metadata_json FROM memories").fetchall()
+    for memory_id, content, metadata_json in rows:
+        try:
+            metadata = json.loads(metadata_json) if metadata_json else {}
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if not isinstance(metadata, dict):
+            continue
+        metadata, changed = normalize_import_metadata(
+            metadata,
+            fallback_source=_infer_import_source_from_content(content),
+            reason="migration-v3",
+        )
+        if changed:
+            conn.execute(
+                "UPDATE memories SET metadata_json = ? WHERE id = ?",
+                (json.dumps(metadata, ensure_ascii=False), memory_id),
+            )
+
+
 _MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (1, "baseline additive memory columns", _migration_001_baseline_columns),
     (2, "last_accessed first-class column", _migration_002_last_accessed_column),
+    (3, "normalize import memory source metadata", _migration_003_normalize_import_sources),
 ]
 
 
