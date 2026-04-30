@@ -1,12 +1,15 @@
 # Caveman 优化 HANDOFF
 
-更新时间: 2026-04-30 16:16 CST
+更新时间: 2026-04-30 21:19 CST
 
 ## 当前最终状态
-- Round 9 已完成、提交并推送到 `main`。
-- 最新 code commit: `23df73debb9c113251eb0390515c47dbca9d5aa5` (`Protect decay with canonical access timestamps`)。
+- Round 10 已完成、提交并推送到 `main`。
+- 最新 code commit: `3ba164e651b39f04e49ef4d69437d807edb63c2f` (`Add quarantine restore preview guardrails`)。
+- 最新 docs/API commit: `07c576fc20c6ec083eeb0b1db8a2d41a013eee6d` (`docs: update API reference for quarantine preview`)。
 - `origin/main` 已同步到最新 SHA。
-- GitHub Actions 对 Round 9 code SHA 全绿：run `25154718044`，`https://github.com/abczsl520/caveman-agent/actions/runs/25154718044`。
+- GitHub Actions 对 Round 10 最新 SHA 全绿：run `25167433914`，`https://github.com/abczsl520/caveman-agent/actions/runs/25167433914`。
+- 自动续跑已配置：cron job `36500447cc33` (`Caveman 50轮自动续跑`)，每 30 分钟触发，最多 48 次，目标回发当前 Discord thread；preflight 脚本 `/Users/yeren64g/.hermes/scripts/caveman_50round_preflight.py`，互斥锁 `/tmp/caveman-50round.lock`。
+- Round 9 code commit: `23df73debb9c113251eb0390515c47dbca9d5aa5` (`Protect decay with canonical access timestamps`)；Round 9 handoff commit: `ba76a2d93f5db3f08d60e6e34d17798555ea619d`。
 - Round 8 handoff commit: `f4a07bcde9f67e3d283dc43fda4dbe559a174a36`；Round 8 code commit: `9624ce069d74efa063e2c8c2aa4fef0feef80604` (`Normalize imported memory source metadata`)。
 - Round 7 handoff commit: `be73746`；Round 7 code commits: `92d6819` (`[verified] fix quarantine lifecycle CI gates`)、`b2c0169` (`[verified] add reversible memory quarantine lifecycle`)。
 - Round 6 code commit: `5e98357f06f34a4e6b28716ab5414c436378dea4` (`[verified] surface source governance in flywheel dashboard`)；Round 6 handoff commit: `1ceef53`。
@@ -14,10 +17,39 @@
 - Gateway 最后已知未运行：需要交互验证时按 gateway SOP 安全启动，避免 `nohup caveman serve &` 触发 Hermes terminal exit-130 loop。
 
 ## 下次启动时做
-1. Round 10/50：quarantine restore 的 operator guardrails：dry-run bulk restore、source/reason scoped restore preview、恢复后 dashboard impact report。优先从真实 DB 中 quarantined/source distribution 出发，补 TDD 后实现。
-2. Round 11：import/source taxonomy 更严格治理：把 normalized source 枚举、导入入口、dashboard/decay allowlist 统一成单一来源，避免未来拼写漂移。
-3. Round 12：decay scheduling/observability 的 operator report：定时 dry-run summary、source impact trend、quarantine candidate drift，避免治理静默。
-4. Rounds 13-50：按“证据→TDD→实现→门禁→review→commit/push→监控”小步推进；不要虚构完成 50 轮，每轮必须有验证与提交或明确 no-op 证据。
+1. Round 11/50：import/source taxonomy 更严格治理：把 normalized source 枚举、导入入口、dashboard/decay allowlist 统一成单一来源，避免未来拼写漂移。
+2. Round 12：decay scheduling/observability 的 operator report：定时 dry-run summary、source impact trend、quarantine candidate drift，避免治理静默。
+3. Round 13：quarantine restore 批量执行路径（若需要）必须建立在 Round 10 preview guardrail 之上：先 preview、再要求显式 scope、再 audit。
+4. Rounds 14-50：按“证据→TDD→实现→门禁→review→commit/push→监控”小步推进；不要虚构完成 50 轮，每轮必须有验证与提交或明确 no-op 证据。
+
+## Round 10 做了什么
+- 聚焦 quarantine restore 的 operator guardrails，避免“能恢复单条”演变成未来误批量恢复事故。
+- 新增 `QuarantineRestorePreview` dry-run impact report，包含匹配 entries、`total_matches`、`by_source`、`by_reason`。
+- 新增 `preview_restore_quarantined(store, source=None, reason=None, limit=500)`：
+  - 只执行 `SELECT`，不写 DB；
+  - 支持 source/reason 双重精确 scope；
+  - 复用 malformed-safe `CASE WHEN json_valid(metadata_json) THEN json_extract(...) ELSE 0 END` predicate；
+  - 使用 SQLite 参数绑定，避免 SQL injection。
+- `list_quarantined()` 改为复用 `_quarantine_where()` / `_row_to_memory_entry()`，保持既有 source list 行为，同时减少后续 predicate 漂移。
+- 新增 CLI：`caveman memory-quarantine preview-restore --source ... --reason ... --limit ...`，输出 `would_restore=N`、sources/reasons impact、候选 memory 列表；这是批量恢复前的只读预检入口。
+- 为“为什么老停下来”做系统排查并加自动续跑机制：
+  - 原因不是代码阻塞，而是 Hermes 单次对话/上下文/任务收口后不会天然无限自驱；需要外部 scheduler 重新唤醒。
+  - 已创建 cron job `36500447cc33`，每 30 分钟自动续跑，最多 48 次；prompt 明确禁止递归 schedule，要求每次按 SOP/TDD/review/CI/handoff 推进下一轮。
+  - 已写 preflight 脚本 `/Users/yeren64g/.hermes/scripts/caveman_50round_preflight.py`，注入 git/gateway/lock 状态；使用 `/tmp/caveman-50round.lock` 防并发。
+
+## Round 10 验证结果
+- RED：新增 preview tests 后初始失败，错误为 `ImportError: cannot import name 'preview_restore_quarantined'`，确认旧实现缺少 dry-run preview API。
+- GREEN focused tests：新增 direct preview + CLI preview 测试通过：`2 passed`。
+- Focused quarantine/memory gate：`6 passed`。
+- Expanded regression：`tests/test_memory.py tests/test_memory_decay.py tests/test_flywheel_dashboard_boundaries.py` 共 `41 passed`。
+- Ruff changed files：`caveman/memory/quarantine.py caveman/cli/memory_quarantine.py tests/test_memory.py` pass。
+- Mypy baseline-aware：changed source 无新增 mypy 错误；full invocation 仍暴露既有 baseline debt（`caveman/providers/error_classifier.py`、`caveman/utils.py`），非本轮新增。
+- API reference：首次 code CI docs job 失败，根因是新增导出函数后 `docs/API_REFERENCE.md` 未提交；已运行 `scripts/generate_api_reference.py` 并提交 docs commit `07c576fc20c6ec083eeb0b1db8a2d41a013eee6d`。
+- Security scan：changed files/docs added-line scan clean；push hook safety checks passed。
+- Independent review：passed，无 blocker/important；确认 dry-run 非 mutation、SQL 参数化、source/reason scope 正确、CLI 只读安全。
+- Remote CI：
+  - code commit `3ba164e651b39f04e49ef4d69437d807edb63c2f` 的 run `25167169827` docs job failure（API reference artifact 未提交），已修复。
+  - docs/API commit `07c576fc20c6ec083eeb0b1db8a2d41a013eee6d` 的 run `25167433914` completed success。
 
 ## Round 9 做了什么
 - 聚焦 helpfulness/retrieval feedback 对 decay protection 的真实闭环：此前 decay 只读取 `metadata_json.last_accessed`，但实际 SQLite schema 有 canonical `memories.last_accessed` 列。若 recall/update 只写 canonical column、metadata 没同步，最近访问的 helpful/retrieved memory 可能被 decay 误伤。
@@ -170,3 +202,5 @@
 - API reference 是 CI docs gate 的 committed artifact。新增/导出函数或改模块 docstring 后要运行 `scripts/generate_api_reference.py` 并提交 `docs/API_REFERENCE.md`，不要把 docs diff 当成失败回滚。
 - Legacy task-result source normalization 不能只看 `content.startswith("Task:")`；必须要求显式 `\nResult:` 或 ` Result:`，否则会误伤 organic “Task:” 笔记。
 - Round 9 decay 不能只读 `metadata_json.last_accessed`；生产 schema 的 canonical `memories.last_accessed` 才是 recall/access 更新主路径。查询时也要兼容没有该列的旧 DB copy。
+- Quarantine restore 未来若做批量 mutation，不要绕过 Round 10 `preview_restore_quarantined()`；必须先 dry-run impact report，再用明确 source/reason scope，并保留 audit metadata。
+- Hermes 不会在单次 Discord turn 结束后天然无限继续；长期 50 轮需要 scheduler 外部唤醒。当前自动续跑 job 为 `36500447cc33`，preflight 脚本负责状态注入，cron run 禁止递归创建 cron。
