@@ -1,8 +1,9 @@
 # Caveman 优化 HANDOFF
 
-更新时间: 2026-04-30 23:44 CST
+更新时间: 2026-05-01 00:18 CST
 
 ## 当前最终状态
+- Round 15 已完成本地实现与验证，待提交/推送/远端 CI 监控。
 - Round 14 已完成、提交并推送到 `main`。
 - 最新 code commit: `8575c9e191ba3a4c392d9ac319c4ef1a9f571dbe` (`[verified] decouple restorable quarantine reporting`)。
 - Round 14 handoff/docs content commit: `da1059ba3a61aba476a576547c2a4898627b082a` (`docs: update caveman handoff after round 14`)；本文件可能随后有 metadata-only 校正提交。
@@ -18,9 +19,27 @@
 - Gateway 最后已知未运行：需要交互验证时按 gateway SOP 安全启动，避免 `nohup caveman serve &` 触发 Hermes terminal exit-130 loop。
 
 ## 下次启动时做
-1. Round 15/50：继续 source governance / quarantine observability 的 operator 语义治理；优先考虑 source impact trend、quarantine candidate drift，或把 unknown/casing source policy 明文化并接入 dashboard diagnostics。先用数据/测试证明缺口，再 TDD 小步修。
-2. 若继续 dashboard 方向，注意 `flywheel_dashboard.py` 450 行 hard limit；优先抽 helper，不要在 dashboard 主文件继续堆逻辑。
+1. Round 16/50：继续 source governance / quarantine observability；优先把 `source_policy_drift` 从“operator 可见”推进到“可执行建议/allowlist candidate 审批语义”，或审计 unknown/casing source policy。先用数据/测试证明缺口，再 TDD 小步修。
+2. Dashboard 主文件已在 450 行 hard limit；继续 dashboard 方向必须优先抽 helper，不要在 `flywheel_dashboard.py` 主文件堆逻辑。
 3. Rounds 16-50：按“证据→TDD→实现→门禁→review→commit/push→监控”小步推进；不要虚构完成 50 轮，每轮必须有验证与提交或明确 no-op 证据。
+
+## Round 15 做了什么
+- 聚焦 Round 11 reviewer 留下的 source taxonomy/unknown policy 明文化后续：dashboard 能治理已知 allowlist source，但无法提示“看起来低信号、但还没进入 allowlist 的 import source”，operator 不知道 allowlist 是否漂移。
+- 新增 `_collect_memory_source_policy_drift()`：对 canonical source identity 聚合，识别 `import:` 前缀、未在 `SOURCE_POLICY_LOW_SIGNAL_IMPORTS`、active rows>=3、never_recalled>=90%、helpful=0、avg_trust<=0.1 的 bulk import source。
+- 保持 display label 与 policy identity 解耦：展示可截断，policy/drift 判断使用 canonical full identity，避免长 source 被 truncation 误判。
+- `FlywheelDashboard.collect_memory_stats()` 输出 `source_policy_drift`，report 展示 `Source policy drift` 行。
+- 为避免 `flywheel_dashboard.py` 超过 NFR-502 450 行限制，新格式化逻辑抽到 `_flywheel_dashboard_formatters.py`，主文件保持 450 行。
+
+## Round 15 验证结果
+- RED：新增 unmanaged low-signal import drift test 初始失败，证明旧 dashboard 没有 `source_policy_drift`。
+- 修复过程发现 NFR-502 regression：`flywheel_dashboard.py` 曾到 452/461 行；根因是 dashboard 主文件继续堆格式化逻辑，已抽 helper 并把主文件压回 450 行。
+- Focused tests：`tests/test_round11.py::TestLoopRefactor::test_no_file_over_400_lines` 与 source drift regression `2 passed`；dashboard related suite `43 passed`。
+- Full suite（排除已知 NFR）：`.venv/bin/python -m pytest tests/ -q --ignore=tests/test_nfr_compliance.py --tb=short` → `3301 passed, 8 skipped`。
+- Py compile：`flywheel_dashboard.py`、`_flywheel_memory_diagnostics.py`、`_flywheel_dashboard_formatters.py` pass。
+- Ruff changed files：pass。
+- Docs/API：`scripts/generate_api_reference.py --check` 无 diff。
+- Security scan：added-line hardcoded secret/shell/eval/pickle/SQL-string-format patterns 0 matches。
+- Independent review：passed，无 blocker；建议 `_format_source_policy_drift()` 可更 defensive 使用 `.get()`，当前 rows 由 collector 生成，非阻塞。
 
 ## Round 14 做了什么
 - 聚焦 Round 13 reviewer 留下的 operator semantics 问题：restorable quarantine preview 不应依赖 `MemoryDecay` dry-run 成功才展示。
