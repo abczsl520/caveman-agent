@@ -35,6 +35,7 @@ from caveman.training._flywheel_memory_diagnostics import (
     _collect_memory_type_breakdown as collect_memory_type_breakdown,
     _memory_columns as memory_columns,
 )
+from caveman.training._flywheel_quarantine_preview import collect_restorable_quarantine_preview
 
 
 def _json_from_file(path: Path) -> Any | None:
@@ -148,14 +149,13 @@ class FlywheelDashboard:
                     decay_preview = None
                 if decay_preview is not None:
                     stats["decay_dry_run"] = {
-                        "scanned": decay_preview.memories_scanned,
-                        "would_decay": decay_preview.memories_decayed,
-                        "would_prune": decay_preview.memories_pruned,
-                        "would_quarantine": decay_preview.memories_quarantined,
+                        "scanned": decay_preview.memories_scanned, "would_decay": decay_preview.memories_decayed,
+                        "would_prune": decay_preview.memories_pruned, "would_quarantine": decay_preview.memories_quarantined,
                         "trust_total_reduced": round(decay_preview.trust_total_reduced, 3),
                         "would_quarantine_by_source": decay_preview.quarantined_by_source,
                         "eligible_by_source": decay_preview.eligible_by_source,
                     }
+                    stats["decay_dry_run"].update(collect_restorable_quarantine_preview(cur))
                 cur.execute(
                     "SELECT COUNT(*) FROM memories "
                     "WHERE json_valid(metadata_json) "
@@ -369,6 +369,9 @@ class FlywheelDashboard:
                 f"would_prune={decay_dry_run.get('would_prune', 0)}, "
                 f"would_quarantine={decay_dry_run.get('would_quarantine', 0)}"
             )
+            if restorable_by_source := decay_dry_run.get("restorable_quarantine_by_source", {}):
+                impact = ", ".join(f"{source}={count}" for source, count in restorable_by_source.items())
+                lines.append(f"   Restorable quarantine: {impact}")
         source_breakdown = mem.get("source_breakdown", [])
         if source_breakdown:
             lines.append("   By source (top):")
@@ -413,15 +416,11 @@ class FlywheelDashboard:
         lines.append(f"   With tools: {traj.get('with_tools', 0)}, High quality: {traj.get('high_quality', 0)}, Low: {traj.get('low_quality', 0)}")
         lines.append(f"   DPO pairs possible: {traj.get('dpo_pairs_possible', 0)}")
         lines.append("")
-
-        # RL Router
         rl = self.metrics.get("rl_router", {})
         lines.append(f"🎰 RL Router: {rl.get('total_updates', 0)} total updates")
         for name, arm in rl.get("arms", {}).items():
             lines.append(f"   {name}: win_rate={arm['win_rate']:.1%} (α={arm['alpha']}, β={arm['beta']})")
         lines.append("")
-
-        # Wiki
         wiki = self.metrics.get("wiki", {})
         lines.append(f"📚 Wiki: {wiki.get('total_entries', 0)} entries")
         for tier, count in wiki.get("tiers", {}).items():
