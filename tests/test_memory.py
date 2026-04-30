@@ -714,6 +714,14 @@ def test_operator_literal_rejects_non_positive_max_length():
     with pytest.raises(ValueError, match="max_length must be positive"):
         operator_literal("unsafe", max_length=-1)
 
+def test_operator_literal_rejects_non_integer_max_length():
+    """Public operator formatter should reject ambiguous truncation bound types."""
+    from caveman.operator_output import operator_literal
+
+    for max_length in (True, False, 3.5, "3"):
+        with pytest.raises(TypeError, match="max_length must be an int"):
+            operator_literal("unsafe", max_length=max_length)
+
 def test_operator_literal_helper_is_shared_across_cli_and_dashboard():
     """CLI and dashboard reports should depend on one literal safety boundary."""
     from caveman.cli import source_governance
