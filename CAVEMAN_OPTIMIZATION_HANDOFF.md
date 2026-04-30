@@ -1,12 +1,13 @@
 # Caveman 优化 HANDOFF
 
-更新时间: 2026-04-30 22:28 CST
+更新时间: 2026-04-30 23:08 CST
 
 ## 当前最终状态
-- Round 12 已完成、提交并推送到 `main`。
-- 最新 code commit: `19fc4348b8dbaae6cba5119c34bf04f5358d04aa` (`[verified] surface decay dry-run in dashboard`)。
+- Round 13 已完成、提交并推送到 `main`。
+- 最新 code commit: `edae36bf747baa7cb55e5addce47a9ba1044ba7e` (`[verified] report restorable quarantine impact`)。
+- 最新 handoff/docs commit: `60161563a3a5e242749604a0a7214bc535c6b2f5` (`docs: update api reference for quarantine preview`)。
 - `origin/main` 已同步到最新 SHA。
-- GitHub Actions 对 Round 12 最新 SHA 全绿：run `25170776976`，`https://github.com/abczsl520/caveman-agent/actions/runs/25170776976`。
+- GitHub Actions 对 Round 13 docs/handoff 最新 SHA 全绿：run `25173026185`，`https://github.com/abczsl520/caveman-agent/actions/runs/25173026185`。
 - 自动续跑已配置：cron job `36500447cc33` (`Caveman 50轮自动续跑`)，每 30 分钟触发，最多 48 次，目标回发当前 Discord thread；preflight 脚本 `/Users/yeren64g/.hermes/scripts/caveman_50round_preflight.py`，互斥锁 `/tmp/caveman-50round.lock`。
 - Round 9 code commit: `23df73debb9c113251eb0390515c47dbca9d5aa5` (`Protect decay with canonical access timestamps`)；Round 9 handoff commit: `ba76a2d93f5db3f08d60e6e34d17798555ea619d`。
 - Round 8 handoff commit: `f4a07bcde9f67e3d283dc43fda4dbe559a174a36`；Round 8 code commit: `9624ce069d74efa063e2c8c2aa4fef0feef80604` (`Normalize imported memory source metadata`)。
@@ -16,9 +17,26 @@
 - Gateway 最后已知未运行：需要交互验证时按 gateway SOP 安全启动，避免 `nohup caveman serve &` 触发 Hermes terminal exit-130 loop。
 
 ## 下次启动时做
-1. Round 13/50：quarantine restore 批量执行路径（若需要）必须建立在 Round 10 preview guardrail 之上：先 preview、再要求显式 scope、再 audit；若不做批量 restore，则继续补 operator observability 的 source impact trend/quarantine candidate drift。
-2. Round 14：source taxonomy 后续可补大小写策略/unknown source report；Round 11 reviewer 仅建议文档化 unknown casing，不是 blocker。
+1. Round 14/50：优先考虑 reviewer 留下的 operator semantics 问题：restorable quarantine preview 是否应脱离 `MemoryDecay` dry-run 成功路径独立展示；或继续补 source impact trend / quarantine candidate drift。先用 dashboard 数据/测试证明缺口，再 TDD 小步修。
+2. Round 14 也可处理 source taxonomy 后续大小写策略/unknown source report；Round 11 reviewer 仅建议文档化 unknown casing，不是 blocker。
 3. Rounds 15-50：按“证据→TDD→实现→门禁→review→commit/push→监控”小步推进；不要虚构完成 50 轮，每轮必须有验证与提交或明确 no-op 证据。
+
+## Round 13 做了什么
+- 聚焦 quarantine restore observability：Round 10 已有 dry-run preview API，但 dashboard 只展示 decay 会新增 quarantine 的影响，缺少“当前已 quarantined 且可恢复”的 operator 视角。
+- 新增 `caveman.training._flywheel_quarantine_preview.collect_restorable_quarantine_preview()`，从 memory DB 的 quarantined metadata 中统计 restorable candidates 的 `source` 与 `quarantine_reason`。
+- `FlywheelDashboard.collect_memory_stats()` 在 decay dry-run 成功时追加 `restorable_quarantine_by_source` / `restorable_quarantine_by_reason`，report 输出对应 source/reason impact 行。
+- 为避免 `flywheel_dashboard.py` 继续膨胀，统计逻辑抽到独立 helper module；malformed/non-dict metadata best-effort 跳过，固定 SQL 无用户输入。
+- CI 首轮在 docs job 失败，根因是新增 API module 后 `docs/API_REFERENCE.md` 未更新；已运行 `scripts/generate_api_reference.py` 并提交 docs fix。
+
+## Round 13 验证结果
+- RED：新增 dashboard boundary test 初始证明旧 dashboard 缺少 restorable quarantine source/reason impact；后续 CI docs job 对 code commit `edae36bf747baa7cb55e5addce47a9ba1044ba7e` 失败，证明 API reference stale。
+- GREEN focused tests：`tests/test_flywheel_dashboard.py tests/test_flywheel_dashboard_boundaries.py tests/test_memory_decay.py` 共 `40 passed`。
+- Full suite（排除已知 NFR）：`.venv/bin/python -m pytest tests/ -q --ignore=tests/test_nfr_compliance.py` → `3298 passed, 8 skipped`。
+- Py compile：`caveman/training/flywheel_dashboard.py caveman/training/_flywheel_quarantine_preview.py tests/test_flywheel_dashboard_boundaries.py` pass。
+- Ruff changed files：pass。
+- Security scan：added-line hardcoded secret/shell/eval/pickle/SQL-string-format patterns 0 matches；push hook safety checks passed。
+- Independent review：code review passed，无 blocker；docs fix review passed，确认唯一 diff 为 generated API reference 更新。
+- Remote CI：code commit `edae36bf747baa7cb55e5addce47a9ba1044ba7e` 的 run `25172545287` docs failure（API reference 未提交），已修复；docs commit `60161563a3a5e242749604a0a7214bc535c6b2f5` 的 run `25173026185` completed success。
 
 ## Round 12 做了什么
 - 聚焦 decay scheduling/observability 的 operator report，避免 memory governance 只在后台静默执行。
@@ -240,3 +258,4 @@
 - Quarantine restore 未来若做批量 mutation，不要绕过 Round 10 `preview_restore_quarantined()`；必须先 dry-run impact report，再用明确 source/reason scope，并保留 audit metadata。
 - Hermes 不会在单次 Discord turn 结束后天然无限继续；长期 50 轮需要 scheduler 外部唤醒。当前自动续跑 job 为 `36500447cc33`，preflight 脚本负责状态注入，cron run 禁止递归创建 cron。
 - Round 11 source taxonomy：policy 判断必须使用 canonical identity，展示层 label 可截断但不能反向参与治理判断；normalization audit metadata 对非 quarantined rows 也要持久化，否则每轮 decay 会重复“发现”同一 alias。
+
