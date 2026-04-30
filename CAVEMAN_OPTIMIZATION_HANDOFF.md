@@ -1,8 +1,9 @@
 # Caveman 优化 HANDOFF
 
-更新时间: 2026-05-01 06:31 CST
+更新时间: 2026-05-01 07:02 CST
 
 ## 当前最终状态
+- Round 32 已完成、提交并推送到 `main`；code commit `8c09262` (`[verified] escape status model output`)；GitHub Actions run `25193311855`，`https://github.com/abczsl520/caveman-agent/actions/runs/25193311855`，completed success。
 - Round 31 已完成、提交并推送到 `main`；code commit `60a42f2e92bb00989c46a6bf3b4ea658bc421fbb` (`[verified] document ansi operator literals`)；GitHub Actions run `25192393917`，`https://github.com/abczsl520/caveman-agent/actions/runs/25192393917`，completed success。
 - Round 30 已完成、提交并推送到 `main`；code commit `596c7d8ff2a3ac01ce583a0c161d14ab7ae4b95d` (`[verified] escape wiki search operator output`)；GitHub Actions run `25191456061`，`https://github.com/abczsl520/caveman-agent/actions/runs/25191456061`，completed success。
 - Round 29 handoff/docs commit `8490c84` (`docs: update caveman handoff after round 29`) 已在当前 git log 中可见；Round 29 后续 fix commit `e3d5114` (`fix: satisfy flywheel typing gate`) 也已在 main。
@@ -21,10 +22,43 @@
 - Gateway 最后已知未运行；本轮未重启 gateway，优化任务不依赖 gateway。
 
 ## 下次启动时做
-1. 先确认本 handoff docs commit 的 GitHub Actions 结论；如果 code commit `60a42f2` 的 run `25192393917` 已记录 success，不要重复等待。
-2. 继续 Round 32/50：沿 operator-facing DB/file-derived output 安全边界深挖，扫描 wiki/source-governance/flywheel dashboard 之外 plaintext diagnostics 是否还有 raw DB/file-derived fields 未统一委托 `operator_literal`；优先做能 TDD 小切片验证的输出边界。
+1. 先确认本 handoff docs commit 的 GitHub Actions 结论；如果 code commit `8c09262` 的 run `25193311855` 已记录 success，不要重复等待。
+2. 继续 Round 33/50：沿 operator-facing output 安全边界继续深挖，优先扫描 `caveman.cli.status` 以外的 config/file/DB-derived CLI 输出（例如 status stats/memory detail、changelog/audit/migrate/self-test 输出）是否还会直接输出可控字符串；每次只做一个 TDD 小切片。
 3. Dashboard 主文件仍有 450 行 hard limit；继续 dashboard 方向必须优先抽 helper，不要在 `flywheel_dashboard.py` 主文件堆逻辑。
-4. Rounds 32-50：按“证据→TDD→实现→门禁→review→commit/push→监控”小步推进；不要虚构完成 50 轮，每轮必须有验证与提交或明确 no-op 证据。
+4. Rounds 33-50：按“证据→TDD→实现→门禁→review→commit/push→监控”小步推进；不要虚构完成 50 轮，每轮必须有验证与提交或明确 no-op 证据。
+
+## Round 32 做了什么
+- 先确认真实状态：`main` 最新为 Round 31 handoff/docs commit `e4c8182`，工作树起始干净；gateway health 不可达但本轮不依赖 gateway。项目文件存在但仍停在 Round 30 摘要，已在本轮同步更新。
+- 执行 baseline：full suite（排除已知 NFR）起始为 `3320 passed, 8 skipped`。
+- 继续 operator-facing output 安全边界扫描，发现 `caveman/cli/status.py` 直接输出配置派生的 model 名称：`Model: {model}`。配置值可能包含换行或 ANSI escape，存在 status 输出终端/日志 spoof 风险。
+- RED 新增 regression：`test_status_text_escapes_configured_model_control_characters` monkeypatch `_get_model_info()` 返回 `safe-model\nSPOOF_MODEL\x1b[31m`，要求 status 输出中出现 repr-style escaped literal，且没有真实 spoof 行或 raw ANSI 字节。
+- GREEN：`status_text()` 复用共享 `operator_literal(model)`；同时清理 `tests/test_cli_status.py` 已存在未使用 import，使 changed-file ruff 干净。
+
+## Round 32 验证结果
+- RED：`tests/test_cli_status.py::test_status_text_escapes_configured_model_control_characters` 按预期失败，原输出包含真实换行和 raw ANSI。
+- GREEN focused：`tests/test_cli_status.py` → `9 passed`。
+- Py compile：`caveman/cli/status.py tests/test_cli_status.py` pass。
+- Ruff changed files：`.venv/bin/ruff check caveman/cli/status.py tests/test_cli_status.py` → pass。
+- Full suite（排除已知 NFR）：`.venv/bin/python -m pytest tests/ -q --ignore=tests/test_nfr_compliance.py --tb=short` → `3321 passed, 8 skipped in 112.76s`。
+- Docs/API：`.venv/bin/python scripts/generate_api_reference.py --check` pass；无 API docs diff。
+- Security scan：added-line/final scan hardcoded secret/token/password、shell injection、eval/exec、pickle、SQL string-format patterns 0 matches；push hook safety checks passed。
+- Independent review：passed，无 `security_concerns`、无 `logic_errors`；non-blocking suggestion 是未来可同样检查其他 status 字段。
+- Remote CI：code commit `8c09262` GitHub Actions run `25193311855` completed success。
+
+## Round 32 什么 work 了
+- 复用共享 `operator_literal`，没有新增 escaping 语义；TDD regression 直接证明 status model 输出不会通过配置值伪造额外行或注入 ANSI 控制字节。
+- Changed-file ruff 暴露并清理了测试文件历史未使用 imports，避免本轮新增测试后留下 lint debt。
+- 公共 GitHub Actions API 无 token 也可轮询；本轮 code CI 成功记录为 run `25193311855`。
+
+## Round 32 什么没做/没work
+- 本 handoff 更新已准备单独 docs commit；提交后需 push 并监控 CI。
+- 尚未系统扫描 `status_text()` 的 `mem_detail`、`Home`、以及 utility commands 里其他 config/file-derived 输出；Round 33 继续。
+- 未重启 gateway（当前自动续跑不依赖 gateway，且 SOP 要避免不必要启动）。
+
+## Round 32 已知坑
+- `git diff --cached` 在未 staged 时为空；pre-commit review 若未 stage 要用 `git diff`，本轮 independent reviewer 使用 unstaged diff。
+- GitHub API 查询刚 push 的 `head_sha` 可能 5-7 分钟没有 run；不要因 `NO_RUN_YET` 立即判失败，需继续轮询。
+- `status_text()` 的 model/provider 来自配置，不应直接作为 terminal instruction 输出；模型名等 operator-facing config 值统一走 `operator_literal`。
 
 ## Round 30 做了什么
 - 先确认 Round 30 前真实状态：`main` 最新包含 `e3d5114`、`1ee23a5`、Round 29 handoff/docs commit `8490c84`，工作树起始干净；gateway health 不可达但本轮不依赖 gateway。
@@ -95,6 +129,7 @@
 - `set -e` + CI polling 的 Python exit 2 会提前退出；轮询脚本必须关闭 `set -e` 或显式捕获 rc。
 
 ## 历史摘要
+- Round 32：status dashboard 的配置派生 model 名称改为 `operator_literal(model)`，防换行/ANSI spoof，commit `8c09262`，CI success。
 - Round 31：补 `operator_literal` ANSI/C1 escape regression 并明确 docstring 安全边界，commit `60a42f2`，CI success。
 - Round 29：`operator_literal` 拒绝 non-integer `max_length`（含 bool/float/str），commit `82dccd1`，CI success。
 - Round 28：`operator_literal` 拒绝 non-positive `max_length`，commit `bc8f32f`，CI success。
