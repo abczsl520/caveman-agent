@@ -128,7 +128,7 @@ def setup() -> None:
     model = typer.prompt("Default model", default=model)
 
     from caveman.paths import MEMORY_DIR, SKILLS_DIR, TRAJECTORIES_DIR
-    import yaml as _yaml
+    import yaml as _yaml  # type: ignore[import-untyped]
     config_data = {
         "agent": {"default_model": model, "max_iterations": 50},
         "providers": {"anthropic": {"api_key": api_key, "model": model}},
