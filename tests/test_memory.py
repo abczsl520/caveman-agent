@@ -618,6 +618,17 @@ def test_operator_literal_has_security_purpose_docstring():
     assert "repr" in doc
     assert "operator" in doc.lower()
 
+
+def test_operator_literal_helper_is_shared_across_cli_and_dashboard():
+    """CLI and dashboard reports should depend on one literal safety boundary."""
+    from caveman.cli import source_governance
+    from caveman.operator_output import operator_literal
+    from caveman.training import _flywheel_dashboard_formatters as dashboard_formatters
+
+    assert source_governance._operator_literal("import:x\n\x1b[31m") == operator_literal("import:x\n\x1b[31m")
+    assert dashboard_formatters._operator_literal("import:x\n\x1b[31m") == operator_literal("import:x\n\x1b[31m", max_length=160)
+    assert dashboard_formatters._operator_literal("x" * 200) == operator_literal("x" * 200, max_length=160)
+
 def test_memory_types():
     assert MemoryType.EPISODIC.value == "episodic"
     assert MemoryType.WORKING.value == "working"
