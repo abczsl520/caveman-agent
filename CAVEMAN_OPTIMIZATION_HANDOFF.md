@@ -1,8 +1,9 @@
 # Caveman 优化 HANDOFF
 
-更新时间: 2026-05-01 03:12 CST
+更新时间: 2026-05-01 03:33 CST
 
 ## 当前最终状态
+- Round 25 已完成、提交并推送到 `main`；本机无 GitHub token/gh auth，run id/结论待下一轮有认证环境时补查。
 - Round 24 已完成、提交并推送到 `main`；GitHub Actions 查询仍受 unauthenticated API rate limit 限制，run id/结论待下一轮补查。
 - Round 23 已完成、提交并推送到 `main`；GitHub Actions 查询受 unauthenticated API rate limit 限制，run id/结论待补查。
 - Round 22 已完成、提交并推送到 `main`。
@@ -12,7 +13,8 @@
 - Round 18 已完成、提交并推送到 `main`。
 - Round 17 已完成、提交并推送到 `main`。
 - Round 16 已完成、提交并推送到 `main`。
-- 最新 code commit: `4c8ea7cbfa8e08309a3a6da3955533cbd6e6c341` (`[verified] document source governance literal safety`)。
+- 最新 code commit: `3d393ae` (`[verified] escape source drift operator literals`)。
+- Round 25 code commit: `3d393ae` (`[verified] escape source drift operator literals`)；GitHub Actions run 待补查（本机无 GitHub token/gh auth）。
 - Round 24 code commit: `4c8ea7cbfa8e08309a3a6da3955533cbd6e6c341` (`[verified] document source governance literal safety`)；GitHub Actions run 待补查（GitHub API rate limit）。
 - Round 23 code commit: `2578fbabe2f1a99b1f3030667f8761610cc2ba04` (`[verified] centralize source governance literals`)；GitHub Actions run 待补查（GitHub API rate limit）。
 - Round 22 code commit: `163417f8e70fa7b72153bc0dc636d5fc38bb0b93` (`[verified] harden source governance preview output`)；GitHub Actions run `25182925025`，`https://github.com/abczsl520/caveman-agent/actions/runs/25182925025`，completed success。
@@ -25,10 +27,26 @@
 - Gateway 最后已知未运行：需要交互验证时按 gateway SOP 安全启动，避免 shell background 启动触发 Hermes terminal exit-130 loop。
 
 ## 下次启动时做
-1. 先补查 Round 24 code SHA `4c8ea7cbfa8e08309a3a6da3955533cbd6e6c341` 与 Round 23 code SHA `2578fbabe2f1a99b1f3030667f8761610cc2ba04` 的 GitHub Actions run id/结论；本轮 push 后查询 GitHub Actions 时 unauthenticated API rate limit exceeded。
-2. 若 CI 可查且为 success，继续 Round 25/50：评估把 `_operator_literal()` 从 `caveman.cli.source_governance` 提升/迁移为更通用的 operator-display helper，或扫描 dashboard/source-governance 是否还有 DB-derived plaintext output 可复用该 helper；保持 CLI 只读，不自动 mutate allowlist。
+1. 先补查 Round 25 code SHA `3d393ae`、Round 24 code SHA `4c8ea7cbfa8e08309a3a6da3955533cbd6e6c341` 与 Round 23 code SHA `2578fbabe2f1a99b1f3030667f8761610cc2ba04` 的 GitHub Actions run id/结论；当前本机 `gh` 未认证且无可用 GitHub token。
+2. 若 CI 可查且为 success，继续 Round 26/50：把 dashboard/source-governance 的 operator literal helper 收敛为单一共享实现，或继续扫描 DB-derived operator-facing plaintext output；保持 CLI/dashboard 只读，不自动 mutate allowlist/quarantine。
 3. Dashboard 主文件已在 450 行 hard limit；继续 dashboard 方向必须优先抽 helper，不要在 `flywheel_dashboard.py` 主文件堆逻辑。
-4. Rounds 25-50：按“证据→TDD→实现→门禁→review→commit/push→监控”小步推进；不要虚构完成 50 轮，每轮必须有验证与提交或明确 no-op 证据。
+4. Rounds 26-50：按“证据→TDD→实现→门禁→review→commit/push→监控”小步推进；不要虚构完成 50 轮，每轮必须有验证与提交或明确 no-op 证据。
+
+## Round 25 做了什么
+- 聚焦 Round 24 后续 operator-facing literal 安全：dashboard `Source policy drift` report 仍把 DB-derived source label / candidate 直接拼进 plaintext report，遇到 ANSI ESC/control characters 会造成 terminal spoofing 风险。
+- RED 新增 regression：构造 `import:evil\x1b[31mspoof` drift source，要求 dashboard report 中 `candidate=` 与 `label=` 使用 repr-style escaped literal；旧代码初始失败，显示 raw ESC 进入 report。
+- 实现：在 `_flywheel_dashboard_formatters.py` 增加 `_operator_literal()`，对 source policy drift label/candidate 使用 repr-style literal；同步更新既有 drift report test 的期望格式。
+
+## Round 25 验证结果
+- RED：`tests/test_flywheel_dashboard_boundaries.py::test_source_policy_drift_escapes_control_characters_in_operator_report` 初始失败，旧 report 缺少 escaped `candidate='...\\x1b...'`。
+- GREEN focused：新增 regression 通过；dashboard focused suite `tests/test_flywheel_dashboard_boundaries.py tests/test_flywheel_dashboard.py` → `24 passed`。
+- Full suite（排除已知 NFR）：`.venv/bin/python -m pytest tests/ -q --ignore=tests/test_nfr_compliance.py --tb=short` → `3312 passed, 8 skipped`。
+- Py compile：`caveman/training/_flywheel_dashboard_formatters.py` pass。
+- Ruff changed files：pass。
+- Docs/API：`.venv/bin/python scripts/generate_api_reference.py --check` 无 diff。
+- Security scan：added-line hardcoded secret/shell/eval/pickle/SQL-string-format patterns 0 matches；push hook safety checks passed。
+- Independent review：passed，无 security/logic blocker。
+- Remote CI：code commit `3d393ae` 已 push；本机无 GitHub token/gh auth，无法查询 Actions run id/结论，待下一轮补查。
 
 ## Round 24 做了什么
 - 先补查 Round 23 CI，但 `gh` 未认证且 unauthenticated GitHub API rate limit 仍用尽，无法读取 run id/结论。
