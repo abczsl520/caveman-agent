@@ -550,7 +550,58 @@ def test_source_policy_drift_flags_unmanaged_low_signal_import_sources(tmp_path,
     formatted.metrics["rl_router"] = {}
     formatted.metrics["wiki"] = {}
     assert "Source policy drift:" in formatted.format_report()
-    assert "import:claude-code: unmanaged low-signal import source (n=3, never=100%, helpful=0%, candidate=import:claude-code)" in formatted.format_report()
+    assert (
+        "label='import:claude-code': unmanaged low-signal import source "
+        "(n=3, never=100%, helpful=0%, candidate='import:claude-code')"
+    ) in formatted.format_report()
+
+def test_source_policy_drift_escapes_control_characters_in_operator_report(tmp_path, monkeypatch):
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir()
+    db_path = memory_dir / "caveman.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "CREATE TABLE memories ("
+        "id TEXT PRIMARY KEY, content TEXT NOT NULL, type TEXT NOT NULL, created_at TEXT NOT NULL, "
+        "metadata_json TEXT DEFAULT '{}', trust_score REAL DEFAULT 0.5, "
+        "retrieval_count INTEGER DEFAULT 0, helpful_count INTEGER DEFAULT 0)"
+    )
+    unsafe_source = "import:evil\x1b[31mspoof"
+    import caveman.memory.sources as memory_sources
+    monkeypatch.setattr(memory_sources, "SOURCE_ALIASES", {})
+    monkeypatch.setattr(memory_sources, "SOURCE_POLICY_LOW_SIGNAL_IMPORTS", frozenset())
+    conn.executemany(
+        "INSERT INTO memories (id, content, type, created_at, metadata_json, trust_score, retrieval_count, helpful_count) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+            (
+                f"unsafe-{idx}", f"unsafe import {idx}", "semantic", "2026-03-16T00:00:00+00:00",
+                json.dumps({"source": unsafe_source}), 0.05, 0, 0,
+            )
+            for idx in range(3)
+        ],
+    )
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr("caveman.training.flywheel_dashboard.MEMORY_DIR", memory_dir)
+    monkeypatch.setattr(
+        "caveman.training._flywheel_memory_diagnostics.SOURCE_POLICY_LOW_SIGNAL_IMPORTS",
+        frozenset(),
+    )
+
+    stats = FlywheelDashboard().collect_memory_stats()
+    formatted = FlywheelDashboard()
+    formatted.metrics["memory"] = stats
+    formatted.metrics["trajectories"] = {}
+    formatted.metrics["rl_router"] = {}
+    formatted.metrics["wiki"] = {}
+
+    report = formatted.format_report()
+
+    assert "candidate='import:evil\\x1b[31mspoof'" in report
+    assert "candidate=import:evil\x1b[31mspoof" not in report
+    assert "label='import:evil\\x1b[31mspoof'" in report
+
 
 def test_source_policy_drift_keeps_truncated_import_identities_separate(tmp_path, monkeypatch):
     memory_dir = tmp_path / "memory"
