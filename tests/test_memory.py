@@ -722,6 +722,23 @@ def test_operator_literal_rejects_non_integer_max_length():
         with pytest.raises(TypeError, match="max_length must be an int"):
             operator_literal("unsafe", max_length=max_length)
 
+
+def test_operator_literal_documents_and_escapes_ansi_sequences():
+    """Shared formatter should make ANSI escape bytes visible and document that boundary."""
+    from caveman.operator_output import operator_literal
+
+    unsafe = "ok\x1b[31mRED\x1b[0m and c1\x9b31mBLUE"
+
+    formatted = operator_literal(unsafe)
+
+    assert "ANSI" in (operator_literal.__doc__ or "")
+    assert "\x1b" not in formatted
+    assert "\x9b" not in formatted
+    assert "\\x1b[31m" in formatted
+    assert "\\x1b[0m" in formatted
+    assert "\\x9b31m" in formatted
+
+
 def test_operator_literal_helper_is_shared_across_cli_and_dashboard():
     """CLI and dashboard reports should depend on one literal safety boundary."""
     from caveman.cli import source_governance

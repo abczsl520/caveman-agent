@@ -3,7 +3,7 @@ from __future__ import annotations
 
 
 def operator_literal(value: object, max_length: int | None = None) -> str:
-    """Return repr() for operator output so control characters stay escaped."""
+    """Return repr() for operator output so control and ANSI escape bytes stay visible."""
     if max_length is not None:
         if not isinstance(max_length, int) or isinstance(max_length, bool):
             raise TypeError("max_length must be an int")
