@@ -1,11 +1,12 @@
 # Caveman 优化 HANDOFF
 
-更新时间: 2026-05-01 03:33 CST
+更新时间: 2026-05-01 03:54 CST
 
 ## 当前最终状态
-- Round 25 已完成、提交并推送到 `main`；本机无 GitHub token/gh auth，run id/结论待下一轮有认证环境时补查。
-- Round 24 已完成、提交并推送到 `main`；GitHub Actions 查询仍受 unauthenticated API rate limit 限制，run id/结论待下一轮补查。
-- Round 23 已完成、提交并推送到 `main`；GitHub Actions 查询受 unauthenticated API rate limit 限制，run id/结论待补查。
+- Round 26 已完成、提交并推送到 `main`；GitHub Actions run `25185877026`，`https://github.com/abczsl520/caveman-agent/actions/runs/25185877026`，completed success。
+- Round 25 已完成、提交并推送到 `main`；GitHub Actions run 待补查（当前仅补查了 Round 26）。
+- Round 24 已完成、提交并推送到 `main`；GitHub Actions run 待补查。
+- Round 23 已完成、提交并推送到 `main`；GitHub Actions run 待补查。
 - Round 22 已完成、提交并推送到 `main`。
 - Round 21 已完成、提交并推送到 `main`。
 - Round 20 已完成、提交并推送到 `main`。
@@ -13,7 +14,8 @@
 - Round 18 已完成、提交并推送到 `main`。
 - Round 17 已完成、提交并推送到 `main`。
 - Round 16 已完成、提交并推送到 `main`。
-- 最新 code commit: `3d393ae` (`[verified] escape source drift operator literals`)。
+- 最新 code commit: `2ee79fa` (`[verified] share operator literal formatter`)。
+- Round 26 code commit: `2ee79fa9c0675cf97cb6e662eb5feee5d8708e48` (`[verified] share operator literal formatter`)；GitHub Actions run `25185877026` completed success。
 - Round 25 code commit: `3d393ae` (`[verified] escape source drift operator literals`)；GitHub Actions run 待补查（本机无 GitHub token/gh auth）。
 - Round 24 code commit: `4c8ea7cbfa8e08309a3a6da3955533cbd6e6c341` (`[verified] document source governance literal safety`)；GitHub Actions run 待补查（GitHub API rate limit）。
 - Round 23 code commit: `2578fbabe2f1a99b1f3030667f8761610cc2ba04` (`[verified] centralize source governance literals`)；GitHub Actions run 待补查（GitHub API rate limit）。
@@ -27,10 +29,28 @@
 - Gateway 最后已知未运行：需要交互验证时按 gateway SOP 安全启动，避免 shell background 启动触发 Hermes terminal exit-130 loop。
 
 ## 下次启动时做
-1. 先补查 Round 25 code SHA `3d393ae`、Round 24 code SHA `4c8ea7cbfa8e08309a3a6da3955533cbd6e6c341` 与 Round 23 code SHA `2578fbabe2f1a99b1f3030667f8761610cc2ba04` 的 GitHub Actions run id/结论；当前本机 `gh` 未认证且无可用 GitHub token。
-2. 若 CI 可查且为 success，继续 Round 26/50：把 dashboard/source-governance 的 operator literal helper 收敛为单一共享实现，或继续扫描 DB-derived operator-facing plaintext output；保持 CLI/dashboard 只读，不自动 mutate allowlist/quarantine。
+1. 先补查 Round 25 code SHA `3d393ae`、Round 24 code SHA `4c8ea7cbfa8e08309a3a6da3955533cbd6e6c341` 与 Round 23 code SHA `2578fbabe2f1a99b1f3030667f8761610cc2ba04` 的 GitHub Actions run id/结论；Round 26 CI 已确认 success。
+2. 继续 Round 27/50：扫描其它 operator-facing DB-derived plaintext output（memory quarantine list/preview、diagnostics/dashboard sections 等）是否仍有 raw control-character/newline spoofing 风险；优先复用 `caveman.operator_output.operator_literal()`，保持 CLI/dashboard 只读，不自动 mutate allowlist/quarantine。
 3. Dashboard 主文件已在 450 行 hard limit；继续 dashboard 方向必须优先抽 helper，不要在 `flywheel_dashboard.py` 主文件堆逻辑。
-4. Rounds 26-50：按“证据→TDD→实现→门禁→review→commit/push→监控”小步推进；不要虚构完成 50 轮，每轮必须有验证与提交或明确 no-op 证据。
+4. Rounds 27-50：按“证据→TDD→实现→门禁→review→commit/push→监控”小步推进；不要虚构完成 50 轮，每轮必须有验证与提交或明确 no-op 证据。
+
+## Round 26 做了什么
+- 先按 handoff 检查真实状态：main 已到 Round 25，工作区干净；`gh` 不可用，但 unauthenticated GitHub Actions API 可查，Round 26 后续 run 可监控。
+- 聚焦 Round 25 下一步：source-governance CLI 与 dashboard 已分别有 `_operator_literal()`，但安全边界仍分散在两个模块，后续新增 operator-facing DB-derived output 容易再次复制/漂移。
+- RED 新增 regression：要求 CLI 和 dashboard literal formatter 都依赖共享 `caveman.operator_output.operator_literal()`；旧代码初始失败 `ModuleNotFoundError: No module named 'caveman.operator_output'`。
+- 实现：新增 `caveman/operator_output.py`，提供共享 `operator_literal(value, max_length=None)`；source-governance CLI 与 flywheel dashboard formatter 都委托该 helper；同步更新 API reference。
+
+## Round 26 验证结果
+- Baseline focused before change：`tests/test_memory.py tests/test_flywheel_dashboard.py tests/test_flywheel_dashboard_boundaries.py tests/test_memory_decay.py` → `68 passed`。
+- RED：`tests/test_memory.py::test_operator_literal_helper_is_shared_across_cli_and_dashboard` 初始失败，旧代码没有共享模块。
+- GREEN focused：shared helper + docstring tests → `2 passed`；expanded focused suite → `69 passed`。
+- Full suite（排除已知 NFR）：`.venv/bin/python -m pytest tests/ -q --ignore=tests/test_nfr_compliance.py --tb=short` → `3313 passed, 8 skipped`。
+- Py compile：`caveman/operator_output.py caveman/cli/source_governance.py caveman/training/_flywheel_dashboard_formatters.py tests/test_memory.py` pass。
+- Ruff changed files：pass。
+- Docs/API：`.venv/bin/python scripts/generate_api_reference.py --check` 生成 `caveman.operator_output` API 条目并已纳入本轮提交。
+- Security scan：added-line hardcoded secret/shell/eval/pickle/SQL-string-format patterns 0 matches；push hook safety checks passed。
+- Independent review：passed，无 security/logic blocker；非阻塞建议：若 public helper 后续被更多调用，可考虑显式校验/文档说明 `max_length` 必须为正。
+- Remote CI：code commit `2ee79fa9c0675cf97cb6e662eb5feee5d8708e48` GitHub Actions run `25185877026` completed success。
 
 ## Round 25 做了什么
 - 聚焦 Round 24 后续 operator-facing literal 安全：dashboard `Source policy drift` report 仍把 DB-derived source label / candidate 直接拼进 plaintext report，遇到 ANSI ESC/control characters 会造成 terminal spoofing 风险。
