@@ -247,3 +247,98 @@ class TestMemoryDecay:
 
         assert result.memories_scanned == 650
         assert result.memories_quarantined == 650
+
+    def test_source_aware_policy_quarantines_high_noise_imports_earlier(self, tmp_path):
+        """Dashboard-proven noisy import sources should not wait 90 days before quarantine."""
+        db_path = _create_test_db(tmp_path)
+        _insert_memory(
+            db_path,
+            "openclaw-noise",
+            trust=0.07,
+            created_days_ago=45,
+            retrieval_count=0,
+            helpful_count=0,
+            metadata={"source": "import:openclaw"},
+        )
+        _insert_memory(
+            db_path,
+            "generic-import",
+            trust=0.07,
+            created_days_ago=45,
+            retrieval_count=0,
+            helpful_count=0,
+            metadata={"source": "import:other"},
+        )
+        decay = MemoryDecay(db_path=db_path, archive_dir=tmp_path / "archive")
+
+        result = decay.run()
+
+        assert result.memories_quarantined == 1
+        conn = sqlite3.connect(str(db_path))
+        rows = dict(conn.execute("SELECT id, metadata_json FROM memories"))
+        conn.close()
+        openclaw_meta = json.loads(rows["openclaw-noise"])
+        generic_meta = json.loads(rows["generic-import"])
+        assert openclaw_meta["governance_state"] == "quarantined"
+        assert openclaw_meta["quarantine_reason"] == "source_policy_low_signal_import"
+        assert openclaw_meta["quarantine_policy"]["source"] == "import:openclaw"
+        assert "governance_state" not in generic_meta
+
+    def test_dry_run_reports_source_policy_quarantine_without_mutating_rows(self, tmp_path):
+        """Source-aware dry-run should expose estimated impact while preserving DB state."""
+        db_path = _create_test_db(tmp_path)
+        _insert_memory(
+            db_path,
+            "hermes-noise",
+            trust=0.05,
+            created_days_ago=45,
+            retrieval_count=0,
+            helpful_count=0,
+            metadata={"source": "import:hermes"},
+        )
+        decay = MemoryDecay(db_path=db_path, archive_dir=tmp_path / "archive")
+
+        result = decay.run(dry_run=True)
+
+        assert result.memories_quarantined == 1
+        assert result.quarantined_by_source == {"import:hermes": 1}
+        assert result.eligible_by_source == {"import:hermes": 1}
+        conn = sqlite3.connect(str(db_path))
+        meta_json, trust = conn.execute(
+            "SELECT metadata_json, trust_score FROM memories WHERE id = ?",
+            ("hermes-noise",),
+        ).fetchone()
+        conn.close()
+        assert "governance_state" not in json.loads(meta_json)
+        assert trust == pytest.approx(0.05)
+
+    def test_retrieved_or_helpful_noisy_source_imports_are_protected(self, tmp_path):
+        """Source policy must target low-signal imports, not useful imported knowledge."""
+        db_path = _create_test_db(tmp_path)
+        _insert_memory(
+            db_path,
+            "retrieved-openclaw",
+            trust=0.05,
+            created_days_ago=45,
+            retrieval_count=1,
+            helpful_count=0,
+            metadata={"source": "import:openclaw"},
+        )
+        _insert_memory(
+            db_path,
+            "helpful-hermes",
+            trust=0.05,
+            created_days_ago=45,
+            retrieval_count=0,
+            helpful_count=1,
+            metadata={"source": "import:hermes"},
+        )
+        decay = MemoryDecay(db_path=db_path, archive_dir=tmp_path / "archive")
+
+        result = decay.run()
+
+        assert result.memories_quarantined == 0
+        conn = sqlite3.connect(str(db_path))
+        metas = [json.loads(row[0]) for row in conn.execute("SELECT metadata_json FROM memories")]
+        conn.close()
+        assert all("governance_state" not in meta for meta in metas)

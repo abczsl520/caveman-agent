@@ -19,7 +19,7 @@ import logging
 import sqlite3
 
 from caveman.db import connect as db_connect
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any
@@ -40,6 +40,14 @@ _MAX_DECAY_PER_RUN = 2000    # Process enough rows to govern bulk-import noise i
 _QUARANTINE_TRUST_THRESHOLD = 0.07
 _QUARANTINE_DOWNRANK_TRUST = 0.01
 _IMPORT_SOURCE_PREFIX = "import:"
+_SOURCE_POLICY_LOW_SIGNAL_IMPORTS = frozenset({
+    "import:openclaw",
+    "import:openclaw-session",
+    "import:hermes",
+    "import:hermes-skill-ref",
+})
+_SOURCE_POLICY_MIN_AGE_DAYS = 30
+_SOURCE_POLICY_TRUST_THRESHOLD = 0.08
 
 
 @dataclass
@@ -50,6 +58,8 @@ class DecayResult:
     memories_pruned: int = 0
     memories_quarantined: int = 0
     trust_total_reduced: float = 0.0
+    quarantined_by_source: dict[str, int] = field(default_factory=dict)
+    eligible_by_source: dict[str, int] = field(default_factory=dict)
 
     def summary(self) -> str:
         return (
@@ -111,6 +121,7 @@ class MemoryDecay:
                 helpful_count = row["helpful_count"]
                 created_at = row["created_at"]
                 metadata = json.loads(row["metadata_json"] or "{}")
+                source = str(metadata.get("source", ""))
 
                 # Parse dates
                 try:
@@ -158,11 +169,37 @@ class MemoryDecay:
                     result.trust_total_reduced += trust - new_trust
                     result.memories_decayed += 1
 
+                source_policy_eligible = (
+                    source in _SOURCE_POLICY_LOW_SIGNAL_IMPORTS
+                    and (now - created).days >= _SOURCE_POLICY_MIN_AGE_DAYS
+                    and (now - created).days < _PRUNE_AGE_DAYS
+                    and new_trust <= _SOURCE_POLICY_TRUST_THRESHOLD
+                    and retrieval_count == 0
+                    and helpful_count == 0
+                    and metadata.get("governance_state") != "quarantined"
+                )
+                if source_policy_eligible:
+                    result.eligible_by_source[source] = result.eligible_by_source.get(source, 0) + 1
+                    metadata.setdefault("previous_trust_score", trust)
+                    metadata["governance_state"] = "quarantined"
+                    metadata["quarantine_reason"] = "source_policy_low_signal_import"
+                    metadata["quarantined_at"] = now.isoformat()
+                    metadata["quarantine_policy"] = {
+                        "source": source,
+                        "min_age_days": _SOURCE_POLICY_MIN_AGE_DAYS,
+                        "trust_threshold": _SOURCE_POLICY_TRUST_THRESHOLD,
+                        "requires_retrieval_count": 0,
+                        "requires_helpful_count": 0,
+                    }
+                    to_quarantine.append((mid, _QUARANTINE_DOWNRANK_TRUST, metadata))
+                    result.memories_quarantined += 1
+                    result.quarantined_by_source[source] = result.quarantined_by_source.get(source, 0) + 1
+                    continue
+
                 # Check for pruning
                 if (new_trust <= _PRUNE_THRESHOLD
                         and (now - created).days >= _PRUNE_AGE_DAYS
                         and retrieval_count == 0):
-                    source = str(metadata.get("source", ""))
                     if source.startswith(_IMPORT_SOURCE_PREFIX):
                         if helpful_count > 0:
                             continue
