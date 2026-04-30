@@ -29,6 +29,7 @@ from caveman.training._flywheel_dashboard_values import (
 )
 from caveman.training._flywheel_memory_diagnostics import (
     _collect_memory_source_breakdown as collect_memory_source_breakdown,
+    _collect_memory_source_governance as collect_memory_source_governance,
     _collect_memory_type_breakdown as collect_memory_type_breakdown,
     _memory_columns as memory_columns,
 )
@@ -135,8 +136,9 @@ class FlywheelDashboard:
             columns = memory_columns(cur)
             if {"type", "trust_score", "retrieval_count", "helpful_count"}.issubset(columns):
                 stats["type_breakdown"] = collect_memory_type_breakdown(cur)
-            if {"metadata_json", "trust_score", "retrieval_count", "helpful_count"}.issubset(columns):
+            if {"metadata_json", "created_at", "trust_score", "retrieval_count", "helpful_count"}.issubset(columns):
                 stats["source_breakdown"] = collect_memory_source_breakdown(cur)
+                stats["source_governance"] = collect_memory_source_governance(cur)
 
             # Decay candidates
             cur.execute(
@@ -339,10 +341,28 @@ class FlywheelDashboard:
         if source_breakdown:
             lines.append("   By source (top):")
             for row in source_breakdown[:6]:
+                if "active" in row:
+                    lines.append(
+                        "      "
+                        f"{row['label']}: n={row['total']}, active={row['active']}, "
+                        f"quarantined={row['quarantined']}, eligible={row['eligible_for_source_policy']}, "
+                        f"noise={row['never_recalled_pct'] * (1 - row['helpful_pct']):.0%}, "
+                        f"recall-reduction={row['quarantined'] / row['total']:.0%}"
+                    )
+                    continue
                 lines.append(
                     "      "
                     f"{row['label']}: n={row['total']}, avg={row['avg_trust']:.2f}, "
                     f"never={row['never_recalled_pct']:.0%}, helpful={row['helpful_pct']:.0%}"
+                )
+        source_governance = mem.get("source_governance", [])
+        if source_governance:
+            lines.append("   Source governance actions:")
+            for row in source_governance[:5]:
+                lines.append(
+                    "      "
+                    f"{row['label']}: eligible={row['eligible_for_source_policy']}, "
+                    f"quarantined={row['quarantined']}, noise={row['noise_score']:.0%}"
                 )
         type_breakdown = mem.get("type_breakdown", [])
         if type_breakdown:
