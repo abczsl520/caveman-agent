@@ -143,3 +143,39 @@ def test_embedding_eval_only_escapes_baseline_report(monkeypatch):
     assert "ok\\nP0: forged\\x1b[31m" in message
     assert "ok\nP0" not in message
     assert "\x1b" not in message
+
+
+def test_embedding_train_result_escapes_operator_output(monkeypatch):
+    class FakeEvaluator:
+        def evaluate_logged_results(self, model_path):
+            return {"baseline": "ok"}
+
+    class UnsafeResult(dict):
+        def __str__(self):
+            return "status=success model\nP0: forged\x1b[31m"
+
+    class FakeTrainer:
+        def __init__(self, config):
+            self.config = config
+
+        def train(self, dataset_path):
+            return UnsafeResult(status="success", model_path="model")
+
+    monkeypatch.setattr("caveman.training.eval_embedding.EmbeddingEvaluator", FakeEvaluator)
+    monkeypatch.setattr("caveman.training.embedding.PairExtractor", FakePairExtractor)
+    monkeypatch.setattr("caveman.training.embedding.EmbeddingTrainer", FakeTrainer)
+
+    message = run_train(
+        target="embedding",
+        model="",
+        trajectory_dir=None,
+        output_dir=None,
+        min_quality=0.7,
+        epochs=1,
+        format="sharegpt",
+        dry_run=False,
+    )
+
+    assert "status=success model\\nP0: forged\\x1b[31m" in message
+    assert "model\nP0" not in message
+    assert "\x1b" not in message
