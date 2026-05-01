@@ -1,9 +1,10 @@
 # Caveman 优化 HANDOFF
 
-更新时间: 2026-05-01 08:53 CST
+更新时间: 2026-05-01 09:16 CST
 
 ## 当前最终状态
 
+- Round 37 已完成、提交并推送到 `main`；code commit `60a456c44df1b1b959f303e192e979087bfaf934` (`[verified] escape import report operator output`)；GitHub Actions run `25197774691`，`https://github.com/abczsl520/caveman-agent/actions/runs/25197774691`，completed success。
 - Round 36 已完成、提交并推送到 `main`；code commit `256c658557243a0aa2345f07f587b16c67dddeb9` (`[verified] harden setup operator output`)；GitHub Actions run `25197084551`，`https://github.com/abczsl520/caveman-agent/actions/runs/25197084551`，completed success。
 - Round 35 handoff/docs commit `673e8b0722e77c4356d9dfe7c1293ad2c6fc0d5b` (`docs: update caveman handoff after round 35`)；git log 可见，作为本轮起点。
 - Round 35 已完成、提交并推送到 `main`；code commit `46301e90036f27358c6dce4ef9606746e20d8de4` (`[verified] escape gateway status diagnostics`)；GitHub Actions run `25196099823`，`https://github.com/abczsl520/caveman-agent/actions/runs/25196099823`，completed success。
@@ -29,10 +30,46 @@
 - Gateway 最后已知未运行；本轮未重启 gateway，优化任务不依赖 gateway。
 
 ## 下次启动时做
-1. 先确认 Round 36 handoff/docs commit 的 GitHub Actions run 已 success；若 Round 36 code commit `256c658` 的 run `25197084551` 已 success，不要重复长等。
-2. 继续扫描其他 CLI/dashboard config/file/DB-derived operator-facing 输出，优先寻找未使用 `operator_literal` 的字符串 label；每次只做一个 TDD 小切片。
-3. Dashboard 主文件仍有 450 行 hard limit；继续 dashboard 方向必须优先抽 helper，不要在 `flywheel_dashboard.py` 主文件堆逻辑。
-4. Rounds 37-50：按“证据→TDD→实现→门禁→review→commit/push→监控”小步推进；不要虚构完成 50 轮，每轮必须有验证与提交或明确 no-op 证据。
+1. 先确认 Round 37 handoff/docs commit 的 GitHub Actions run 已 success；若 Round 37 code commit `60a456c` 的 run `25197774691` 已 success，不要重复长等。
+2. 继续扫描 CLI/dashboard/report config/file/DB-derived operator-facing 输出，优先 `format_*report`、`typer.echo(format_...)`、Rich/TUI table rows 中未使用 `operator_literal` 的字符串 label；每次只做一个 TDD 小切片。
+3. 若延续 import report，低风险入口是 reviewer 建议的 `target_type` label literal 化；否则继续 source impact trend / quarantine candidate drift / training stats 输出。
+4. Rounds 38-50：按“证据→TDD→实现→门禁→review→commit/push→监控”小步推进；不要虚构完成 50 轮，每轮必须有验证与提交或明确 no-op 证据。
+
+## Round 37 做了什么
+- 先确认真实状态：`main` 最新为 Round 36 handoff/docs commit `77a99eb`，工作树起始干净；Round 36 handoff/docs CI run `25197265449` completed success；gateway health 不可达但本轮不依赖 gateway。
+- 执行 baseline：full suite（排除已知 NFR）起始为 `3326 passed, 8 skipped`。
+- 继续 operator-facing output 安全边界扫描，选中 `caveman/import_/report.py`：import detect/manifest/result report 直接输出 source label、source_path.name、skip_reason、warnings、details；这些字段来自外部导入源/文件名/扫描结果，若包含换行或 ANSI 控制字节，会伪造 CLI 输出或注入终端控制字节。
+- RED 新增 `tests/test_import_report_operator_output.py` 3 个 regression：detect source label、manifest source/path/skip_reason、result warnings/details 均要求 repr-style escaped literal，且没有真实 spoof 行或 raw ANSI。
+- GREEN：`format_detect_report()`、`format_manifest_report()`、`format_result_report()` 复用共享 `operator_literal()`；顺手移除两个无 placeholder f-string，保持 ruff 干净。
+
+## Round 37 验证结果
+- Round 36 handoff/docs CI：run `25197265449` completed success。
+- Baseline full suite（before change）：`.venv/bin/python -m pytest tests/ -q --ignore=tests/test_nfr_compliance.py --tb=short` → `3326 passed, 8 skipped in 116.26s`。
+- RED：`tests/test_import_report_operator_output.py` 初次运行 3 failed，原 report 输出 raw newline/ANSI。
+- GREEN focused：`tests/test_import_report_operator_output.py` → `3 passed`；operator literal shared smoke → `4 passed`。
+- Py compile：`caveman/import_/report.py tests/test_import_report_operator_output.py` pass。
+- Ruff changed files：`.venv/bin/ruff check caveman/import_/report.py tests/test_import_report_operator_output.py` → pass。
+- Full suite（排除已知 NFR）：`.venv/bin/python -m pytest tests/ -q --ignore=tests/test_nfr_compliance.py --tb=short` → `3329 passed, 8 skipped in 112.73s`。
+- Docs/API：`.venv/bin/python scripts/generate_api_reference.py --check` pass；无 API docs diff。
+- Security scan：added-line/final scan hardcoded secret/token/password、shell injection、eval/exec、pickle、SQL string-format patterns 0 matches；push hook safety checks passed。
+- Independent review：passed，无 `security_concerns`、无 `logic_errors`；non-blocking suggestion 是未来可考虑对 `target_type` label 也防御性 literal 化。
+- Remote CI：code commit `60a456c44df1b1b959f303e192e979087bfaf934` GitHub Actions run `25197774691` completed success。
+
+## Round 37 什么 work 了
+- 继续复用共享 `operator_literal`，没有新增第二套 escaping 语义；TDD regression 覆盖 import report 三个入口。
+- 把 import source/file/scan-result derived operator output 纳入同一安全边界，减少导入预览与结果报告的终端/日志 spoof 面。
+- 本地 full suite、ruff、security scan、independent review、push 和 GitHub Actions 全部通过。
+
+## Round 37 什么没做/没work
+- 本 handoff 更新将单独 docs commit；提交后需 push 并监控 CI。
+- Reviewer 建议的 `target_type` label literal 化未做：当前 target_type 来自 importer controlled enum-like 分类，风险低；下一轮若继续 import report 可用 TDD 小切片补上。
+- 未重启 gateway（当前自动续跑不依赖 gateway，且 SOP 要避免不必要启动）。
+- 第一次 CI 长轮询被 300s wrapper timeout 截断；随后短查询确认 code run 已 success。
+
+## Round 37 已知坑
+- `git add -N` 后 diff 才会包含 untracked 测试文件，review/security scan 不要漏扫新增测试。
+- 长 CI polling 不宜包在 `execute_code` 里超过 300s；若被截断，立即用短 API 查询 head_sha 状态，不要重复提交。
+- Import report 的 source/path/warnings/details 都是 external/file/scan-derived operator output；继续同类扫描时优先 grep `format_*report` 和 CLI `typer.echo(format_...)`。
 
 ## Round 36 做了什么
 - 先确认真实状态：`main` 最新为 Round 35 handoff/docs commit `673e8b0`，工作树起始有本轮未提交的 `caveman/cli/main.py` 与新增 `tests/test_cli_operator_output.py`（来自同一自动续跑上下文）；gateway health 不可达但本轮不依赖 gateway。
