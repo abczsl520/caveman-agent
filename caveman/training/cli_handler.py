@@ -69,7 +69,8 @@ def _run_embedding(
     if not pairs:
         return "❌ No pairs found. Run more tasks to generate trajectories first."
 
-    dataset_path = Path(config.output_dir) / "embedding_pairs.jsonl"
+    dataset_output_dir = Path(config.output_dir or (TRAINING_DIR / "embedding_output"))
+    dataset_path = dataset_output_dir / "embedding_pairs.jsonl"
     extractor.build_dataset(pairs, dataset_path)
 
     if dry_run:
@@ -86,12 +87,14 @@ def _run_embedding(
         # In this non-interactive gate we do not claim improvement from training
         # completion alone. Re-evaluation must produce objective metrics better
         # than the logged baseline before persisting selection.
+        model_path = result.get("model_path") or config.output_dir
+        model_path_for_selection = str(model_path)
         after_eval = evaluator.evaluate_logged_results(
-            model_path=str(result.get("model_path", config.output_dir))
+            model_path=model_path_for_selection
         )
         selected_path = TRAINING_DIR / "selected_embedding.json"
         selected = evaluator.write_selection(
-            result.get("model_path", config.output_dir),
+            model_path_for_selection,
             baseline_eval,
             after_eval,
             selected_path,
