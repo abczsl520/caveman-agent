@@ -1,9 +1,10 @@
 # Caveman 优化 HANDOFF
 
-更新时间: 2026-05-01 09:16 CST
+更新时间: 2026-05-01 09:52 CST
 
 ## 当前最终状态
 
+- Round 38 已完成、提交并推送到 `main`；code commit `b13e8d6f6cc1c1885c7a616fa484b41292030c56` (`[verified] escape import target type labels`)；GitHub Actions run `25198448467`，`https://github.com/abczsl520/caveman-agent/actions/runs/25198448467`，completed success。
 - Round 37 已完成、提交并推送到 `main`；code commit `60a456c44df1b1b959f303e192e979087bfaf934` (`[verified] escape import report operator output`)；GitHub Actions run `25197774691`，`https://github.com/abczsl520/caveman-agent/actions/runs/25197774691`，completed success。
 - Round 36 已完成、提交并推送到 `main`；code commit `256c658557243a0aa2345f07f587b16c67dddeb9` (`[verified] harden setup operator output`)；GitHub Actions run `25197084551`，`https://github.com/abczsl520/caveman-agent/actions/runs/25197084551`，completed success。
 - Round 35 handoff/docs commit `673e8b0722e77c4356d9dfe7c1293ad2c6fc0d5b` (`docs: update caveman handoff after round 35`)；git log 可见，作为本轮起点。
@@ -30,10 +31,45 @@
 - Gateway 最后已知未运行；本轮未重启 gateway，优化任务不依赖 gateway。
 
 ## 下次启动时做
-1. 先确认 Round 37 handoff/docs commit 的 GitHub Actions run 已 success；若 Round 37 code commit `60a456c` 的 run `25197774691` 已 success，不要重复长等。
+1. 先确认 Round 38 handoff/docs commit 的 GitHub Actions run 已 success；若 Round 38 code commit `b13e8d6` 的 run `25198448467` 已 success，不要重复长等。
 2. 继续扫描 CLI/dashboard/report config/file/DB-derived operator-facing 输出，优先 `format_*report`、`typer.echo(format_...)`、Rich/TUI table rows 中未使用 `operator_literal` 的字符串 label；每次只做一个 TDD 小切片。
-3. 若延续 import report，低风险入口是 reviewer 建议的 `target_type` label literal 化；否则继续 source impact trend / quarantine candidate drift / training stats 输出。
-4. Rounds 38-50：按“证据→TDD→实现→门禁→review→commit/push→监控”小步推进；不要虚构完成 50 轮，每轮必须有验证与提交或明确 no-op 证据。
+3. 下一轮建议转向 source impact trend / quarantine candidate drift / training stats 输出，或继续审查 `format_scan_report` / code-health report 的 operator-facing labels。
+4. Rounds 39-50：按“证据→TDD→实现→门禁→review→commit/push→监控”小步推进；不要虚构完成 50 轮，每轮必须有验证与提交或明确 no-op 证据。
+
+## Round 38 做了什么
+- 先确认真实状态：`main` 最新为 Round 37 handoff/docs commit `9ab7317`，工作树起始干净；Round 37 code CI run `25197774691` 已 success；gateway health 不可达但本轮不依赖 gateway。
+- 执行 baseline：full suite（排除已知 NFR）起始为 `3329 passed, 8 skipped`。
+- 延续 Round 37 independent reviewer 的建议，审查 `caveman/import_/report.py` 的 manifest target type 分组标题。虽然正常 importers 传入 enum-like target types，但 `ImportItem.target_type` 是普通字符串，report 会直接执行 `ttype.title()`；若未来外部 importer 或异常 manifest 携带换行/ANSI，仍可伪造 CLI report 行或注入终端控制字节。
+- RED 新增 `test_import_manifest_report_escapes_target_type_labels`，证明原输出会产生 raw `
+SPOOF_TARGET` 与 raw ANSI。
+- GREEN：新增私有 `_target_type_label()`；安全的 alnum/underscore target type 保持原有 TitleCase 可读性（兼容 `Memory` 断言），异常/带控制字符的 target type 走共享 `operator_literal()`。
+
+## Round 38 验证结果
+- Baseline full suite（before change）：`.venv/bin/python -m pytest tests/ -q --ignore=tests/test_nfr_compliance.py --tb=short` → `3329 passed, 8 skipped in 116.40s`。
+- RED：`tests/test_import_report_operator_output.py::test_import_manifest_report_escapes_target_type_labels` 初次运行 1 failed，原 report 输出 raw newline/ANSI。
+- GREEN focused：`tests/test_import_report_operator_output.py` → `4 passed`。
+- Related tests：`tests/test_import_system.py tests/test_import_report_operator_output.py tests/test_memory.py::test_operator_literal_helper_is_shared_across_cli_and_dashboard` → `64 passed`。
+- Py compile：`caveman/import_/report.py tests/test_import_report_operator_output.py` pass。
+- Ruff changed files：`.venv/bin/ruff check caveman/import_/report.py tests/test_import_report_operator_output.py` → pass。
+- Docs/API：`.venv/bin/python scripts/generate_api_reference.py --check` pass；无 API docs diff。
+- Full suite（排除已知 NFR）：`.venv/bin/python -m pytest tests/ -q --ignore=tests/test_nfr_compliance.py --tb=short` → `3330 passed, 8 skipped in 115.04s`。
+- Security scan：added-line/final scan hardcoded secret/token/password、shell injection、eval/exec、pickle、SQL string-format patterns 0 matches；push hook safety checks passed。
+- Independent review：passed，无 `security_concerns`、无 `logic_errors`；non-blocking suggestion 是未来可给 `_target_type_label` 增加 safe-character policy 注释。
+- Remote CI：code commit `b13e8d6f6cc1c1885c7a616fa484b41292030c56` GitHub Actions run `25198448467` completed success。
+
+## Round 38 什么 work 了
+- TDD 小切片直接补上 Round 37 reviewer 建议，没有扩大范围；保持 import target type 正常显示兼容，同时封住异常 label 的终端/日志 spoof 面。
+- 继续复用共享 `operator_literal`，没有新增第二套 escaping 语义。
+- 本地 baseline、RED/GREEN、related/full suite、ruff、security scan、independent review、push 和 GitHub Actions 全部通过。
+
+## Round 38 什么没做/没work
+- 本 handoff 更新将单独 docs commit；提交后需 push 并监控 CI。
+- 未重启 gateway（当前自动续跑不依赖 gateway，且 SOP 要避免不必要启动）。
+- 未继续扫描 `format_scan_report` / source impact trend / quarantine drift；留给 Round 39。
+
+## Round 38 已知坑
+- `str.title()` 会把换行后的 spoof 文本也转成像正常标题的形式，并保留 ANSI escape；operator-facing labels 即使“看起来像 enum”也需要对异常字符串 fail-closed。
+- GitHub Actions run list 偶尔短暂 `RUN_NOT_FOUND`（API/visibility eventual consistency），同一 SHA 后续会出现；不要把短暂无结果误判为未触发。
 
 ## Round 37 做了什么
 - 先确认真实状态：`main` 最新为 Round 36 handoff/docs commit `77a99eb`，工作树起始干净；Round 36 handoff/docs CI run `25197265449` completed success；gateway health 不可达但本轮不依赖 gateway。
@@ -325,3 +361,4 @@
 - Round 21：source-governance preview checklist + escaping，commit `4cfa335`，CI success。
 - Round 20：preview-drift re-run command 保留 custom `--db`/`--limit` 并 shell quote，commit `fd23409`，CI success。
 - Round 19：preview-drift copy/paste workflow + safe Python literal allowlist entries，commit `7062e34`，CI success。
+
