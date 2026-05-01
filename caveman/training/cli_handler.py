@@ -102,11 +102,11 @@ def _run_embedding(
         )
         report = evaluator.compare(baseline_eval, after_eval)
         if selected:
-            return message + f"\n{report}\n✅ Auto-selected embedding model: {selected_path}"
+            return message + f"\n{operator_literal(report)}\n✅ Auto-selected embedding model: {operator_literal(selected_path)}"
         ok, reason = evaluator.improvement_decision(
             baseline_eval, after_eval, min_delta=min_eval_delta
         )
-        return message + f"\n{report}\n⚠️ Auto-select not changed: {reason}"
+        return message + f"\n{operator_literal(report)}\n⚠️ Auto-select not changed: {operator_literal(reason)}"
 
     return message
 
