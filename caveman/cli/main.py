@@ -2,6 +2,8 @@
 import typer
 from pathlib import Path
 from typing import Optional
+
+from caveman.operator_output import operator_literal
 app = typer.Typer(name="caveman", help="An agent that learns, executes, and evolves.")
 
 @app.callback(invoke_without_command=True)
@@ -16,7 +18,7 @@ def main_callback(ctx: typer.Context) -> None:
         typer.echo(ctx.get_help())
 
 # Register wiki + mcp commands
-from caveman.cli.wiki_mcp import register_wiki_commands, register_mcp_commands
+from caveman.cli.wiki_mcp import register_wiki_commands, register_mcp_commands  # noqa: E402
 register_wiki_commands(app)
 register_mcp_commands(app)
 
@@ -47,7 +49,7 @@ def run(
     try:
         loop = create_loop(model=model, max_iterations=max_iter)
         typer.echo(f"[Model: {model} | Tools: {len(loop.tool_registry.get_schemas())} loaded]")
-        result = asyncio.run(loop.run(task))
+        asyncio.run(loop.run(task))
     except KeyboardInterrupt:
         typer.echo("\n🛑 Interrupted.")
         raise typer.Exit(0)
@@ -104,19 +106,21 @@ def setup() -> None:
     model = DEFAULT_MODEL
 
     if detected:
-        typer.echo(f"\n\U0001f50d Detected existing configs:")
+        typer.echo("\n\U0001f50d Detected existing configs:")
         for source, info in detected.items():
-            typer.echo(f"  \u2022 {source}: {info['path']}")
+            source_label = operator_literal(source)
+            path_label = operator_literal(info['path'])
+            typer.echo(f"  \u2022 {source_label}: {path_label}")
             if info.get("api_key"):
-                typer.echo(f"    API key: {info['api_key'][:8]}...{info['api_key'][-4:]}")
+                typer.echo("    API key: [REDACTED]")
             if info.get("model"):
-                typer.echo(f"    Model: {info['model']}")
+                typer.echo(f"    Model: {operator_literal(info['model'])}")
 
         # Offer to import
         best = next(iter(detected.values()))
         if best.get("api_key"):
             import_key = typer.confirm(
-                f"Import API key from {next(iter(detected))}?", default=True
+                f"Import API key from {operator_literal(next(iter(detected)))}?", default=True
             )
             if import_key:
                 api_key = best["api_key"]
@@ -141,7 +145,7 @@ def setup() -> None:
         "# Caveman config\n" + _yaml.safe_dump(config_data, default_flow_style=False, sort_keys=False),
         encoding="utf-8",
     )
-    typer.echo(f"\u2705 Config saved to {CONFIG_PATH}")
+    typer.echo(f"✅ Config saved to {operator_literal(CONFIG_PATH)}")
     typer.echo("Run: caveman run 'your task here'")
 
 def _detect_external_configs() -> dict[str, dict]:
@@ -386,13 +390,13 @@ def plugins(
         typer.echo(f"Loaded {count} plugins")
 
 # Register utility commands (obsidian, status, flywheel, audit, bench, etc.)
-from caveman.cli.utility_commands import register_utility_commands
+from caveman.cli.utility_commands import register_utility_commands  # noqa: E402
 register_utility_commands(app)
 
-from caveman.cli.memory_quarantine import app as memory_quarantine_app
+from caveman.cli.memory_quarantine import app as memory_quarantine_app  # noqa: E402
 app.add_typer(memory_quarantine_app, name="memory-quarantine")
 
-from caveman.cli.source_governance import app as source_governance_app
+from caveman.cli.source_governance import app as source_governance_app  # noqa: E402
 app.add_typer(source_governance_app, name="source-governance")
 
 import caveman.cli.acp_cli  # noqa: F401, E402
