@@ -10,12 +10,12 @@ Phase: 日常优化 | Gate: cron-auto | 更新: 2026-05-01
 
 ## HANDOFF
 ### 下次启动时做
-继续下一轮：确认 Round 50 code commit e9ed5b4 与 handoff docs commit CI 后，扫描 _run_embedding auto-select 中 report、selected_path、reason 派生的 operator-facing 输出，按 TDD 做一个小切片。
+继续下一轮：确认 HEAD/CI 状态（当前最新 code commit `a495999` 已 push；GitHub Actions run `25205957210` success），继续扫描 training CLI operator-facing 输出，优先查 `model`、`format`、`method`、`trajectory_dir`、`output_dir` 等 CLI 参数或训练/评估子模块是否还有未 escape 的最终 operator-facing message，按 TDD 做一个小切片。
 ### 上次做了什么
-Round 50 完成：为 caveman/training/cli_handler.py 的 _run_embedding train result 输出添加 operator_literal escaping；新增 tests/test_training_cli_handler_operator_output.py 覆盖 trainer result __str__ 换行/ANSI 注入；focused tests、ruff、security scan、independent review、full suite baseline、push 均通过。
+Round 52 完成：在 `_run_sft` 与 `_run_rl` 非 dry-run train result 最终 operator-facing 输出加 `operator_literal()`；新增两条 regression tests 覆盖 trainer result `__str__` 中 newline/ANSI 注入；commit `a495999` (`[verified] escape sft rl train result output`) 已 push 到 `origin/main`，CI run `25205957210` success。
 ### 什么work了
-operator_literal 继续作为单一 operator-facing literal 边界；full suite baseline 3348 passed / 8 skipped；push 到 main 成功。
+RED tests 先失败；focused tests `10 passed`；ruff passed；full suite `3372 passed, 8 skipped`；staged security scan 0 findings；independent review passed；push hook public-repo safety checks passed；GitHub Actions success。
 ### 什么没做/没work
-GitHub Actions run id/结论未确认：cron 环境缺少 authenticated gh/GitHub token；未处理 _run_embedding auto-select report/selected_path/reason 动态输出；gateway health 不可达但本轮未重启。
+未恢复自动 cron job；未重启 gateway；未系统性审完整个 training 子系统全部输出。baseline-aware mypy gate 本地 staged simulation 仍可能识别 changed files 为空，需结合 direct mypy/CI 判断。
 ### 已知坑
-Training CLI eval/status/auto-select message 也属于 operator-facing 输出；Python f-string 对 custom report/result object 会调用 __str__，dict 子类也可覆盖 __str__；CLI 参数和 path/model/result dict/eval report/reason 都需要在最终输出边界 escape；repo-wide secret scan 会命中既有测试 canary，push 前至少做 staged/changed-file scan；不要打印 token 值，只写 [REDACTED]。
+Training CLI eval/status/auto-select/train result message 都属于 operator-facing 输出；Python f-string 对 custom result/report object 会调用 `__str__`，可能引入控制字符；CLI 参数和 path/model/result dict/eval report/reason/selection path 都需要在最终输出边界 escape；push 前至少做 staged/changed-file sensitive scan；不要打印 token 值，只写 `[REDACTED]`。
