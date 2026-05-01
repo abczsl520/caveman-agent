@@ -1,6 +1,8 @@
 """Import report generator — pretty terminal output."""
 from __future__ import annotations
 
+from caveman.operator_output import operator_literal
+
 from .base import ImportManifest, ImportResult
 
 __all__ = [
@@ -15,9 +17,9 @@ def format_manifest_report(manifest: ImportManifest, dry_run: bool = True) -> st
     """Format a scan manifest as a readable report."""
     lines: list[str] = []
     mode = "dry-run" if dry_run else "execute"
-    lines.append(f"\n🦴 Caveman Import Report")
+    lines.append("\n🦴 Caveman Import Report")
     lines.append("=" * 40)
-    lines.append(f"Source: {manifest.source}")
+    lines.append(f"Source: {operator_literal(manifest.source)}")
     lines.append(f"Mode: {mode}")
     lines.append("")
 
@@ -49,7 +51,7 @@ def format_manifest_report(manifest: ImportManifest, dry_run: bool = True) -> st
         if skipped:
             lines.append(f"  ⏭️ Skipped: {len(skipped)}")
             for item in skipped[:3]:
-                lines.append(f"    {item.source_path.name}: {item.skip_reason}")
+                lines.append(f"    {operator_literal(item.source_path.name)}: {operator_literal(item.skip_reason)}")
 
         lines.append("")
 
@@ -67,7 +69,7 @@ def format_manifest_report(manifest: ImportManifest, dry_run: bool = True) -> st
 def format_result_report(result: ImportResult) -> str:
     """Format execution result as a readable report."""
     lines: list[str] = []
-    lines.append(f"\n🦴 Import Complete")
+    lines.append("\n🦴 Import Complete")
     lines.append("=" * 40)
     lines.append(f"  Imported:   {result.imported}")
     lines.append(f"  Duplicates: {result.duplicates}")
@@ -78,12 +80,12 @@ def format_result_report(result: ImportResult) -> str:
     if result.warnings:
         lines.append("\n⚠️ Warnings:")
         for w in result.warnings[:10]:
-            lines.append(f"  {w}")
+            lines.append(f"  {operator_literal(w)}")
 
     if result.details:
         lines.append("\nDetails:")
         for d in result.details[:20]:
-            lines.append(f"  {d}")
+            lines.append(f"  {operator_literal(d)}")
 
     return "\n".join(lines)
 
@@ -93,5 +95,5 @@ def format_detect_report(detected: dict[str, bool]) -> str:
     lines = ["\n🔍 Detected Sources:"]
     for source, found in detected.items():
         icon = "✅" if found else "❌"
-        lines.append(f"  {icon} {source}")
+        lines.append(f"  {icon} {operator_literal(source)}")
     return "\n".join(lines)
