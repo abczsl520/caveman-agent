@@ -1,55 +1,49 @@
 # Caveman 优化 HANDOFF
 
-更新时间: 2026-05-01 15:10 CST
+更新时间: 2026-05-01 15:45 CST
 
 ## 当前最终状态
 
-- Round 51 已完成、提交并推送到 `main`；code commit `5d68fac` (`[verified] escape embedding auto-select output`)。
-- 本轮起始确认 local/main HEAD 为 `dde7806`，Round 50 follow-up CI 已知 green；pre-run gateway health 不可达，本轮未重启 gateway。
-- 本轮 push 到 `origin/main` 成功；push hook public-repo safety checks passed。`origin/main` 已包含 `5d68fac`。
-- 当前 cron 环境没有 `gh`，也没有 GitHub API token；未能查询 GitHub Actions run id/结论。credential 状态只记录为 `[REDACTED]`，未泄露 token。
-- 自动续跑 cron job 保持不变；本 cron run 未创建/修改/删除 cron jobs。
+- Round 52 已完成、提交并推送到 `main`；code commit `a495999` (`[verified] escape sft rl train result output`)。
+- `origin/main` 与 local `HEAD` 均为 `a4959994d99accc20a6ba6a8ac1588a843519a3b`。
+- GitHub Actions run `25205957210` 已完成且 `success`：https://github.com/abczsl520/caveman-agent/actions/runs/25205957210
+- 本轮 push hook public-repo safety checks passed；未输出或保存任何 credential/token 值。
+- 自动续跑 cron job 仍保持暂停/未恢复；本轮未创建/修改/删除 cron jobs。
 
 ## 下次启动时做
-1. 先确认 Round 51 code commit `5d68fac` 与本 handoff docs commit 的 GitHub Actions 状态；如果 credential 恢复，补查 run id/结论。
-2. 继续下一轮：扫描 training CLI operator-facing 输出，优先 `_run_sft` / `_run_rl` 非 dry-run train result 输出是否也需要 `operator_literal()`；每次只做一个 TDD 小切片。
-3. 继续按“证据→TDD RED→实现 GREEN→focused/full suite→ruff/security→independent review→commit/push→CI→handoff”推进。
-4. Gateway health 当前不可达但本自动续跑不依赖 gateway；除非任务明确需要，不要重启 gateway。
+1. 先确认 `HEAD`/`origin/main`/CI 状态，避免重复 Round 52。
+2. 继续扫描 training CLI operator-facing 输出；优先查 `model`、`format`、`method`、`trajectory_dir`、`output_dir` 等 CLI 参数是否还有直接进入最终 message 的路径，或转向训练/评估子模块的 operator-facing 输出边界。
+3. 每轮继续只做一个 TDD 小切片：证据 → RED → GREEN → focused/full suite → ruff/security scan → independent review → commit/push → CI → handoff。
+4. Gateway health 不是本轮依赖；除非任务明确需要，不要重启 gateway。
 
-## Round 51 做了什么
-- 确认真实状态：`main` 起始为 `dde7806`，`CAVEMAN_OPTIMIZATION_HANDOFF.md` 已显示 Round 50 follow-up CI 修复完成；pre-run gateway health 不可达，本轮未重启 gateway。
-- 继续 operator-facing output 安全边界扫描，聚焦 `caveman.training.cli_handler._run_embedding()` 的 auto-select 分支。
-- 发现 root cause：auto-select 分支中 `evaluator.compare(...)` 产出的 `report`、`evaluator.improvement_decision(...)` 产出的 `reason`、以及 selected path 都直接拼入最终 CLI/operator message。若 evaluator/report/path 含换行或 ANSI/control chars，可伪造后续行。
-- RED：新增 `test_embedding_auto_select_escapes_report_and_reason`，fake evaluator 返回含 `\nP0:` 和 `\x1b[31m` 的 report/reason，旧实现 raw 输出并失败。
-- GREEN：在 auto-select selected/not-changed 两条返回路径上复用共享 `operator_literal()`，只在最终 message 边界 escape `report`、`reason`、`selected_path`。
-- 按 reviewer 建议补充 success branch regression：`test_embedding_auto_select_escapes_report_and_selected_path` 覆盖 selected=true 时 report 与 selected path escaping。
-- 该切片不改 pair extraction、dataset build、embedding train/eval/selection 决策逻辑，不改 raw evaluator 数据层，只锁住 CLI auto-select status 的 operator boundary。
+## Round 52 做了什么
+- 从恢复态继续，确认上一轮 docs/code 已在 `origin/main`，仅 `memory/projects/caveman优化2.md` 有外部 handoff 改动。
+- 选择最高复利的小切片：`_run_sft()` 与 `_run_rl()` 非 dry-run trainer result 直接拼入 operator-facing message (`return f"✅ {result}"`)。
+- RED：新增两个 regression tests，fake trainer result 的 `__str__()` 返回 `\nP0:` 与 `\x1b[31m`，旧实现 raw 输出并失败。
+- GREEN：在 SFT/RL train result 最终 message 边界统一改为 `operator_literal(result)`；不改变 trainer 数据结构、训练流程或 dry-run 行为。
 
-## Round 51 验证结果
-- Baseline：`.venv/bin/python -m pytest tests/ -q --ignore=tests/test_nfr_compliance.py` → `3348 passed, 8 skipped in 117.53s`。
-- RED：`.venv/bin/python -m pytest tests/test_training_cli_handler_operator_output.py::test_embedding_auto_select_escapes_report_and_reason -q` 旧实现失败；失败原因为 message raw 包含 `## Report\nP0: forged\x1b[31m` 与 `quality\nP0: reason\x1b[31m`。
-- Focused GREEN：`test_embedding_auto_select_escapes_report_and_reason` → `1 passed`。
-- Reviewer suggestion follow-up RED/GREEN：新增 selected branch test，先因未覆盖/未安全处理 selected path 失败，修正测试 fixture 后通过。
-- Focused gates：`.venv/bin/python -m pytest tests/test_training_cli_handler_operator_output.py tests/test_flywheel_dashboard_operator_output.py tests/test_training_stats_operator_output.py -q` → `15 passed in 0.09s`。
-- Py compile：`.venv/bin/python -m py_compile caveman/training/cli_handler.py tests/test_training_cli_handler_operator_output.py` pass。
+## Round 52 验证结果
+- RED focused：`tests/test_training_cli_handler_operator_output.py` 旧实现出现 2 个失败，确认 raw newline/ANSI 泄漏。
+- Focused GREEN：`.venv/bin/python -m pytest tests/test_training_cli_handler_operator_output.py -q` → `10 passed in 0.05s`。
 - Ruff：`.venv/bin/python -m ruff check caveman/training/cli_handler.py tests/test_training_cli_handler_operator_output.py` → pass。
-- Full suite：`.venv/bin/python -m pytest tests/ -q --ignore=tests/test_nfr_compliance.py` → `3350 passed, 8 skipped in 113.94s`。
-- Security scan：staged diff hardcoded secret/token/password、shell injection、eval/exec、pickle、SQL string-format patterns 0 matches；push hook public safety checks passed。
-- Independent review：passed；无 blocking `security_concerns`，无 `logic_errors`。
-- Remote CI：push 到 `origin/main` 成功；CI 查询因 cron 环境缺少 `gh` / token，未能获取 run id/结论。
+- Full suite：`.venv/bin/python -m pytest -q` → `3372 passed, 8 skipped in 115.07s`。
+- Security scan：cached/staged added-line hardcoded secret/token/password、shell injection、eval/exec、pickle、SQL string-format patterns 0 matches。
+- Baseline-aware mypy gate：historical full-project errors remain visible；本地 staged simulation 未检测到 changed files，但 direct mypy only reports historical `eval_embedding.py` / `sft.py` errors, not this slice。
+- Independent review：passed；无 blocking `security_concerns`、`logic_errors`、`test_issues`。
+- Push：`git push origin main` succeeded；public repo safety checks passed。
+- Remote CI：run `25205957210` completed `success`。
 
-## Round 51 什么 work 了
-- 小切片 TDD 有效：report/reason 先失败再修复；selected path 根据 independent review 建议追加成功分支覆盖。
-- 继续复用单一 `operator_literal()` 边界，保持“最终 formatter/message 边界 escape，数据层保留 raw 值”的原则。
-- Full suite baseline 3348 passed / 8 skipped，完成后 3350 passed / 8 skipped（排除 NFR），新增 2 个 operator-output regression tests。
+## Round 52 什么 work 了
+- TDD 闭环有效：SFT/RL 两条非 dry-run operator output 在旧实现确实失败，修复后 focused/full suite 均通过。
+- `operator_literal()` 继续作为单一最终输出边界；保持 raw 数据层不变，只消除 operator terminal/log forging 面。
+- 通过 git credential 读取 GitHub token 但只用于 Authorization header；日志/文档只记录 `[REDACTED]` 语义和 run id，不记录 token 值。
 
-## Round 51 什么没做/没work
-- 未能确认 GitHub Actions run id/结论：当前 cron 环境没有 `gh` / GitHub API token；输出 credential 状态只写 `[REDACTED]`。
-- 本轮只处理 embedding auto-select report/reason/selected_path；未继续处理 `_run_sft` / `_run_rl` 非 dry-run train result 输出。
-- 未重启 gateway（当前自动续跑不依赖 gateway）。
+## Round 52 什么没做/没work
+- 未恢复自动 cron job；当前对话是人工“恢复了，继续”后推进。
+- 未重启 gateway。
+- 未系统性审完整个 training 子系统的所有输出；下一轮应继续扫描 remaining operator-facing boundaries。
 
-## Round 51 已知坑
-- Training CLI 的 dry-run/status/eval/auto-select 字符串都是 operator-facing 输出；来自 CLI 参数、文件 path、模型名、dataset path、训练结果 dict、eval report/reason/selection path 的动态值都应在最终输出边界 escape。
-- Python f-string 对非-dict object 会调用 `__str__`；dict 子类也可覆盖 `__str__`，不能假设 result/report/reason 是安全可打印对象。
-- Repo-wide secret regex 会命中既有 redaction/scanner 测试 canary 与示例 pattern；本轮未新增这些内容。push 前应至少做 staged/changed-file sensitive scan，并保留 push hook 的 public-repo safety check。
-- GitHub Actions API credential 在 cron 环境可能缺失；push 可成功不代表 API polling 可用。不要打印 token 值。
+## Round 52 已知坑
+- `operator_literal()` 使用 `repr(str(value))` 风格，测试里应断言 escaped `\\n` / `\\x1b` 出现，并断言 raw newline/ESC 不出现。
+- Baseline-aware mypy gate 依赖 CI diff 环境；本地 staged 文件在某些路径下可能被识别为空 changed-file 列表，因此仍需结合 direct mypy/CI 结果判断。
+- Repo-wide sensitive scan 可能命中历史 canary/测试样本；push 前至少扫描 staged/changed added lines，push hook 仍是最后防线。
