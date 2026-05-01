@@ -78,7 +78,7 @@ def _run_embedding(
     trainer = EmbeddingTrainer(config)
     result = trainer.train(dataset_path)
     status = result.get("status") if isinstance(result, dict) else None
-    message = f"✅ {result}"
+    message = f"✅ {operator_literal(result)}"
 
     if auto_select:
         if status != "success":
