@@ -61,7 +61,7 @@ def _run_embedding(
     evaluator = EmbeddingEvaluator()
     baseline_eval = evaluator.evaluate_logged_results(model_path="logged-baseline")
     if eval_only:
-        return f"📊 Embedding eval-only — {baseline_eval}"
+        return f"📊 Embedding eval-only — {operator_literal(baseline_eval)}"
 
     extractor = PairExtractor(min_quality=min_quality)
     pairs = extractor.extract_from_directory(traj_dir)
