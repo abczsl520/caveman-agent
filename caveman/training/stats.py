@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from caveman.operator_output import operator_literal
+
 
 def show_training_stats(trajectory_dir: str | None, min_quality: float) -> str:
     """Analyze trajectory stats for training readiness. Returns formatted text."""
@@ -10,7 +12,7 @@ def show_training_stats(trajectory_dir: str | None, min_quality: float) -> str:
     traj_dir = Path(trajectory_dir).expanduser() if trajectory_dir else TRAJECTORIES_DIR
 
     if not traj_dir.exists():
-        return f"📂 No trajectories found at {traj_dir}"
+        return f"📂 No trajectories found at {operator_literal(traj_dir)}"
 
     total = 0
     quality_bins = {"high": 0, "mid": 0, "low": 0, "unscored": 0}
@@ -43,7 +45,7 @@ def show_training_stats(trajectory_dir: str | None, min_quality: float) -> str:
             continue
 
     lines = [
-        f"📊 Trajectory Stats ({traj_dir})",
+        f"📊 Trajectory Stats ({operator_literal(traj_dir)})",
         f"   Total entries: {total}",
         f"   Unique tasks: {len(tasks)}",
         f"   Total turns: {total_turns}",
