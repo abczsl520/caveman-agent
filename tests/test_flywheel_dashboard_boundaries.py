@@ -726,7 +726,7 @@ def test_decay_dry_run_reports_restorable_quarantine_sources(tmp_path, monkeypat
     formatted.metrics["rl_router"] = {}
     formatted.metrics["wiki"] = {}
     report = formatted.format_report()
-    assert "Restorable quarantine: import:hermes=1, import:openclaw=1" in report
+    assert "Restorable quarantine: 'import:hermes'=1, 'import:openclaw'=1" in report
 
 
 def test_restorable_quarantine_report_survives_decay_preview_failure(tmp_path, monkeypatch):
@@ -765,4 +765,4 @@ def test_restorable_quarantine_report_survives_decay_preview_failure(tmp_path, m
     formatted.metrics["trajectories"] = {}
     formatted.metrics["rl_router"] = {}
     formatted.metrics["wiki"] = {}
-    assert "Restorable quarantine: import:hermes=1" in formatted.format_report()
+    assert "Restorable quarantine: 'import:hermes'=1" in formatted.format_report()

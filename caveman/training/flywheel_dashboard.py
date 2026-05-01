@@ -1,15 +1,4 @@
-"""Flywheel Health Dashboard — observability for the self-improvement loop.
-
-Aggregates metrics from all flywheel subsystems into a single health report:
-  - Memory: trust distribution, decay stats, retrieval rates
-  - Skills: RL Router arm stats, reflect activity
-  - Wiki: compilation stats, tier distribution
-  - Training: trajectory quality, contrastive pair availability
-  - Event chain: handler registration, firing rates
-
-Usage:
-    python -m caveman.training.flywheel_dashboard
-"""
+"""Flywheel Health Dashboard — observability for the self-improvement loop."""
 from __future__ import annotations
 
 import json
@@ -21,7 +10,7 @@ from typing import Any, cast
 
 from caveman.memory.decay import MemoryDecay
 from caveman.paths import MEMORY_DIR, MEMORY_DB_PATH, TRAJECTORIES_DIR, SKILLS_DIR, WIKI_DIR
-from caveman.training._flywheel_dashboard_formatters import _format_source_policy_drift
+from caveman.training._flywheel_dashboard_formatters import _format_restorable_quarantine, _format_source_policy_drift
 from caveman.training._flywheel_dashboard_values import (
     _count_value as count_value,
     _number_value as number_value,
@@ -371,8 +360,10 @@ class FlywheelDashboard:
         restorable_by_source = mem.get("restorable_quarantine_by_source", {})
         if not restorable_by_source and decay_dry_run:
             restorable_by_source = decay_dry_run.get("restorable_quarantine_by_source", {})
-        if restorable_by_source:
-            lines.append("   Restorable quarantine: " + ", ".join(f"{s}={c}" for s, c in restorable_by_source.items()))
+        restorable_by_reason = mem.get("restorable_quarantine_by_reason", {})
+        if not restorable_by_reason and decay_dry_run:
+            restorable_by_reason = decay_dry_run.get("restorable_quarantine_by_reason", {})
+        lines.extend(_format_restorable_quarantine(restorable_by_source, restorable_by_reason))
         if source_breakdown := mem.get("source_breakdown", []):
             lines.append("   By source (top):")
             for row in source_breakdown[:6]:
