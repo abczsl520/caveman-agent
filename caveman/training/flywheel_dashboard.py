@@ -10,7 +10,11 @@ from typing import Any, cast
 
 from caveman.memory.decay import MemoryDecay
 from caveman.paths import MEMORY_DIR, MEMORY_DB_PATH, TRAJECTORIES_DIR, SKILLS_DIR, WIKI_DIR
-from caveman.training._flywheel_dashboard_formatters import _format_restorable_quarantine, _format_source_policy_drift
+from caveman.training._flywheel_dashboard_formatters import (
+    _format_restorable_quarantine,
+    _format_source_policy_drift,
+    _operator_literal,
+)
 from caveman.training._flywheel_dashboard_values import (
     _count_value as count_value,
     _number_value as number_value,
@@ -370,7 +374,7 @@ class FlywheelDashboard:
                 if "active" in row:
                     lines.append(
                         "      "
-                        f"{row['label']}: n={row['total']}, active={row['active']}, "
+                        f"{_operator_literal(row['label'])}: n={row['total']}, active={row['active']}, "
                         f"quarantined={row['quarantined']}, eligible={row['eligible_for_source_policy']}, "
                         f"noise={row['never_recalled_pct'] * (1 - row['helpful_pct']):.0%}, "
                         f"recall-reduction={row['quarantined'] / row['total']:.0%}"
@@ -378,7 +382,7 @@ class FlywheelDashboard:
                     continue
                 lines.append(
                     "      "
-                    f"{row['label']}: n={row['total']}, avg={row['avg_trust']:.2f}, "
+                    f"{_operator_literal(row['label'])}: n={row['total']}, avg={row['avg_trust']:.2f}, "
                     f"never={row['never_recalled_pct']:.0%}, helpful={row['helpful_pct']:.0%}"
                 )
         source_governance = mem.get("source_governance", [])
@@ -387,7 +391,7 @@ class FlywheelDashboard:
             for row in source_governance[:5]:
                 lines.append(
                     "      "
-                    f"{row['label']}: eligible={row['eligible_for_source_policy']}, "
+                    f"{_operator_literal(row['label'])}: eligible={row['eligible_for_source_policy']}, "
                     f"quarantined={row['quarantined']}, noise={row['noise_score']:.0%}"
                 )
         lines.extend(_format_source_policy_drift(mem))
@@ -397,7 +401,7 @@ class FlywheelDashboard:
             for row in type_breakdown:
                 lines.append(
                     "      "
-                    f"{row['label']}: n={row['total']}, avg={row['avg_trust']:.2f}, "
+                    f"{_operator_literal(row['label'])}: n={row['total']}, avg={row['avg_trust']:.2f}, "
                     f"never={row['never_recalled_pct']:.0%}, helpful={row['helpful_pct']:.0%}"
                 )
         lines.append("")
