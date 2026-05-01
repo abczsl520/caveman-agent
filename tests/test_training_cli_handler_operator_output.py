@@ -179,3 +179,91 @@ def test_embedding_train_result_escapes_operator_output(monkeypatch):
     assert "status=success model\\nP0: forged\\x1b[31m" in message
     assert "model\nP0" not in message
     assert "\x1b" not in message
+
+
+def test_embedding_auto_select_escapes_report_and_reason(monkeypatch):
+    class FakeEvaluator:
+        def evaluate_logged_results(self, model_path):
+            return {"eval": model_path}
+
+        def write_selection(self, model_path, before, after, selected_path, min_delta):
+            return False
+
+        def compare(self, before, after):
+            return "## Report\nP0: forged\x1b[31m"
+
+        def improvement_decision(self, before, after, min_delta):
+            return False, "quality\nP0: reason\x1b[31m"
+
+    class FakeTrainer:
+        def __init__(self, config):
+            self.config = config
+
+        def train(self, dataset_path):
+            return {"status": "success", "model_path": "model"}
+
+    monkeypatch.setattr("caveman.training.eval_embedding.EmbeddingEvaluator", FakeEvaluator)
+    monkeypatch.setattr("caveman.training.embedding.PairExtractor", FakePairExtractor)
+    monkeypatch.setattr("caveman.training.embedding.EmbeddingTrainer", FakeTrainer)
+
+    message = run_train(
+        target="embedding",
+        model="",
+        trajectory_dir=None,
+        output_dir=None,
+        min_quality=0.7,
+        epochs=1,
+        format="sharegpt",
+        dry_run=False,
+        auto_select=True,
+    )
+
+    assert "## Report\\nP0: forged\\x1b[31m" in message
+    assert "quality\\nP0: reason\\x1b[31m" in message
+    assert "Report\nP0" not in message
+    assert "quality\nP0" not in message
+    assert "\x1b" not in message
+
+
+def test_embedding_auto_select_escapes_report_and_selected_path(monkeypatch, tmp_path):
+    unsafe_output_dir = tmp_path / "selected\nP0: selected\x1b[31m"
+
+    class FakeEvaluator:
+        def evaluate_logged_results(self, model_path):
+            return {"eval": model_path}
+
+        def write_selection(self, model_path, before, after, selected_path, min_delta):
+            return True
+
+        def compare(self, before, after):
+            return "## Report\nP0: selected-report\x1b[31m"
+
+    class FakeTrainer:
+        def __init__(self, config):
+            self.config = config
+
+        def train(self, dataset_path):
+            return {"status": "success", "model_path": "model"}
+
+    monkeypatch.setattr("caveman.training.eval_embedding.EmbeddingEvaluator", FakeEvaluator)
+    monkeypatch.setattr("caveman.training.embedding.PairExtractor", FakePairExtractor)
+    monkeypatch.setattr("caveman.training.embedding.EmbeddingTrainer", FakeTrainer)
+    monkeypatch.setattr("caveman.paths.TRAINING_DIR", unsafe_output_dir)
+
+    message = run_train(
+        target="embedding",
+        model="",
+        trajectory_dir=None,
+        output_dir=None,
+        min_quality=0.7,
+        epochs=1,
+        format="sharegpt",
+        dry_run=False,
+        auto_select=True,
+    )
+
+    assert "## Report\\nP0: selected-report\\x1b[31m" in message
+    assert "selected\\nP0: selected\\x1b[31m/selected_embedding.json" in message
+    assert "Report\nP0" not in message
+    assert "selected\nP0" not in message
+    assert "\x1b" not in message
