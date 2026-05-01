@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from caveman.operator_output import operator_literal
+
 
 def run_train(
     target: str,
@@ -35,7 +37,7 @@ def run_train(
     elif target in ("dpo", "ppo", "grpo"):
         return _run_rl(target, model, trajectory_dir, output_dir, epochs, dry_run)
     else:
-        return f"❌ Unknown target: {target}. Use: embedding, sft, dpo, ppo, grpo"
+        return f"❌ Unknown target: {operator_literal(target)}. Use: embedding, sft, dpo, ppo, grpo"
 
 
 def _run_embedding(
