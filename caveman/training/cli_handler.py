@@ -123,7 +123,7 @@ def _run_sft(
     dataset_path = builder.build(trajectory_dir)
 
     if dry_run:
-        return f"🏁 Dry run — {builder.stats} at {dataset_path}"
+        return f"🏁 Dry run — {operator_literal(builder.stats)} at {operator_literal(dataset_path)}"
 
     trainer = SFTTrainer(config)
     result = trainer.train(dataset_path)
