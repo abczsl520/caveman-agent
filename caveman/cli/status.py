@@ -100,11 +100,12 @@ def _format_gateway_status() -> list[str]:
     pid = get_running_pid()
     report = scan_current_startup_log(expected_pid=pid)
     lines = [f"  Gateway: {'running (PID ' + str(pid) + ')' if pid else 'stopped'}"]
-    lines.append(f"  Gateway log window: {'bounded' if report['bounded'] else 'unbounded'} via {report['boundary']} ({report['line_count']} lines)")
+    boundary = operator_literal(report["boundary"])
+    lines.append(f"  Gateway log window: {'bounded' if report['bounded'] else 'unbounded'} via {boundary} ({report['line_count']} lines)")
     alert_parts = []
     for pattern, data in report["patterns"].items():
         if data["count"]:
-            alert_parts.append(f"{pattern}={data['count']}")
+            alert_parts.append(f"{operator_literal(pattern)}={data['count']}")
     lines.append("  Gateway log alerts: " + (", ".join(alert_parts) if alert_parts else "none"))
     markers = report["healthy_markers"]
     lines.append(f"  Discord connected {'✅' if markers['discord_connected'] else '❌'}")
