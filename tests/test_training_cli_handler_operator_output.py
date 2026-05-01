@@ -52,3 +52,35 @@ def test_sft_dry_run_escapes_dataset_path_and_stats(monkeypatch):
     assert "/tmp/caveman\nP0" not in message
     assert "1\nP0" not in message
     assert "\x1b" not in message
+
+
+def test_rl_dry_run_escapes_dataset_path_and_stats(monkeypatch):
+    unsafe_path = "/tmp/caveman\nP0: forged\x1b[31m/rl.jsonl"
+
+    class FakePreferencePairBuilder:
+        def __init__(self, config):
+            self.config = config
+            self.stats = {"pairs": "2\nP0: stat", "method": "\x1b[31mgrpo"}
+
+        def build(self, trajectory_dir):
+            return unsafe_path
+
+    monkeypatch.setattr("caveman.training.rl.PreferencePairBuilder", FakePreferencePairBuilder)
+
+    message = run_train(
+        target="grpo",
+        model="",
+        trajectory_dir=None,
+        output_dir=None,
+        min_quality=0.7,
+        epochs=1,
+        format="sharegpt",
+        dry_run=True,
+    )
+
+    assert "'/tmp/caveman\\nP0: forged\\x1b[31m/rl.jsonl'" in message
+    assert "2\\\\nP0: stat" in message
+    assert "\\\\x1b[31mgrpo" in message
+    assert "/tmp/caveman\nP0" not in message
+    assert "2\nP0" not in message
+    assert "\x1b" not in message
