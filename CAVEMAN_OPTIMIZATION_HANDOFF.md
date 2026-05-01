@@ -1,9 +1,10 @@
 # Caveman 优化 HANDOFF
 
-更新时间: 2026-05-01 09:52 CST
+更新时间: 2026-05-01 10:35 CST
 
 ## 当前最终状态
 
+- Round 39 已完成、提交并推送到 `main`；code commit `190669a0f6c15c4eb9846cbf4a05a4ceca0d4849` (`[verified] escape restorable quarantine report labels`)；本地验证全通过；GitHub Actions 在 10 分钟轮询内未出现该 head_sha 的 run（API 返回 0 runs），下轮先补查 CI，再继续。
 - Round 38 已完成、提交并推送到 `main`；code commit `b13e8d6f6cc1c1885c7a616fa484b41292030c56` (`[verified] escape import target type labels`)；GitHub Actions run `25198448467`，`https://github.com/abczsl520/caveman-agent/actions/runs/25198448467`，completed success。
 - Round 37 已完成、提交并推送到 `main`；code commit `60a456c44df1b1b959f303e192e979087bfaf934` (`[verified] escape import report operator output`)；GitHub Actions run `25197774691`，`https://github.com/abczsl520/caveman-agent/actions/runs/25197774691`，completed success。
 - Round 36 已完成、提交并推送到 `main`；code commit `256c658557243a0aa2345f07f587b16c67dddeb9` (`[verified] harden setup operator output`)；GitHub Actions run `25197084551`，`https://github.com/abczsl520/caveman-agent/actions/runs/25197084551`，completed success。
@@ -31,10 +32,45 @@
 - Gateway 最后已知未运行；本轮未重启 gateway，优化任务不依赖 gateway。
 
 ## 下次启动时做
-1. 先确认 Round 38 handoff/docs commit 的 GitHub Actions run 已 success；若 Round 38 code commit `b13e8d6` 的 run `25198448467` 已 success，不要重复长等。
-2. 继续扫描 CLI/dashboard/report config/file/DB-derived operator-facing 输出，优先 `format_*report`、`typer.echo(format_...)`、Rich/TUI table rows 中未使用 `operator_literal` 的字符串 label；每次只做一个 TDD 小切片。
-3. 下一轮建议转向 source impact trend / quarantine candidate drift / training stats 输出，或继续审查 `format_scan_report` / code-health report 的 operator-facing labels。
-4. Rounds 39-50：按“证据→TDD→实现→门禁→review→commit/push→监控”小步推进；不要虚构完成 50 轮，每轮必须有验证与提交或明确 no-op 证据。
+1. 先补查 Round 39 code commit `190669a0f6c15c4eb9846cbf4a05a4ceca0d4849` 的 GitHub Actions：本轮 push 成功，但 10 分钟轮询 `actions/runs?head_sha=190669a...` 返回 0 runs；若后续仍无 run，记录为“CI 未触发/无 workflow”，不要重复提交同一 diff。
+2. 若 Round 39 CI 补查通过或确认未触发，继续 Round 40：扫描 CLI/dashboard/report config/file/DB-derived operator-facing 输出，优先 source impact trend / quarantine candidate drift / training stats 输出，或 `format_scan_report` / code-health report 中未使用 `operator_literal` 的字符串 label。
+3. 每次只做一个 TDD 小切片；继续按“证据→TDD→实现→门禁→review→commit/push→监控”推进；不要虚构完成 50 轮，每轮必须有验证与提交或明确 no-op 证据。
+4. Gateway health 当前不可达但本自动续跑不依赖 gateway；除非任务明确需要，不要重启 gateway。
+
+## Round 39 做了什么
+- 先确认真实状态：`main` 最新为 Round 38 handoff/docs commit `302d863`，工作树起始干净；Round 38 code CI run `25198448467` 已 success；gateway health 不可达但本轮不依赖 gateway。
+- 执行 baseline：full suite（排除已知 NFR）起始为 `3330 passed, 8 skipped`。
+- 继续 operator-facing output 安全边界扫描，选中 flywheel dashboard 的 restorable quarantine preview：`restorable_quarantine_by_source` 与已收集但未展示的 `restorable_quarantine_by_reason` 都来自 DB metadata；若 source/reason 带换行或 ANSI，report 会被伪造行/终端控制字节污染。
+- RED 新增 `tests/test_flywheel_quarantine_preview_operator_output.py`，构造带 `\nSPOOF_*` 与 ANSI 的 quarantined memory，证明原 report 输出 raw label 且未展示 reason 汇总。
+- GREEN：新增 `_format_restorable_quarantine()`，在 report 边界用共享 `operator_literal(..., max_length=120)` 转义 source/reason label；保留 collect_memory_stats 中的 raw stats keys，避免把 presentation literal 泄漏到结构化指标；`format_report()` 同时展示 `Restorable quarantine reasons:`。
+- 为满足 god-file 行数 gate，将 `flywheel_dashboard.py` 顶部长 docstring 压缩为单行，并把 formatting 逻辑下沉到 `_flywheel_dashboard_formatters.py`。
+
+## Round 39 验证结果
+- Baseline full suite（before change）：`.venv/bin/python -m pytest tests/ -q --ignore=tests/test_nfr_compliance.py --tb=short` → `3330 passed, 8 skipped in 114.22s`。
+- RED：`tests/test_flywheel_quarantine_preview_operator_output.py::test_restorable_quarantine_report_escapes_source_and_reason_labels` 初次运行 1 failed，原 report 输出 raw newline/ANSI 且缺少 reason line。
+- GREEN focused + file-size gates：`tests/test_flywheel_quarantine_preview_operator_output.py tests/test_flywheel_dashboard_boundaries.py tests/test_audit.py::test_no_god_files tests/test_round11.py::TestLoopRefactor::test_no_file_over_400_lines` → `20 passed`。
+- Py compile：`caveman/training/_flywheel_quarantine_preview.py caveman/training/flywheel_dashboard.py caveman/training/_flywheel_dashboard_formatters.py tests/test_flywheel_dashboard_boundaries.py tests/test_flywheel_quarantine_preview_operator_output.py` pass。
+- Ruff changed files：same changed files → `All checks passed!`。
+- Full suite（排除已知 NFR）：`.venv/bin/python -m pytest tests/ -q --ignore=tests/test_nfr_compliance.py --tb=short` → `3331 passed, 8 skipped in 120.32s`。
+- Security scan：final diff hardcoded secret/token/password、shell injection、eval/exec、pickle、SQL string-format patterns 0 matches；push hook safety checks passed。
+- Independent review：passed，无 `security_concerns`、无 `logic_errors`；non-blocking suggestion 是现有 boundary test 也可显式断言 reason line（dedicated malicious-output test 已覆盖）。
+- Remote push：code commit `190669a0f6c15c4eb9846cbf4a05a4ceca0d4849` 已推送到 `origin/main`。
+- Remote CI：push 后轮询 10 分钟 `actions/runs?head_sha=190669a...` 返回 0 runs；需下轮先补查。
+
+## Round 39 什么 work 了
+- 采纳独立 reviewer 建议，raw stats 保持结构化原值，escaping 只在 operator-facing report 边界发生。
+- TDD regression 同时覆盖 source 与 reason 两个 DB-derived label，证明 report 不会出现真实 spoof 行或 raw ANSI。
+- 本地 targeted、ruff、py_compile、full suite、security scan、independent review、commit/push 全部通过。
+
+## Round 39 什么没做/没work
+- GitHub Actions 没能在本轮轮询窗口内观察到 run；已记录为下轮第一步补查。
+- 本 handoff 更新将单独 docs commit；提交后需 push 并监控 CI/或记录未触发。
+- 未重启 gateway（当前自动续跑不依赖 gateway）。
+
+## Round 39 已知坑
+- `git diff --stat` 显示新增测试需先 `git add -N` 或 staged 后才能完整纳入 review/security scan；本轮在最终 diff/security scan 阶段已覆盖。
+- `flywheel_dashboard.py` 有 450 行 policy；新增逻辑要优先下沉到 formatter/helper，否则 full suite 会因 file-size gate 失败。
+- 结构化 metrics 不应存 presentation literal；应在 `format_report()`/formatter 这类 operator boundary 才调用 `operator_literal()`。
 
 ## Round 38 做了什么
 - 先确认真实状态：`main` 最新为 Round 37 handoff/docs commit `9ab7317`，工作树起始干净；Round 37 code CI run `25197774691` 已 success；gateway health 不可达但本轮不依赖 gateway。
