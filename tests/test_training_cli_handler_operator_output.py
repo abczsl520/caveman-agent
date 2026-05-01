@@ -86,6 +86,82 @@ def test_rl_dry_run_escapes_dataset_path_and_stats(monkeypatch):
     assert "\x1b" not in message
 
 
+def test_sft_train_result_escapes_operator_output(monkeypatch):
+    class UnsafeResult:
+        def __str__(self):
+            return "sft ok\nP0: forged\x1b[31m"
+
+    class FakeDatasetBuilder:
+        def __init__(self, config):
+            self.config = config
+
+        def build(self, trajectory_dir):
+            return "/tmp/sft.jsonl"
+
+    class FakeSFTTrainer:
+        def __init__(self, config):
+            self.config = config
+
+        def train(self, dataset_path):
+            return UnsafeResult()
+
+    monkeypatch.setattr("caveman.training.sft.DatasetBuilder", FakeDatasetBuilder)
+    monkeypatch.setattr("caveman.training.sft.SFTTrainer", FakeSFTTrainer)
+
+    message = run_train(
+        target="sft",
+        model="",
+        trajectory_dir=None,
+        output_dir=None,
+        min_quality=0.7,
+        epochs=1,
+        format="sharegpt",
+        dry_run=False,
+    )
+
+    assert "sft ok\\nP0: forged\\x1b[31m" in message
+    assert "sft ok\nP0" not in message
+    assert "\x1b" not in message
+
+
+def test_rl_train_result_escapes_operator_output(monkeypatch):
+    class UnsafeResult:
+        def __str__(self):
+            return "rl ok\nP0: forged\x1b[31m"
+
+    class FakePreferencePairBuilder:
+        def __init__(self, config):
+            self.config = config
+
+        def build(self, trajectory_dir):
+            return "/tmp/rl.jsonl"
+
+    class FakeRLTrainer:
+        def __init__(self, config):
+            self.config = config
+
+        def train(self, dataset_path):
+            return UnsafeResult()
+
+    monkeypatch.setattr("caveman.training.rl.PreferencePairBuilder", FakePreferencePairBuilder)
+    monkeypatch.setattr("caveman.training.rl.RLTrainer", FakeRLTrainer)
+
+    message = run_train(
+        target="grpo",
+        model="",
+        trajectory_dir=None,
+        output_dir=None,
+        min_quality=0.7,
+        epochs=1,
+        format="sharegpt",
+        dry_run=False,
+    )
+
+    assert "rl ok\\nP0: forged\\x1b[31m" in message
+    assert "rl ok\nP0" not in message
+    assert "\x1b" not in message
+
+
 class FakePairExtractor:
     def __init__(self, min_quality):
         self.min_quality = min_quality

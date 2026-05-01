@@ -130,7 +130,7 @@ def _run_sft(
 
     trainer = SFTTrainer(config)
     result = trainer.train(dataset_path)
-    return f"✅ {result}"
+    return f"✅ {operator_literal(result)}"
 
 
 def _run_rl(
@@ -152,4 +152,4 @@ def _run_rl(
 
     trainer = RLTrainer(config)
     result = trainer.train(dataset_path)
-    return f"✅ {result}"
+    return f"✅ {operator_literal(result)}"
