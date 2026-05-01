@@ -2638,7 +2638,7 @@ Embedding evaluation — measure retrieval quality before/after training. Metric
 
 ## `caveman.training.flywheel_dashboard`
 
-Flywheel Health Dashboard — observability for the self-improvement loop. Aggregates metrics from all flywheel subsystems into a single health report: - Memory: trust distribution, decay stats, retrieval rates - Skills: R
+Flywheel Health Dashboard — observability for the self-improvement loop.
 
 **Classes:** `FlywheelDashboard`
 
