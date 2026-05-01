@@ -14,6 +14,8 @@ import logging
 from pathlib import Path
 from typing import Any, cast
 
+from caveman.operator_output import operator_literal
+
 logger = logging.getLogger(__name__)
 
 _ROOT = Path(__file__).resolve().parent.parent  # caveman/
@@ -134,9 +136,9 @@ def format_report(result: dict[str, list[str]]) -> str:
     parts = [f"Code Health — {total} issues\n"]
     for category, issues in result.items():
         status = "✅" if not issues else f"❌ {len(issues)}"
-        parts.append(f"  {category}: {status}")
+        parts.append(f"  {operator_literal(category)}: {status}")
         for issue in issues[:10]:
-            parts.append(f"    - {issue}")
+            parts.append(f"    - {operator_literal(issue)}")
         if len(issues) > 10:
             parts.append(f"    ... and {len(issues) - 10} more")
     return "\n".join(parts)

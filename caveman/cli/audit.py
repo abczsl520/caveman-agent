@@ -14,6 +14,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from caveman.operator_output import operator_literal
+
 CAVEMAN_DIR = Path(__file__).resolve().parent.parent
 
 
@@ -63,7 +65,7 @@ def check_swallowed_exceptions(files: list[Path]) -> list[str]:
                 issues.append(f"{f.relative_to(CAVEMAN_DIR)}:{i}: bare except")
             # Flag except Exception: pass with no logging
             elif stripped == "except Exception:":
-                next_lines = [l.strip() for l in lines[i:i+3] if l.strip()]
+                next_lines = [line_text.strip() for line_text in lines[i:i+3] if line_text.strip()]
                 if next_lines and next_lines[0] == "pass":
                     # Check if there's a comment explaining it
                     raw_next = lines[i] if i < len(lines) else ""
@@ -115,9 +117,9 @@ def run_audit() -> str:
 
     for name, issues in checks.items():
         status = "✅" if not issues else f"❌ {len(issues)}"
-        parts.append(f"  {name}: {status}")
+        parts.append(f"  {operator_literal(name)}: {status}")
         for issue in issues[:5]:
-            parts.append(f"    - {issue}")
+            parts.append(f"    - {operator_literal(issue)}")
         if len(issues) > 5:
             parts.append(f"    ... and {len(issues) - 5} more")
 
