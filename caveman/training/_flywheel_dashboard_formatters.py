@@ -10,6 +10,21 @@ def _operator_literal(value: object, max_length: int = 160) -> str:
     return operator_literal(value, max_length=max_length)
 
 
+def _format_restorable_quarantine(by_source: dict[str, int], by_reason: dict[str, int]) -> list[str]:
+    lines = []
+    if by_source:
+        lines.append(
+            "   Restorable quarantine: "
+            + ", ".join(f"{_operator_literal(source, max_length=120)}={count}" for source, count in by_source.items())
+        )
+    if by_reason:
+        lines.append(
+            "   Restorable quarantine reasons: "
+            + ", ".join(f"{_operator_literal(reason, max_length=120)}={count}" for reason, count in by_reason.items())
+        )
+    return lines
+
+
 def _format_source_policy_drift(mem: dict[str, Any]) -> list[str]:
     source_policy_drift = mem.get("source_policy_drift", [])
     if not source_policy_drift:
