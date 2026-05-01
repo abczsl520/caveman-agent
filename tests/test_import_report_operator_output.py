@@ -37,6 +37,24 @@ def test_import_manifest_report_escapes_source_path_and_skip_reason():
     assert "\x1b" not in report
 
 
+def test_import_manifest_report_escapes_target_type_labels():
+    manifest = ImportManifest(
+        source="OpenClaw",
+        items=[
+            ImportItem(
+                source_path=Path("safe.md"),
+                target_type="memory\nSPOOF_TARGET\x1b[31m",
+            )
+        ],
+    )
+
+    report = format_manifest_report(manifest)
+
+    assert "memory\\nSPOOF_TARGET\\x1b[31m" in report
+    assert "\nSPOOF_TARGET" not in report
+    assert "\x1b" not in report
+
+
 def test_import_result_report_escapes_warnings_and_details():
     result = ImportResult(
         warnings=["warn\nSPOOF_WARNING\x1b[35m"],

@@ -12,6 +12,11 @@ __all__ = [
 ]
 
 
+def _target_type_label(target_type: str) -> str:
+    if target_type.replace("_", "").isalnum():
+        return target_type.title()
+    return operator_literal(target_type)
+
 
 def format_manifest_report(manifest: ImportManifest, dry_run: bool = True) -> str:
     """Format a scan manifest as a readable report."""
@@ -35,9 +40,10 @@ def format_manifest_report(manifest: ImportManifest, dry_run: bool = True) -> st
 
     for ttype, items in by_type.items():
         icon = type_icons.get(ttype, "📄")
+        type_label = _target_type_label(ttype)
         actionable = [i for i in items if not i.skip_reason]
         skipped = [i for i in items if i.skip_reason]
-        lines.append(f"{icon} {ttype.title()} ({len(actionable)} items)")
+        lines.append(f"{icon} {type_label} ({len(actionable)} items)")
 
         # Show memory type breakdown for memory items
         if ttype == "memory":
