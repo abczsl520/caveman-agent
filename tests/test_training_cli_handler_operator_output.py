@@ -84,3 +84,34 @@ def test_rl_dry_run_escapes_dataset_path_and_stats(monkeypatch):
     assert "/tmp/caveman\nP0" not in message
     assert "2\nP0" not in message
     assert "\x1b" not in message
+
+
+def test_embedding_dry_run_escapes_dataset_path(monkeypatch, tmp_path):
+    unsafe_output_dir = tmp_path / "embedding\nP0: forged\x1b[31m"
+
+    class FakePairExtractor:
+        def __init__(self, min_quality):
+            self.min_quality = min_quality
+
+        def extract_from_directory(self, traj_dir):
+            return [{"query": "q", "positive": "p", "negative": "n"}]
+
+        def build_dataset(self, pairs, dataset_path):
+            return None
+
+    monkeypatch.setattr("caveman.training.embedding.PairExtractor", FakePairExtractor)
+
+    message = run_train(
+        target="embedding",
+        model="",
+        trajectory_dir=None,
+        output_dir=str(unsafe_output_dir),
+        min_quality=0.7,
+        epochs=1,
+        format="sharegpt",
+        dry_run=True,
+    )
+
+    assert "embedding\\nP0: forged\\x1b[31m" in message
+    assert "embedding\nP0" not in message
+    assert "\x1b" not in message

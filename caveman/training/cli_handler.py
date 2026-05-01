@@ -73,7 +73,7 @@ def _run_embedding(
     extractor.build_dataset(pairs, dataset_path)
 
     if dry_run:
-        return f"🏁 Dry run — {len(pairs)} pairs at {dataset_path}"
+        return f"🏁 Dry run — {len(pairs)} pairs at {operator_literal(dataset_path)}"
 
     trainer = EmbeddingTrainer(config)
     result = trainer.train(dataset_path)
