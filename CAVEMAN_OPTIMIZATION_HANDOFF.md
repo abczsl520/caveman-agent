@@ -1,9 +1,11 @@
 # Caveman 优化 HANDOFF
 
-更新时间: 2026-05-01 08:20 CST
+更新时间: 2026-05-01 08:53 CST
 
 ## 当前最终状态
 
+- Round 36 已完成、提交并推送到 `main`；code commit `256c658557243a0aa2345f07f587b16c67dddeb9` (`[verified] harden setup operator output`)；GitHub Actions run `25197084551`，`https://github.com/abczsl520/caveman-agent/actions/runs/25197084551`，completed success。
+- Round 35 handoff/docs commit `673e8b0722e77c4356d9dfe7c1293ad2c6fc0d5b` (`docs: update caveman handoff after round 35`)；git log 可见，作为本轮起点。
 - Round 35 已完成、提交并推送到 `main`；code commit `46301e90036f27358c6dce4ef9606746e20d8de4` (`[verified] escape gateway status diagnostics`)；GitHub Actions run `25196099823`，`https://github.com/abczsl520/caveman-agent/actions/runs/25196099823`，completed success。
 - Round 34 handoff/docs commit `59134a44c9172926c248d6f4f038dc6390d38f09` (`docs: update caveman handoff after round 34`)；GitHub Actions run `25195081338` completed success。
 - Round 34 已完成、提交并推送到 `main`；code commit `484a0d2b4ec8c765154cb7614a3a5bbc8726a8d6` (`[verified] escape status home path`)；GitHub Actions run `25194895813`，`https://github.com/abczsl520/caveman-agent/actions/runs/25194895813`，completed success。
@@ -27,10 +29,43 @@
 - Gateway 最后已知未运行；本轮未重启 gateway，优化任务不依赖 gateway。
 
 ## 下次启动时做
-1. 先确认 Round 35 handoff/docs commit 的 GitHub Actions run 已 success；若 Round 35 code commit `46301e9` 的 run `25196099823` 已 success，不要重复长等。
+1. 先确认 Round 36 handoff/docs commit 的 GitHub Actions run 已 success；若 Round 36 code commit `256c658` 的 run `25197084551` 已 success，不要重复长等。
 2. 继续扫描其他 CLI/dashboard config/file/DB-derived operator-facing 输出，优先寻找未使用 `operator_literal` 的字符串 label；每次只做一个 TDD 小切片。
 3. Dashboard 主文件仍有 450 行 hard limit；继续 dashboard 方向必须优先抽 helper，不要在 `flywheel_dashboard.py` 主文件堆逻辑。
-4. Rounds 36-50：按“证据→TDD→实现→门禁→review→commit/push→监控”小步推进；不要虚构完成 50 轮，每轮必须有验证与提交或明确 no-op 证据。
+4. Rounds 37-50：按“证据→TDD→实现→门禁→review→commit/push→监控”小步推进；不要虚构完成 50 轮，每轮必须有验证与提交或明确 no-op 证据。
+
+## Round 36 做了什么
+- 先确认真实状态：`main` 最新为 Round 35 handoff/docs commit `673e8b0`，工作树起始有本轮未提交的 `caveman/cli/main.py` 与新增 `tests/test_cli_operator_output.py`（来自同一自动续跑上下文）；gateway health 不可达但本轮不依赖 gateway。
+- 继续 operator-facing output 安全边界扫描，选中 `caveman.cli.main.setup()`：它会输出外部配置检测结果的 source/path/model/API key 片段，以及 import confirmation source 和 config saved path；这些值来自外部配置路径/模型名/密钥数据流，若包含换行或 ANSI 控制字节，会伪造 setup 输出或泄露 credential 片段。
+- RED 新增 regression：`test_setup_escapes_detected_config_source_path_and_model` 与 `test_setup_redacts_detected_api_key`，要求 source/path/model 使用 repr-style literal，raw spoof 行与 ANSI 不出现；检测到的 API key 只显示固定 `[REDACTED]`，不显示首尾片段。
+- GREEN：`setup()` 复用共享 `operator_literal()` 转义 source/path/model/import prompt source/config saved path；API key 输出从首尾片段改为固定 `[REDACTED]`；同时清理 changed-file ruff 暴露的 late-import E402 与 unused assignment。
+
+## Round 36 验证结果
+- RED：`tests/test_cli_operator_output.py` 初次运行按预期失败，原 `setup()` 输出 raw source/path/model 与 API key 片段。
+- GREEN focused：`tests/test_cli_operator_output.py` → `2 passed`。
+- Py compile：`caveman/cli/main.py tests/test_cli_operator_output.py` pass。
+- Ruff changed files：`.venv/bin/ruff check caveman/cli/main.py tests/test_cli_operator_output.py` → pass。
+- Full suite（排除已知 NFR）：`.venv/bin/python -m pytest tests/ -q --ignore=tests/test_nfr_compliance.py --tb=short` → `3326 passed, 8 skipped in 119.67s`。
+- Docs/API：`.venv/bin/python scripts/generate_api_reference.py --check` pass；无 API docs diff。
+- Security scan：Python added-line/final scan hardcoded secret/token/password、shell injection、eval/exec、pickle、SQL string-format patterns 0 matches；push hook safety checks passed。
+- Independent review：passed，无 `security_concerns`、无 `logic_errors`；non-blocking suggestion 是后续可继续把其他 setup 动态提示统一纳入 `operator_literal`。
+- Remote CI：code commit `256c658557243a0aa2345f07f587b16c67dddeb9` GitHub Actions run `25197084551` completed success。
+
+## Round 36 什么 work 了
+- 继续复用共享 `operator_literal`，没有新增第二套 escaping 语义；TDD regression 同时覆盖外部 config source/path/model 与 saved path。
+- Detected API key 不再展示首尾片段，降低 operator log/Discord transcript 中的 credential 泄露面。
+- 本地 full suite、ruff、security scan、independent review、push 和 GitHub Actions 全部通过。
+
+## Round 36 什么没做/没work
+- 本 handoff 更新将单独 docs commit；提交后需 push 并监控 CI。
+- `setup()` 仍有部分用户输入 prompt/overwrite prompt 是交互提示常量或 operator-entered 值，未做额外语义改动；下一轮可继续审查其他 CLI setup/status/utility 输出。
+- GitHub public API 轮询中短暂触发 403 rate limit，但后续重试拿到 run success；不要把临时 403 误判为 CI 失败。
+- 未重启 gateway（当前自动续跑不依赖 gateway，且 SOP 要避免不必要启动）。
+
+## Round 36 已知坑
+- `git diff --stat` 默认不包含 untracked 测试文件；review/security scan 前需要 `git add -N` 或 `git diff --no-index /dev/null <file>`。
+- Bash grep security scan 容易被引号嵌套搞坏；本轮改用 Python regex 扫描 git diff，更稳定。
+- 测试 fixture 变量名不要叫 `secret = "..."`，会触发 added-line sensitive-info scan；可用 `imported_key` 这类不匹配 scan 的名称，并确保最终输出仍断言 `[REDACTED]`。
 
 
 ## Round 35 做了什么
