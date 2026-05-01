@@ -98,3 +98,37 @@ def test_type_breakdown_report_escapes_type_labels():
     assert "'semantic\\nSPOOF_TYPE\\x1b[33m': n=1" in report
     assert "\nSPOOF_TYPE" not in report
     assert "semantic\n" not in report
+
+
+def test_rl_router_report_escapes_skill_names():
+    dashboard = _dashboard_with_memory({"total": 0, "avg_trust": 1.0})
+    dashboard.metrics["rl_router"] = {
+        "total_updates": 1,
+        "arms": {
+            "skill\nSPOOF_SKILL\x1b[35m": {
+                "win_rate": 0.75,
+                "alpha": 3,
+                "beta": 1,
+            }
+        },
+    }
+
+    report = dashboard.format_report()
+
+    assert "'skill\\nSPOOF_SKILL\\x1b[35m': win_rate=75.0%" in report
+    assert "\nSPOOF_SKILL" not in report
+    assert "skill\n" not in report
+
+
+def test_wiki_report_escapes_tier_names():
+    dashboard = _dashboard_with_memory({"total": 0, "avg_trust": 1.0})
+    dashboard.metrics["wiki"] = {
+        "total_entries": 1,
+        "tiers": {"semantic\nSPOOF_WIKI\x1b[36m": 1},
+    }
+
+    report = dashboard.format_report()
+
+    assert "'semantic\\nSPOOF_WIKI\\x1b[36m': 1" in report
+    assert "\nSPOOF_WIKI" not in report
+    assert "semantic\n" not in report

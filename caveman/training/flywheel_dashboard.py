@@ -415,12 +415,12 @@ class FlywheelDashboard:
         rl = self.metrics.get("rl_router", {})
         lines.append(f"🎰 RL Router: {rl.get('total_updates', 0)} total updates")
         for name, arm in rl.get("arms", {}).items():
-            lines.append(f"   {name}: win_rate={arm['win_rate']:.1%} (α={arm['alpha']}, β={arm['beta']})")
+            lines.append(f"   {_operator_literal(name)}: win_rate={arm['win_rate']:.1%} (α={arm['alpha']}, β={arm['beta']})")
         lines.append("")
         wiki = self.metrics.get("wiki", {})
         lines.append(f"📚 Wiki: {wiki.get('total_entries', 0)} entries")
         for tier, count in wiki.get("tiers", {}).items():
-            lines.append(f"   {tier}: {count}")
+            lines.append(f"   {_operator_literal(tier)}: {count}")
         lines.append("")
 
         # Diagnostics
