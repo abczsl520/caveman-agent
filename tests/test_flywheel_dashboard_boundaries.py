@@ -162,8 +162,8 @@ def test_collect_memory_stats_stratifies_by_source_and_type(tmp_path, monkeypatc
 
     report = dashboard.format_report()
     assert "By source (top):" in report
-    assert "nudge: n=2, active=2, quarantined=0, eligible=0, noise=25%, recall-reduction=0%" in report
-    assert "import:openclaw: n=3, active=2, quarantined=1, eligible=2, noise=100%, recall-reduction=33%" in report
+    assert "'nudge': n=2, active=2, quarantined=0, eligible=0, noise=25%, recall-reduction=0%" in report
+    assert "'import:openclaw': n=3, active=2, quarantined=1, eligible=2, noise=100%, recall-reduction=33%" in report
     assert "Source governance actions:" in report
     long_label = next(row["label"] for row in stats["source_breakdown"] if row["label"].startswith("very-long"))
     assert "\n" not in long_label
