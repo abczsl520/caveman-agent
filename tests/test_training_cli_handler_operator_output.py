@@ -345,6 +345,32 @@ def test_embedding_auto_select_escapes_report_and_selected_path(monkeypatch, tmp
     assert "\x1b" not in message
 
 
+def test_training_stats_warning_escapes_unreadable_trajectory_path(monkeypatch, tmp_path, caplog):
+    import logging
+    from caveman.training import stats as training_stats
+
+    unsafe_file = tmp_path / "traj\nP0: stats-forged\x1b[31m.jsonl"
+    unsafe_file.write_text('{"quality_score": 1, "turns": []}\n', encoding="utf-8")
+
+    import builtins
+    real_open = builtins.open
+
+    def fake_open(path, *args, **kwargs):
+        if path == unsafe_file:
+            raise OSError("permission denied")
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", fake_open)
+    caplog.set_level(logging.WARNING)
+
+    training_stats.show_training_stats(str(tmp_path), 0.7)
+
+    assert "'" in caplog.text
+    assert "traj\\nP0: stats-forged\\x1b[31m.jsonl" in caplog.text
+    assert "traj\nP0" not in caplog.text
+    assert "\x1b" not in caplog.text
+
+
 def test_training_cli_entrypoint_escapes_effective_target(monkeypatch):
     from typer.testing import CliRunner
     import caveman.cli.main as cli_main
