@@ -343,3 +343,22 @@ def test_embedding_auto_select_escapes_report_and_selected_path(monkeypatch, tmp
     assert "Report\nP0" not in message
     assert "selected\nP0" not in message
     assert "\x1b" not in message
+
+
+def test_training_cli_entrypoint_escapes_effective_target(monkeypatch):
+    from typer.testing import CliRunner
+    import caveman.cli.main as cli_main
+
+    unsafe_target = "embedding\nP0: cli-forged\x1b[31m"
+
+    def fake_banner():
+        return None
+
+    monkeypatch.setattr("caveman.cli.tui.show_banner", fake_banner)
+    runner = CliRunner()
+    result = runner.invoke(cli_main.app, ["train", "--target", unsafe_target, "--dry-run"])
+
+    assert result.exit_code == 0
+    assert "Target: 'embedding\\nP0: cli-forged\\x1b[31m'" in result.output
+    assert "embedding\nP0" not in result.output
+    assert "\x1b" not in result.output
