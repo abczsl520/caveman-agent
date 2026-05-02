@@ -321,7 +321,7 @@ def train(
         return
 
     from caveman.training.cli_handler import run_train
-    typer.echo(f"🎯 Target: {effective_target}")
+    typer.echo(f"🎯 Target: {operator_literal(effective_target)}")
     result = run_train(
         target=effective_target, model=model,
         trajectory_dir=trajectory_dir, output_dir=output_dir,
