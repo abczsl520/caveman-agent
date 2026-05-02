@@ -41,7 +41,7 @@ def show_training_stats(trajectory_dir: str | None, min_quality: float) -> str:
                     total_turns += len(entry.get("turns", entry.get("trajectory", [])))
         except (OSError, UnicodeDecodeError) as e:
             import logging
-            logging.warning("Failed to read trajectory file %s: %s", f, e)
+            logging.warning("Failed to read trajectory file %s: %s", operator_literal(f), operator_literal(e))
             continue
 
     lines = [
