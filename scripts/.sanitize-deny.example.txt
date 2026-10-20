@@ -1,0 +1,6 @@
+# 每行一个需要拦截的词，复制到 ~/.sanitize-personal.txt 后填写真实值
+# 这个文件本身不要写入真实姓名/账号
+your-real-name
+your-alias
+your-local-username
+your-qq-number

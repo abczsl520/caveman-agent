@@ -52,3 +52,7 @@ hermes-src/
 openclaw-src/
 .caveman/
 test-key
+
+# local sanitizer deny-lists (real values stay out of the repo)
+.sanitize-personal.txt
+.sanitize-ip.txt

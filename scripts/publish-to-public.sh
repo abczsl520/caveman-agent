@@ -6,7 +6,7 @@ set -euo pipefail
 
 PRIVATE_REPO="$HOME/projects/caveman"
 PUBLIC_REPO="/tmp/caveman-public"
-PUBLIC_REMOTE="https://abczsl520:${GITHUB_PAT}@github.com/abczsl520/caveman-agent.git"
+PUBLIC_REMOTE="https://github.com/abczsl520/caveman-agent.git"
 AUTHOR_NAME="Caveman Team"
 AUTHOR_EMAIL="noreply@cavemanagent.ai"
 
@@ -49,17 +49,22 @@ echo "🔍 Security scan..."
 ISSUES=0
 
 # Personal info
-if grep -rq "用户\|小王\|dev\|exampleai\|dev\|0000000000" \
+# Deny-lists live OUTSIDE the repo on purpose: publishing the words to redact
+# would leak exactly those words. See scripts/*.example.txt for the format.
+DENY_PERSONAL="${SANITIZE_DENY_PERSONAL:-$HOME/.sanitize-personal.txt}"
+DENY_IP="${SANITIZE_DENY_IP:-$HOME/.sanitize-ip.txt}"
+if [ -f "$DENY_PERSONAL" ] && grep -rqF -f "$DENY_PERSONAL" \
     --include="*.py" --include="*.yaml" --include="*.json" --include="*.md" .; then
     echo "❌ Personal info found!"
-    grep -rn "用户\|小王\|dev\|exampleai" --include="*.py" --include="*.md" .
+    grep -rnF -f "$DENY_PERSONAL" --include="*.py" --include="*.md" .
     ISSUES=$((ISSUES + 1))
 fi
 
 # Real IPs
-if grep -rq "39\.99\.235\|8\.138\.104\|106\.53\.85\|69\.12\.85\|192\.227\.148" \
+if [ -f "$DENY_IP" ] && grep -rqF -f "$DENY_IP" \
     --include="*.py" --include="*.yaml" --include="*.json" --include="*.md" .; then
     echo "❌ Real server IPs found!"
+    grep -rnF -f "$DENY_IP" --include="*.py" --include="*.yaml" --include="*.json" --include="*.md" .
     ISSUES=$((ISSUES + 1))
 fi
 
@@ -70,7 +75,7 @@ if grep -rq "sk-[a-f0-9]\{40,\}" --include="*.py" --include="*.yaml" --include="
 fi
 
 # Absolute paths
-if grep -rq "/home/dev" --include="*.py" --include="*.yaml" --include="*.json" --include="*.md" .; then
+if grep -rqE "/(Users|home)/[A-Za-z0-9._-]+/" --include="*.py" --include="*.yaml" --include="*.json" --include="*.md" .; then
     echo "❌ Absolute paths found!"
     ISSUES=$((ISSUES + 1))
 fi
@@ -96,7 +101,9 @@ if [ "$ACTUAL_AUTHOR" != "$AUTHOR_NAME <$AUTHOR_EMAIL>" ]; then
 fi
 
 git remote add origin "$PUBLIC_REMOTE"
-git push origin main --force
+# Auth via one-shot header: the PAT never touches .git/config or disk
+GIT_AUTH_HEADER="Authorization: Basic $(printf 'x-access-token:%s' "$GITHUB_PAT" | base64)"
+git -c http.extraheader="$GIT_AUTH_HEADER" push origin main --force
 
 echo ""
 echo "✅ Published to https://github.com/abczsl520/caveman-agent"
