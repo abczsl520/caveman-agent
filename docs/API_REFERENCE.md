@@ -1644,7 +1644,7 @@ Memory nudge — background extraction of memories from conversations. Every N t
 
 ## `caveman.memory.obsidian`
 
-Obsidian-compatible memory export. Exports Caveman's Memory Store as Obsidian-compatible markdown files with wikilinks, tags, and YAML frontmatter. Output structure: obsidian_vault/ memories/ semantic/ server-ip-39-99-23
+Obsidian-compatible memory export. Exports Caveman's Memory Store as Obsidian-compatible markdown files with wikilinks, tags, and YAML frontmatter. Output structure: obsidian_vault/ memories/ semantic/ server-ip-203-0-11
 
 **Functions:** `export_to_obsidian()`
 
